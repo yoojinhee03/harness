@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://harness.dev/schema/component.schema.json",
+  "title": "Harness Catalog Component",
+  "description": "카탈로그 컴포넌트 스키마 (공통 베이스 + 타입 델타). 설계: 카탈로그 스키마 §2·§3.",
+  "type": "object",
+  "required": ["id", "type", "name", "version", "status", "summary", "provides"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "description": "불변 slug (참조 키)" },
+    "type": { "type": "string", "enum": ["skill", "mcp", "context", "hook"] },
+    "name": { "type": "string" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$", "description": "semver" },
+    "status": { "type": "string", "enum": ["stable", "beta", "deprecated"] },
+
+    "summary": { "type": "string" },
+    "description": { "type": "string" },
+    "use_when": { "type": "array", "items": { "type": "string" } },
+    "capability_tags": { "type": "array", "items": { "$ref": "#/$defs/capability" } },
+    "keywords": { "type": "array", "items": { "type": "string" } },
+    "examples": { "type": "array", "items": { "type": "string" } },
+
+    "cost": {
+      "type": "object",
+      "properties": {
+        "context_tokens": { "type": "integer", "minimum": 0 },
+        "added_tools": { "type": "integer", "minimum": 0 },
+        "latency": { "type": "string", "enum": ["low", "medium", "high"] }
+      }
+    },
+    "usage_count": { "type": "integer", "minimum": 0 },
+    "retention_score": { "type": "number", "minimum": 0, "maximum": 1 },
+
+    "provides": { "type": "array", "items": { "$ref": "#/$defs/capability" } },
+    "requires": { "type": "array", "items": { "$ref": "#/$defs/capability" } },
+    "conflicts_with": { "type": "array", "items": { "type": "string" } },
+    "constraints": {
+      "type": "object",
+      "properties": { "exclusive_group": { "type": "string" } }
+    },
+
+    "auth": {
+      "type": "object",
+      "properties": {
+        "required": { "type": "boolean" },
+        "type": { "type": "string" },
+        "scopes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "config_schema": { "type": "object" },
+    "defaults": { "type": "object" },
+
+    "entrypoint": { "type": "string", "description": "skill 델타" },
+    "injection_mode": { "type": "string", "enum": ["context", "tool"], "description": "skill 델타" },
+
+    "source": { "type": "string", "description": "context 델타" },
+    "size_estimate": { "type": "integer", "description": "context 델타" },
+    "refresh": { "type": "string", "enum": ["static", "per_session"], "description": "context 델타" },
+
+    "events": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["before_request", "after_request", "before_tool_call", "after_tool_call", "after_response"] },
+      "description": "hook 델타"
+    },
+    "sandbox": { "type": "string", "enum": ["none", "restricted", "external"], "description": "hook 델타" },
+    "blocking": { "type": "boolean", "description": "hook 델타" },
+    "can_modify_request": { "type": "boolean", "description": "hook 델타" },
+    "can_modify_response": { "type": "boolean", "description": "hook 델타" },
+    "failure": { "type": "string", "enum": ["fail_open", "fail_closed"], "description": "hook 델타" },
+    "timeout_ms": { "type": "integer", "minimum": 0, "description": "hook 델타" },
+    "depends_on": { "type": "array", "items": { "type": "string" }, "description": "hook 델타" }
+  },
+  "$defs": {
+    "capability": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$",
+      "description": "domain.capability — 2단계 통제 어휘"
+    }
+  }
+}

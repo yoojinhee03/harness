@@ -1,0 +1,67 @@
+# 풀스택 로컬 실행 (레포 루트) — 백엔드(FastAPI) + 프론트(nginx 정적 서빙, /api 프록시).
+# 코드(harness-architect)와 데이터(harness-catalog)가 모두 보이는 이 루트가 진입점이다.
+#
+#   docker compose up --build                     # → http://localhost:8080
+#   docker compose --profile pgvector up --build  # + pgvector DB
+#   docker compose down                           # 정리 (-v 로 DB 볼륨까지)
+#
+# 카탈로그 데이터는 옆 폴더를 API 컨테이너에 읽기전용 마운트한다(이미지에 굽지 않음).
+# API 키는 선택 — 없으면 로컬 임베딩/휴리스틱 폴백으로 전 구간이 돈다. 채우려면 이 파일
+# 옆에 .env 를 두고 ANTHROPIC_API_KEY / VOYAGE_API_KEY 를 넣는다(.env.example 참고).
+#
+# 호스트 포트는 env 로 바꿀 수 있다(다른 스택과 충돌 시). 기본 웹 8080·API 8000 —
+# Vite 기본 포트(5173)는 이미 다른 개발 서버가 쓰는 경우가 많아 피했다.
+#   WEB_PORT=9000 API_PORT=9001 docker compose up   (또는 .env 에 지정)
+
+services:
+  api:
+    build:
+      context: ./harness-architect
+      dockerfile: Dockerfile
+    environment:
+      # 마운트한 카탈로그 컴포넌트 폴더를 직접 가리킨다(loader 의 CATALOG_DIR 계약).
+      CATALOG_DIR: /catalog
+      # 없으면 빈 값 → 자동으로 로컬 폴백. 있으면 품질 모드 자동 활성.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+    volumes:
+      - ./harness-catalog/components:/catalog:ro
+    ports:
+      - "${API_PORT:-8000}:8000"   # OpenAPI: http://localhost:8000/docs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  web:
+    build:
+      context: ./harness-architect/apps/web
+      dockerfile: Dockerfile
+    ports:
+      - "${WEB_PORT:-8080}:80"     # 브라우저 진입점: http://localhost:8080
+    depends_on:
+      api:
+        condition: service_healthy   # nginx 가 api DNS 를 못 찾고 죽지 않도록 대기.
+
+  # pgvector — MVP 는 인메모리라 기본 미기동. `--profile pgvector` 로만 올린다.
+  db:
+    image: pgvector/pgvector:pg16
+    profiles: ["pgvector"]
+    environment:
+      POSTGRES_USER: harness
+      POSTGRES_PASSWORD: harness
+      POSTGRES_DB: harness
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U harness"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:

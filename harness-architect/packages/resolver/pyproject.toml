@@ -1,0 +1,16 @@
+[project]
+name = "harness-resolver"
+version = "0.1.0"
+description = "순수 함수 리졸버 — harness.yaml + 카탈로그 → ResolvedHarness (8단계 검증 파이프라인)"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "jsonschema>=4.22",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harness_resolver"]

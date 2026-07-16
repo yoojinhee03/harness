@@ -1,0 +1,5 @@
+# 루트 — docker compose 가 읽는 로컬 시크릿. 커밋 금지(.env.example 만 공유).
+.env
+
+# OS/editor
+.DS_Store

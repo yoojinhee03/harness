@@ -1,0 +1,34 @@
+id: notion-mcp
+type: mcp
+name: "Notion"
+version: "1.0.0"
+status: stable
+
+summary: "Notion 페이지·위키 조회·작성"
+description: >
+  Notion 페이지·데이터베이스의 조회와 작성을 노출한다. 문서·회의록·지식베이스를 읽거나
+  생성한 문서를 위키에 저장하는 워크플로에 쓰인다.
+use_when:
+  - "위키·노트 문서를 읽거나 저장해야 할 때"
+  - "생성한 문서를 지식베이스에 남겨야 할 때"
+capability_tags: [knowledge.wiki]
+keywords: [notion, 노션, 위키, wiki, 문서, 지식베이스]
+examples:
+  - "문서 초안 작성기"
+  - "회의록 요약 저장 봇"
+
+cost:
+  context_tokens: 0
+  added_tools: 7
+  latency: medium
+usage_count: 0
+retention_score: 0.0
+
+provides: [knowledge.wiki]
+requires: []
+conflicts_with: []
+
+auth:
+  required: true
+  type: oauth
+  scopes: ["page:read", "page:write"]

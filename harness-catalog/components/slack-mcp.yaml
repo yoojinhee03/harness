@@ -1,0 +1,42 @@
+id: slack-mcp
+type: mcp
+name: "Slack"
+version: "1.1.0"
+status: stable
+
+summary: "Slack 채널 메시지 조회·전송"
+description: >
+  Slack 채널·DM 의 메시지 조회와 전송을 노출한다. 결과 리포트·알림·요약을 팀 채널로
+  보내는 워크플로에 쓰인다.
+use_when:
+  - "결과나 알림을 슬랙 채널로 보내야 할 때"
+  - "채널 대화를 읽어 요약·분류해야 할 때"
+capability_tags: [comms.messaging]
+keywords: [slack, 슬랙, 메시지, 알림, 채널, notify]
+examples:
+  - "PR 리뷰 결과 슬랙 알림 봇"
+  - "일일 리포트 전송 에이전트"
+
+cost:
+  context_tokens: 0
+  added_tools: 6
+  latency: low
+usage_count: 0
+retention_score: 0.0
+
+provides: [comms.messaging]
+requires: []
+conflicts_with: []
+
+auth:
+  required: true
+  type: oauth
+  scopes: ["chat:write", "channels:read"]
+config_schema:
+  type: object
+  properties:
+    default_channel:
+      type: string
+      description: "기본 전송 채널"
+defaults:
+  default_channel: "#general"

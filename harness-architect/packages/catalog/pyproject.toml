@@ -1,0 +1,21 @@
+[project]
+name = "harness-catalog"
+version = "0.1.0"
+description = "카탈로그 엔진 + RAG — 로딩·임베딩·검색·랭킹. RAG 엔진 코드는 백엔드에 잔류(데이터는 별도 폴더)."
+requires-python = ">=3.12"
+dependencies = [
+    "harness-resolver",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# 품질 모드 — 키가 있을 때만. 로컬 폴백은 이 없이도 돈다.
+voyage = ["voyageai>=0.3"]
+claude = ["anthropic>=0.40"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harness_catalog"]

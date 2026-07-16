@@ -1,0 +1,35 @@
+id: pr-review-skill
+type: skill
+name: "PR 리뷰 절차"
+version: "2.1.0"
+status: stable
+
+# ── 검색/랭킹용 (RAG, 퍼지) ──
+summary: "PR diff를 받아 구조화된 리뷰 코멘트를 생성하는 절차"
+description: >
+  PR의 변경 diff를 입력받아 정확성·가독성·컨벤션 관점의 구조화된 리뷰 코멘트를
+  생성하는 베스트프랙티스 절차. 접근(diff 조회·코멘트 게시)은 MCP에 위임한다.
+use_when:
+  - "PR을 자동으로 리뷰하고 코멘트를 달아야 할 때"
+capability_tags: [review.code]
+keywords: [pr, review, 코드리뷰, diff, comment]
+examples:
+  - "PR 자동 리뷰 봇"
+  - "코드 리뷰 어시스턴트"
+
+# ── 랭킹 신호 ──
+cost:
+  context_tokens: 1800
+  added_tools: 0
+  latency: low
+usage_count: 0
+retention_score: 0.0
+
+# ── 의존성/제약 (리졸버, 엄격) ──
+provides: [review.code]
+requires: [vcs.code-hosting, vcs.code-review]   # 접근은 MCP에 위임
+conflicts_with: []
+
+# ── 타입 델타: skill ──
+entrypoint: "skills/pr-review/SKILL.md"
+injection_mode: context

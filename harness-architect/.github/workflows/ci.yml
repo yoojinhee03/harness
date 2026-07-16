@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Sync
+        working-directory: harness-architect
+        run: uv sync --all-packages --dev
+      - name: Lint (ruff)
+        working-directory: harness-architect
+        run: uv run ruff check .
+      - name: Types (mypy)
+        working-directory: harness-architect
+        run: uv run mypy packages/resolver/src
+      - name: Test (pytest)
+        working-directory: harness-architect
+        run: uv run pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: harness-architect/apps/web/pnpm-lock.yaml
+      - name: Install
+        working-directory: harness-architect/apps/web
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        working-directory: harness-architect/apps/web
+        run: pnpm build

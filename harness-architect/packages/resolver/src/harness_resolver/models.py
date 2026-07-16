@@ -1,0 +1,215 @@
+"""카탈로그 컴포넌트 · harness.yaml · ResolvedHarness 데이터 모델.
+
+설계: 카탈로그 스키마 §2·§3, 설계: harness.yaml 스펙 §2·§3.
+필드는 두 소비자로 나뉜다 — 검색/랭킹용(RAG, 퍼지)과 계약용(리졸버/빌더, 엄격).
+이 모듈은 자산(카탈로그 YAML)에 의존하지 않는다 — 순수 타입 정의.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+ComponentType = Literal["skill", "mcp", "context", "hook"]
+Status = Literal["stable", "beta", "deprecated"]
+Latency = Literal["low", "medium", "high"]
+HookEvent = Literal[
+    "before_request",
+    "after_request",
+    "before_tool_call",
+    "after_tool_call",
+    "after_response",
+]
+Sandbox = Literal["none", "restricted", "external"]
+Failure = Literal["fail_open", "fail_closed"]
+InjectionMode = Literal["context", "tool"]
+Refresh = Literal["static", "per_session"]
+
+
+class Cost(BaseModel):
+    """랭킹 신호 — 관련성 대비 비용."""
+
+    context_tokens: int = 0
+    added_tools: int = 0
+    latency: Latency = "low"
+
+
+class Auth(BaseModel):
+    required: bool = False
+    type: str | None = None
+    scopes: list[str] = Field(default_factory=list)
+
+
+class Constraints(BaseModel):
+    exclusive_group: str | None = None
+
+
+class Component(BaseModel):
+    """카탈로그 컴포넌트. 공통 베이스 + 타입별 델타(optional).
+
+    검증은 리졸버가 `type` 에 맞는 델타 필드를 소비할 때 이뤄진다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # ── 식별 ──
+    id: str
+    type: ComponentType
+    name: str
+    version: str
+    status: Status = "stable"
+
+    # ── 검색/랭킹용 (RAG, 퍼지) ──
+    summary: str = ""
+    description: str = ""
+    use_when: list[str] = Field(default_factory=list)
+    capability_tags: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    examples: list[str] = Field(default_factory=list)
+
+    # ── 랭킹 신호 ──
+    cost: Cost = Field(default_factory=Cost)
+    usage_count: int = 0
+    retention_score: float = 0.0
+
+    # ── 의존성/제약 (리졸버, 엄격) ──
+    provides: list[str] = Field(default_factory=list)
+    requires: list[str] = Field(default_factory=list)
+    conflicts_with: list[str] = Field(default_factory=list)
+    constraints: Constraints = Field(default_factory=Constraints)
+
+    # ── 실행/설정 (빌더, 엄격) ──
+    auth: Auth | None = None
+    config_schema: dict[str, Any] | None = None
+    defaults: dict[str, Any] = Field(default_factory=dict)
+
+    # ── 타입 델타: skill ──
+    entrypoint: str | None = None
+    injection_mode: InjectionMode | None = None
+
+    # ── 타입 델타: context ──
+    source: str | None = None
+    size_estimate: int | None = None
+    refresh: Refresh | None = None
+
+    # ── 타입 델타: hook ──
+    events: list[HookEvent] = Field(default_factory=list)
+    sandbox: Sandbox | None = None
+    blocking: bool = False
+    can_modify_request: bool = False
+    can_modify_response: bool = False
+    failure: Failure | None = None
+    timeout_ms: int | None = None
+    depends_on: list[str] = Field(default_factory=list)
+
+    def embedding_document(self) -> str:
+        """임베딩용 합성 문서 — summary + description + use_when + tags + examples."""
+        parts = [self.summary, self.description, *self.use_when, *self.capability_tags, *self.examples]
+        return "\n".join(p.strip() for p in parts if p and p.strip())
+
+
+# ─────────────────────────── harness.yaml (선언) ───────────────────────────
+
+
+class HarnessMetadata(BaseModel):
+    id: str
+    name: str = ""
+    version: str = "0.1.0"
+    description: str = ""
+
+
+class ModelConfig(BaseModel):
+    """스코프 결정: 컴포넌트 아닌 harness.yaml 최상위 선언 필드."""
+
+    provider: str = "anthropic"
+    name: str = "claude-sonnet-5"
+    max_tokens: int = 4096
+    temperature: float = 0.2
+
+
+class Budget(BaseModel):
+    context_tokens: int = 8000
+    added_tools: int = 30
+
+
+class ComponentSelection(BaseModel):
+    """harness.yaml components[] 항목 — `id@version` 참조 + config 오버라이드."""
+
+    ref: str  # "id@version" (version 생략 시 최신 stable)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def id(self) -> str:
+        return self.ref.split("@", 1)[0]
+
+    @property
+    def version(self) -> str | None:
+        parts = self.ref.split("@", 1)
+        return parts[1] if len(parts) == 2 else None
+
+
+class HarnessConfig(BaseModel):
+    """harness.yaml — 저작 레이어의 산출물이자 리졸버의 입력."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    apiVersion: str = Field(default="harness/v1", alias="apiVersion")
+    kind: str = "Harness"
+    metadata: HarnessMetadata
+    extends: str | None = None
+    model: ModelConfig = Field(default_factory=ModelConfig)
+    permissions: dict[str, str] = Field(default_factory=dict)
+    components: list[ComponentSelection] = Field(default_factory=list)
+    budget: Budget | None = None
+
+
+# ─────────────────────────── ResolvedHarness (실행 명세) ───────────────────────────
+
+
+class HookStep(BaseModel):
+    """훅 실행 계획의 한 스텝 — 이벤트별 정렬 결과."""
+
+    id: str
+    event: HookEvent
+    blocking: bool
+    can_modify_request: bool
+    can_modify_response: bool
+    sandbox: Sandbox | None
+    failure: Failure | None
+    timeout_ms: int | None
+
+
+class AuthNeed(BaseModel):
+    component_id: str
+    type: str | None
+    scopes: list[str]
+    granted_scope: str | None = None  # harness permissions 로 축소된 값
+
+
+class ResolvedComponent(BaseModel):
+    """리졸브된 컴포넌트 — 카탈로그 정의 + 확정된 config(defaults ⊕ override)."""
+
+    id: str
+    type: ComponentType
+    version: str
+    name: str
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class CostTotals(BaseModel):
+    context_tokens: int = 0
+    added_tools: int = 0
+
+
+class ResolvedHarness(BaseModel):
+    """리졸버 출력(성공) — 실행 가능한 명세. 런타임 빌더의 입력."""
+
+    metadata: HarnessMetadata
+    model: ModelConfig
+    permissions: dict[str, str]
+    components: list[ResolvedComponent]
+    provided: dict[str, list[str]]  # capability → [제공 컴포넌트 id]
+    hook_plan: dict[str, list[HookStep]]  # event → 정렬된 훅 스텝
+    auth_needs: list[AuthNeed]
+    cost: CostTotals
