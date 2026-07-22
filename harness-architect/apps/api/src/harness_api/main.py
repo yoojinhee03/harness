@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from harness_catalog import Recommender, build_registry, resolve_catalog_dir
 from harness_resolver import HarnessConfig, InMemoryRegistry, ResolveResult, resolve
-from harness_runtime import AnthropicRunner, build_request
+from harness_runtime import AnthropicRunner, available_targets, build_request, emit
 
 from .schemas import (
     CatalogItem,
@@ -144,6 +144,19 @@ def run_endpoint(request: Request, body: RunRequest) -> dict[str, Any]:
         },
         "run": run.model_dump(),
     }
+
+
+@app.post("/eject")
+def eject_endpoint(
+    request: Request, body: ResolveRequest, target: str = Query("claude-code")
+) -> dict[str, Any]:
+    """resolve → emit(target). ResolvedHarness IR 을 런타임 네이티브 파일 트리로 컴파일 (Phase 5)."""
+    if target not in available_targets():
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 타깃: {target} (가능: {available_targets()})")
+    result = resolve(body.to_config(), _registry(request))
+    if not result.ok or result.resolved is None:
+        return {"ok": False, "target": target, "diagnostics": result.diagnostics.model_dump(), "files": None}
+    return {"ok": True, "target": target, "files": emit(result.resolved, target)}
 
 
 def to_harness_yaml(config: HarnessConfig) -> str:

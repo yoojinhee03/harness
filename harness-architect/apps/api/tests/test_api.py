@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from harness_api.main import app
@@ -125,6 +127,28 @@ def test_generate_yaml(client):
     assert "apiVersion: harness/v1" in data["yaml"]
     assert "github-mcp@1.4.0" in data["yaml"]
     assert data["ok"] is True
+
+
+def test_eject_claude_code(client):
+    """resolve → eject: ResolvedHarness 를 Claude Code 파일 트리로 컴파일 (Phase 5)."""
+    body = {
+        "metadata": {"id": "pr-bot"},
+        "components": [{"ref": "github-mcp@1.4.0"}],
+        "prompt": {"system": [{"inline": "너는 시니어 리뷰어다."}]},
+    }
+    data = client.post("/eject", params={"target": "claude-code"}, json=body).json()
+    assert data["ok"] is True
+    files = data["files"]
+    assert set(files) == {"CLAUDE.md", ".mcp.json", ".claude/settings.json"}
+    assert "너는 시니어 리뷰어다." in files["CLAUDE.md"]
+    settings = json.loads(files[".claude/settings.json"])
+    assert settings["permissions"]["allow"] == ["mcp__github-mcp"]
+
+
+def test_eject_unknown_target_400(client):
+    body = {"metadata": {"id": "x"}, "components": [{"ref": "github-mcp@1.4.0"}]}
+    r = client.post("/eject", params={"target": "cursor"}, json=body)
+    assert r.status_code == 400
 
 
 def test_generate_yaml_includes_prompt_block(client):

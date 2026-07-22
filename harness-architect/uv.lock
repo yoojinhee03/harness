@@ -12,6 +12,7 @@ members = [
     "harness-api",
     "harness-architect",
     "harness-catalog",
+    "harness-cli",
     "harness-resolver",
     "harness-runtime",
 ]
@@ -563,6 +564,25 @@ requires-dist = [
     { name = "voyageai", marker = "extra == 'voyage'", specifier = ">=0.3" },
 ]
 provides-extras = ["voyage", "claude"]
+
+[[package]]
+name = "harness-cli"
+version = "0.1.0"
+source = { editable = "apps/cli" }
+dependencies = [
+    { name = "harness-catalog" },
+    { name = "harness-resolver" },
+    { name = "harness-runtime" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "harness-catalog", editable = "packages/catalog" },
+    { name = "harness-resolver", editable = "packages/resolver" },
+    { name = "harness-runtime", editable = "packages/runtime" },
+    { name = "pyyaml", specifier = ">=6.0" },
+]
 
 [[package]]
 name = "harness-resolver"
