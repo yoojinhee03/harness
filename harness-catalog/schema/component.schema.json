@@ -55,6 +55,7 @@
     "source": { "type": "string", "description": "context 델타" },
     "size_estimate": { "type": "integer", "description": "context 델타" },
     "refresh": { "type": "string", "enum": ["static", "per_session"], "description": "context 델타" },
+    "body": { "type": "string", "description": "context 델타 — 프롬프트 조각 본문(prompt.system[].ref 로 주입되는 텍스트)" },
 
     "events": {
       "type": "array",

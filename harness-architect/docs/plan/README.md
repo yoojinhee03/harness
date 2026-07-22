@@ -21,8 +21,49 @@
 | 3 | 프론트 화면 E(카탈로그) + F(대시보드) | [03-screens-e-f.md](./03-screens-e-f.md) | ✅ 완료 | 빌드/프록시 |
 | 4 | 카탈로그 확장 (도메인 확대 + 둘째 시나리오) | [04-catalog-expansion.md](./04-catalog-expansion.md) | ✅ 완료 | 테스트 |
 
-**전체 완료** — 4개 Phase 모두 구현·검증. 백엔드 pytest 47 통과 · ruff/mypy 클린 ·
+**v1 전체 완료** — 4개 Phase 모두 구현·검증. 백엔드 pytest 47 통과 · ruff/mypy 클린 ·
 프론트 `pnpm build` 통과. 실연동(Voyage/Claude/Anthropic) 실호출은 키 주입 시 자동 활성.
+
+---
+
+## v2 — 차별화 로드맵 (소스 오브 트루스 + 컴파일러)
+
+> v1 은 "설명 → 추천 → 검증 → harness.yaml" 을 관통시켰다. 하지만 산출물이 *자기 포맷*
+> (harness.yaml)에서 멈추면 "또 하나의 플러그인 포맷" 위험이 있다. v2 의 논지:
+>
+> **harness.yaml 을 실행 포맷이 아니라 소스 오브 트루스로 두고, 이미 가진 정규화 IR
+> (`ResolvedHarness`)을 아무 에이전트 런타임으로나 컴파일한다.**
+>
+> 이건 기존 하네스 플러그인(Claude Code·Cursor·Cline·Continue)의 공통 한계 4개를 정면으로
+> 뒤집는다 — 수동 조립(→ 그라운딩 추천), 런타임에서야 터짐(→ 실행 전 검증·프리뷰),
+> 포맷 락인(→ 다중 런타임 컴파일·역임포트), 학습 없음(→ 피드백 루프). 앞 둘은 v1 에서 이미
+> 확보했고, v2 는 **포맷 락인 탈피(이식성)** 와 **팀 거버넌스·학습**을 얹는다.
+
+| # | Phase | 문서 | 우선순위 | 의존성 | 상태 |
+|---|-------|------|---------|--------|------|
+| 5 | 다중 런타임 컴파일 (`eject`, Claude Code 먼저) + CLI | [05-multi-runtime-compile.md](./05-multi-runtime-compile.md) | **P0 (플래그십)** | 없음 — `ResolvedHarness` IR 완료 | 📋 계획 |
+| 6 | 실행 전 프리뷰 / 시뮬레이터 | [06-preview-simulator.md](./06-preview-simulator.md) | P0 | `build_request`(완료), 05 와 방출 뷰 공유 | 📋 계획 |
+| 7 | 역방향 임포트 (`adopt`) + gap 분석 | [07-reverse-adopt.md](./07-reverse-adopt.md) | P1 | 05 (포맷 매핑의 역) | 📋 계획 |
+| 8 | 정책 as code (조직 가드레일) | [08-policy-as-code.md](./08-policy-as-code.md) | P1 (상업 차별화) | resolver(완료) — 독립 | 📋 계획 |
+| 9 | 피드백 루프 활성화 & 카탈로그 생애주기 | [09-feedback-and-catalog-lifecycle.md](./09-feedback-and-catalog-lifecycle.md) | P2 | 05 (실사용 신호) | 📋 계획 |
+| 10 | 프롬프트 관리 (합성·변수·버전·린트) | [10-prompt-management.md](./10-prompt-management.md) | **P0 (05·06 토대)** | IR/resolver/cost(완료) — 05·06 강화 | 📋 계획 |
+
+**의존성 그래프**
+
+```
+10 (프롬프트를 IR 에 명시)  ── 05·06 의 emit/preview 대상에 실체 부여 · 08 과 연동
+      └ 05/06 직전·병행 권장
+05 (eject: IR→네이티브)  ─┬─▶ 06 (프리뷰; 방출 뷰 공유)
+   └ 즉시 착수 가능        ├─▶ 07 (adopt; 포맷 매핑의 역)
+                          └─▶ 09 (피드백; eject 실사용 신호)
+08 (정책; resolver 단계 추가) ── 독립, 아무 때나 병행 가능
+```
+
+**추천 착수 순서**: `10 → 05 → (06 병행) → 07 · 08 병행 → 09`. 10 을 앞에 두는 이유 —
+05(eject)·06(프리뷰)가 다루는 "시스템 프롬프트"를 1급 아티팩트로 명시화하는 토대라, 먼저
+깔면 05/06 이 방출·표시할 실체가 생긴다. 05 를 그 다음 두는 이유 — IR 이 이미 있어 저비용이고,
+"설명→검증"에서 멈추던 데모가 **"→ 진짜 `.claude/` 가 생성돼 실행"**까지 완결되며 이식성이라는
+차별화 서사를 초반에 증명한다.
 
 ## 검증 원칙
 

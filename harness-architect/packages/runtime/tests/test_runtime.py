@@ -8,6 +8,7 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 
+from harness_resolver import Diagnostics, InMemoryRegistry, compose_prompt
 from harness_resolver.models import (
     CostTotals,
     HarnessMetadata,
@@ -15,6 +16,7 @@ from harness_resolver.models import (
     ModelConfig,
     ResolvedComponent,
     ResolvedHarness,
+    ResolvedPrompt,
 )
 from harness_runtime import AnthropicRunner, HookEngine, build_request
 
@@ -70,6 +72,31 @@ def test_build_request_assembles_system_and_mcp():
     assert [m["id"] for m in built.mcp_servers] == ["gh"]
     assert built.hook_plan["before_tool_call"] == ["secret-scan"]
     assert built.messages[0]["content"] == "이 PR 리뷰해줘"
+
+
+def test_build_request_uses_composed_prompt_when_present():
+    """prompt(ResolvedPrompt)가 있으면 system 은 그 system_text 를 그대로 쓴다."""
+    resolved = make_resolved(
+        components=[ResolvedComponent(id="ctx", type="context", version="1.0.0", name="C", config={})]
+    )
+    resolved.prompt = ResolvedPrompt(system_text="합성된 시스템 프롬프트", hash="sha256:x")
+    assert build_request(resolved, "hi").system == "합성된 시스템 프롬프트"
+
+
+def test_composed_prompt_matches_builder_fallback():
+    """compose_prompt(None,…) 결과 == prompt 없는 build_request 폴백 (동치 회귀)."""
+    comps = [
+        ResolvedComponent(id="ctx", type="context", version="1.0.0", name="컨벤션", config={}),
+        ResolvedComponent(id="pr", type="skill", version="2.1.0", name="PR 리뷰", config={}),
+    ]
+    composed = compose_prompt(None, comps, InMemoryRegistry([]), Diagnostics())
+
+    resolved_fallback = make_resolved(components=comps)  # prompt=None → 폴백 조립
+    resolved_composed = make_resolved(components=comps)
+    resolved_composed.prompt = composed
+
+    assert build_request(resolved_fallback, "x").system == build_request(resolved_composed, "x").system
+    assert build_request(resolved_fallback, "x").system == composed.system_text
 
 
 # ─────────────────────────── AnthropicRunner ───────────────────────────

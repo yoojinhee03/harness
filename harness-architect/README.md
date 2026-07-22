@@ -96,6 +96,9 @@ docker compose up -d db
 - ✅ 카탈로그 확장: 10 컴포넌트(4타입, 다facet) · 3 시나리오(PR 리뷰·이슈 분류·문서 초안).
 - 🚧 남은 하드닝: Voyage/Claude/Anthropic **실 네트워크 호출**(키 필요) · 훅 진짜 프로세스/
   WASM 격리 · pgvector 백엔드 전환.
+- 📋 **v2 차별화 로드맵** — 다중 런타임 컴파일(`eject`)·프롬프트 관리·실행 전 프리뷰·역방향
+  `adopt`·정책 as code·피드백 루프 활성화. `ResolvedHarness` IR 을 소스 오브 트루스로 두고
+  아무 런타임으로나 내보낸다. 우선순위·의존성·완료 기준은 [docs/plan/](./docs/plan/README.md) 의 "v2" 섹션.
 
 > 검증: 백엔드 pytest **47 통과** · ruff/mypy 클린 · 프론트 `pnpm build` 통과. 진행 플랜과
 > 단계별 완료 기준은 [docs/plan/](./docs/plan/README.md).

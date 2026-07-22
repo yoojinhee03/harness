@@ -30,6 +30,7 @@ from .models import (
     ResolvedComponent,
     ResolvedHarness,
 )
+from .prompt import compose_prompt
 from .registry import Registry
 
 
@@ -151,6 +152,11 @@ def resolve(config: HarnessConfig, registry: Registry) -> ResolveResult:
                 capability=cap,
             )
 
+    # ── 9. 프롬프트 합성 (Phase 10) — 시스템 프롬프트를 명시적 아티팩트로 승격 ──
+    #    authored 레이어 없이도(= prompt 블록 미지정) 컴포넌트 기여만 합성 → 기존 조립과 동치.
+    #    on_conflict=error 인 중복 등은 여기서 error 를 낼 수 있어 아래 has_errors 로 차단된다.
+    resolved_prompt = compose_prompt(effective.prompt, resolved_components, registry, diag)
+
     if diag.has_errors():
         return ResolveResult(ok=False, resolved=None, diagnostics=diag)
 
@@ -163,6 +169,7 @@ def resolve(config: HarnessConfig, registry: Registry) -> ResolveResult:
         hook_plan=hook_plan,
         auth_needs=auth_needs,
         cost=CostTotals(context_tokens=tokens, added_tools=tools),
+        prompt=resolved_prompt,
     )
     return ResolveResult(ok=True, resolved=resolved, diagnostics=diag)
 

@@ -53,4 +53,5 @@ def merge_harness_configs(base: HarnessConfig, child: HarnessConfig) -> HarnessC
         permissions=merged_permissions,
         components=list(merged_components.values()),
         budget=child.budget or base.budget,
+        prompt=child.prompt or base.prompt,  # 자식 prompt 블록이 있으면 우선, 없으면 base
     )

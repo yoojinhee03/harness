@@ -16,9 +16,16 @@ from .models import (
     HarnessConfig,
     HarnessMetadata,
     ModelConfig,
+    PromptCompose,
+    PromptLayer,
+    PromptSegment,
+    PromptSpec,
+    PromptVariable,
     ResolvedComponent,
     ResolvedHarness,
+    ResolvedPrompt,
 )
+from .prompt import compose_prompt, estimate_tokens
 from .registry import InMemoryRegistry, Registry
 from .resolver import ResolveResult, resolve
 
@@ -34,10 +41,18 @@ __all__ = [
     "HarnessMetadata",
     "InMemoryRegistry",
     "ModelConfig",
+    "PromptCompose",
+    "PromptLayer",
+    "PromptSegment",
+    "PromptSpec",
+    "PromptVariable",
     "Registry",
     "ResolveResult",
     "ResolvedComponent",
     "ResolvedHarness",
+    "ResolvedPrompt",
+    "compose_prompt",
+    "estimate_tokens",
     "merge_harness_configs",
     "resolve",
 ]

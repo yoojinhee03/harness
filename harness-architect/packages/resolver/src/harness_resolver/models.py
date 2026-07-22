@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ComponentType = Literal["skill", "mcp", "context", "hook"]
 Status = Literal["stable", "beta", "deprecated"]
@@ -92,6 +92,7 @@ class Component(BaseModel):
     source: str | None = None
     size_estimate: int | None = None
     refresh: Refresh | None = None
+    body: str | None = None  # 프롬프트 조각 본문 — prompt.system[].ref 로 주입되는 실제 텍스트
 
     # ── 타입 델타: hook ──
     events: list[HookEvent] = Field(default_factory=list)
@@ -149,6 +150,63 @@ class ComponentSelection(BaseModel):
         return parts[1] if len(parts) == 2 else None
 
 
+# ─────────────────────────── prompt 블록 (합성 선언) ───────────────────────────
+
+VarType = Literal["string", "number", "boolean"]
+OnConflict = Literal["warn", "error", "last_wins"]
+
+
+class PromptVariable(BaseModel):
+    """prompt.variables[<name>] — 선언적 변수. 값은 default 로 해소, 없으면 미해결(경고)."""
+
+    type: VarType = "string"
+    default: Any | None = None
+    required: bool = False
+    description: str = ""
+
+
+class PromptCompose(BaseModel):
+    """합성 규칙 — 중복 제거·충돌 정책·토큰 예산."""
+
+    dedup: bool = True
+    on_conflict: OnConflict = "warn"
+    budget_tokens: int | None = None  # None = 예산 없음
+
+
+class PromptLayer(BaseModel):
+    """system 레이어 항목 — `ref`(카탈로그 조각) 또는 `inline`(텍스트) 중 정확히 하나."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ref: str | None = None  # "id@version" — context 프롬프트 조각 참조
+    inline: str | None = None  # 인라인 텍스트
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> PromptLayer:
+        if bool(self.ref) == bool(self.inline):
+            raise ValueError("PromptLayer 는 ref 또는 inline 중 정확히 하나여야 합니다")
+        return self
+
+    @property
+    def component_id(self) -> str | None:
+        return self.ref.split("@", 1)[0] if self.ref else None
+
+    @property
+    def version(self) -> str | None:
+        if not self.ref:
+            return None
+        parts = self.ref.split("@", 1)
+        return parts[1] if len(parts) == 2 else None
+
+
+class PromptSpec(BaseModel):
+    """harness.yaml prompt 블록 — 시스템 프롬프트 합성 선언."""
+
+    system: list[PromptLayer] = Field(default_factory=list)
+    variables: dict[str, PromptVariable] = Field(default_factory=dict)
+    compose: PromptCompose = Field(default_factory=PromptCompose)
+
+
 class HarnessConfig(BaseModel):
     """harness.yaml — 저작 레이어의 산출물이자 리졸버의 입력."""
 
@@ -162,6 +220,7 @@ class HarnessConfig(BaseModel):
     permissions: dict[str, str] = Field(default_factory=dict)
     components: list[ComponentSelection] = Field(default_factory=list)
     budget: Budget | None = None
+    prompt: PromptSpec | None = None
 
 
 # ─────────────────────────── ResolvedHarness (실행 명세) ───────────────────────────
@@ -202,6 +261,24 @@ class CostTotals(BaseModel):
     added_tools: int = 0
 
 
+class PromptSegment(BaseModel):
+    """합성된 시스템 프롬프트의 한 조각 — provenance(누가 뭘 기여했나)."""
+
+    source: str  # "inline" | "prompt:<id>@<ver>" | "component:<id>"
+    layer: int  # 합성 순서(0-base)
+    tokens: int  # 추정 토큰 기여(실측 아님)
+    text: str = ""  # 변수 치환 후 텍스트
+
+
+class ResolvedPrompt(BaseModel):
+    """리졸버가 합성한 시스템 프롬프트(실행 명세). 빌더·프리뷰·eject 의 단일 원본."""
+
+    system_text: str = ""
+    segments: list[PromptSegment] = Field(default_factory=list)
+    variables_resolved: dict[str, Any] = Field(default_factory=dict)
+    hash: str = ""  # "sha256:…" — 드리프트·캐시 키(system_text 기준, 결정적)
+
+
 class ResolvedHarness(BaseModel):
     """리졸버 출력(성공) — 실행 가능한 명세. 런타임 빌더의 입력."""
 
@@ -213,3 +290,4 @@ class ResolvedHarness(BaseModel):
     hook_plan: dict[str, list[HookStep]]  # event → 정렬된 훅 스텝
     auth_needs: list[AuthNeed]
     cost: CostTotals
+    prompt: ResolvedPrompt | None = None  # 합성된 시스템 프롬프트(resolve 는 항상 채움)
