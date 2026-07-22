@@ -7,6 +7,7 @@ ResolvedHarness → 요청 빌더(system/tools/mcp 조립) + 훅 엔진(이벤�
 from __future__ import annotations
 
 from .builder import BuiltRequest, build_request
+from .emit import ClaudeCodeEmitter, Emitter, FileTree, available_targets, emit
 from .hooks import HookEngine, HookOutcome
 from .runner import AnthropicRunner, RunResult
 from .sandbox import Executor, InProcessExecutor, ThreadIsolatedExecutor, default_executors
@@ -14,12 +15,17 @@ from .sandbox import Executor, InProcessExecutor, ThreadIsolatedExecutor, defaul
 __all__ = [
     "AnthropicRunner",
     "BuiltRequest",
+    "ClaudeCodeEmitter",
+    "Emitter",
     "Executor",
+    "FileTree",
     "HookEngine",
     "HookOutcome",
     "InProcessExecutor",
     "RunResult",
     "ThreadIsolatedExecutor",
+    "available_targets",
     "build_request",
     "default_executors",
+    "emit",
 ]

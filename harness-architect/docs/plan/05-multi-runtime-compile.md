@@ -39,13 +39,18 @@
 
 ## 완료 기준
 
-- [ ] `Emitter` 프로토콜 + `ClaudeCodeEmitter` (settings/mcp/skills/hooks/context 매핑).
-- [ ] `MAPPING.md` — 개념 대응 표 + 손실/근사/미지원 필드 명시.
-- [ ] `harness eject` CLI (디스크 쓰기 + `--dry-run` diff).
-- [ ] `POST /eject?target=` API (zip/JSON).
-- [ ] `harness init`/`resolve`/`eject` CLI 관통 (uvx 실행).
-- [ ] PR 리뷰 시나리오 골든 스냅샷 테스트.
-- [ ] **로컬 폴백·기존 47 테스트 회귀 불변**.
+- [x] `Emitter` 프로토콜(`emit/base.py`) + `ClaudeCodeEmitter`(model/permissions/hooks/mcp +
+      합성 프롬프트→`CLAUDE.md`) + dispatch(`emit(resolved, target)`).
+- [x] `MAPPING.md` — 개념 대응 표 + 손실/근사/미지원 명시.
+- [ ] `harness eject` CLI (디스크 쓰기 + `--dry-run` diff). → **다음 증분**
+- [ ] `POST /eject?target=` API (zip/JSON). → **다음 증분**
+- [ ] `harness init`/`resolve`/`eject` CLI 관통 (uvx 실행). → **다음 증분**
+- [x] PR 리뷰 시나리오 골든 스냅샷 테스트(`test_emit.py`).
+- [x] **로컬 폴백·기존 테스트 회귀 불변** — 전체 pytest 73 통과 · ruff/mypy 클린.
+
+**구현 노트 (컴파일러 코어):** `emit/`(base·claude_code·__init__) 신설. skill 은 별도 `skills/`
+디렉터리가 아니라 합성 프롬프트(→`CLAUDE.md`)에 포함(IR 이 entrypoint 를 안 담음 — MAPPING.md
+한계). MCP 실행 스펙·훅 셸 명령은 자리표시(카탈로그 메타에 없음). CLI/API 표면은 다음 증분.
 
 ## 의존성
 
