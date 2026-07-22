@@ -131,7 +131,7 @@ def run_endpoint(request: Request, body: RunRequest) -> dict[str, Any]:
     result = resolve(config, _registry(request))
     if not result.ok or result.resolved is None:
         return {"ok": False, "diagnostics": result.diagnostics.model_dump(), "built": None, "run": None}
-    built = build_request(result.resolved, body.prompt)
+    built = build_request(result.resolved, body.message)
     run = AnthropicRunner().run(built)
     return {
         "ok": True,
@@ -156,6 +156,9 @@ def to_harness_yaml(config: HarnessConfig) -> str:
     if config.extends:
         doc["extends"] = config.extends
     doc["model"] = config.model.model_dump()
+    if config.prompt is not None:
+        # 최소 표현 — 기본값/None 필드는 생략해 authored 입력에 가깝게 직렬화.
+        doc["prompt"] = config.prompt.model_dump(exclude_defaults=True, exclude_none=True)
     if config.permissions:
         doc["permissions"] = config.permissions
     doc["components"] = [

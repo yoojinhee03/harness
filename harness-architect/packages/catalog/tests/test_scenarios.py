@@ -21,8 +21,9 @@ def registry():
     return build_registry()
 
 
-def test_catalog_grew_to_ten(registry):
-    assert len(registry.all()) == 10
+def test_catalog_size(registry):
+    # 시드 10 + 프롬프트 조각 3(role·format·safety) = 13.
+    assert len(registry.all()) == 13
 
 
 # ── 이슈 분류 시나리오 ──

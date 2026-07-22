@@ -47,6 +47,10 @@ CAPABILITY_VOCAB: dict[str, tuple[Facet, list[str]]] = {
     ),
     "lifecycle.approval": ("lifecycle", ["승인", "approval", "게이트"]),
     "lifecycle.transform": ("lifecycle", ["요청 변형", "응답 변형", "transform"]),
+    # facet: prompt — 시스템 프롬프트 조각 (Context facet, prompt.system[].ref 로 주입)
+    "prompt.role": ("prompt", ["페르소나", "persona", "역할 프롬프트", "톤", "리뷰어 역할"]),
+    "prompt.format": ("prompt", ["출력 형식", "output format", "응답 형식", "포맷 지침", "구조화 출력"]),
+    "prompt.safety": ("prompt", ["안전 지침", "safety preamble", "세이프티", "안전 프리앰블"]),
 }
 
 

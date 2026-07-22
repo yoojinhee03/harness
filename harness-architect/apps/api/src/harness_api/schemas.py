@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from harness_resolver import Component, ComponentSelection, HarnessConfig, HarnessMetadata
+from harness_resolver import Component, ComponentSelection, HarnessConfig, HarnessMetadata, PromptSpec
 from pydantic import BaseModel, Field
 
 
@@ -67,6 +67,7 @@ class ResolveRequest(BaseModel):
     permissions: dict[str, str] = Field(default_factory=dict)
     components: list[SelectionInput] = Field(default_factory=list)
     budget: dict[str, int] | None = None
+    prompt: PromptSpec | None = None  # 시스템 프롬프트 합성 블록(Phase 10) — harness.yaml prompt 와 동일 형태
 
     def to_config(self) -> HarnessConfig:
         data: dict[str, Any] = {
@@ -79,6 +80,8 @@ class ResolveRequest(BaseModel):
             data["model"] = self.model
         if self.budget:
             data["budget"] = self.budget
+        if self.prompt is not None:
+            data["prompt"] = self.prompt
         return HarnessConfig.model_validate(data)
 
 
@@ -91,6 +94,10 @@ class GenerateResponse(BaseModel):
 
 
 class RunRequest(ResolveRequest):
-    """런타임 dry-run — 선택 구성 + 프롬프트로 요청을 조립하고(키 있으면) 전송."""
+    """런타임 dry-run — 선택 구성 + 사용자 메시지로 요청을 조립하고(키 있으면) 전송.
 
-    prompt: str = Field(min_length=1)
+    `message` 는 사용자 입력(대화 메시지)이다 — harness 의 시스템 프롬프트 블록(`prompt`,
+    ResolveRequest 상속)과는 다른 것이라 이름을 분리한다.
+    """
+
+    message: str = Field(min_length=1)

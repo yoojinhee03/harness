@@ -77,15 +77,19 @@ prompt:
 
 - [x] `prompt` 블록 스키마 + `HarnessConfig`(`PromptSpec`) 확장 + 로더/검증
       (`PromptLayer` ref/inline 배타 검증 포함).
-- [ ] `context` 프롬프트 facet 큐레이션(role/format/safety) + RAG 추천 발견 테스트.
-      → **다음 증분** (카탈로그 자산에 실제 조각 YAML 추가 + 개수 단언 4곳 갱신).
+- [x] `context` 프롬프트 facet 큐레이션(role/format/safety) + RAG 추천 발견 테스트.
+      카탈로그에 조각 3개(`prompt-role-reviewer`·`prompt-format-structured-review`·
+      `prompt-safety-preamble`) 추가(10→13), `vocabulary` 에 `prompt.role/format/safety` 트리거.
 - [x] 리졸버 프롬프트 합성 단계(병합·변수·dedup·예산·provenance·hash) + 테스트
       (미해결 변수 · 예산 초과 · 충돌(warn/error/last_wins) · dedup · ref/미지 조각).
 - [x] `build_request` 가 합성 프롬프트 사용 + **기존 조립 결과 동치** 회귀 테스트.
 - [x] 프롬프트 린트 진단(예산·변수·중복·미지/빈/deprecated 조각) + 테스트.
       *(상충 지시 휴리스틱·언어 혼용은 후속 — 현재는 중복/예산/변수 위주.)*
+- [x] **API 와이어링** — `ResolveRequest.prompt`(PromptSpec) 수용, `/resolve` 응답에 합성
+      프롬프트, `/generate` harness.yaml 에 prompt 블록 라운드트립. (`RunRequest` 의 사용자
+      메시지 필드는 시스템 prompt 블록과 구분해 `message` 로 분리.)
 - [ ] Phase 6 프리뷰 provenance/diff · Phase 5 eject 프롬프트 방출 연계(각 Phase 착수 시).
-- [x] **로컬 폴백·기존 테스트 회귀 불변** — 전체 pytest 60 통과(기존 47 포함) · ruff/mypy 클린.
+- [x] **로컬 폴백·기존 테스트 회귀 불변** — 전체 pytest 65 통과(기존 47 포함) · ruff/mypy 클린.
 
 **구현 노트 (코어 완료):** `models.py`(`PromptSpec`/`PromptLayer`/`PromptVariable`/`PromptCompose`
 + `ResolvedPrompt`/`PromptSegment`, `Component.body`) · `prompt.py`(`compose_prompt`·`estimate_tokens`)
