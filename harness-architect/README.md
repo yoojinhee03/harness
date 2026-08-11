@@ -24,7 +24,7 @@ harness/                          # 한 레포
 │  │  └─ runtime/        빌더 + 훅 엔진 (스켈레톤)
 │  └─ docs/              설계 문서 링크
 └─ harness-catalog/               # 데이터 (자산)
-   └─ components/*.yaml   시드 카탈로그 (4 컴포넌트, 4타입)
+   └─ components/*.yaml   시드 카탈로그 (13 컴포넌트, 4타입)
 ```
 
 ## 빠른 시작
@@ -72,6 +72,46 @@ docker compose up -d db
 키 없이도 RAG 추천이 로컬 임베딩 폴백으로 돈다(기본). 품질 모드는 `.env` 에
 `VOYAGE_API_KEY`(임베딩)·`ANTHROPIC_API_KEY`(추출·랭킹)를 넣으면 자동 활성 — `.env.example` 참고.
 
+## MCP 서버 (에디터에서 사용)
+
+FastAPI 백엔드 없이, recommend → resolve → **eject** 를 MCP 툴로 노출하는 stdio 서버
+(`apps/mcp`). Claude Code·Cursor·Claude Desktop 같은 MCP 클라이언트에서 바로 호출한다 —
+eject 산출물(`.claude/`)이 떨어지는 그 에디터 안에서 루프가 닫힌다.
+
+노출 툴: `recommend_harness` · `list_catalog` · `resolve_harness` · `eject_harness`
+(`out_dir` 주면 현재 프로젝트에 `.claude/`·`.mcp.json`·`CLAUDE.md` 를 바로 쓴다).
+
+### Claude Code 에 등록
+
+```bash
+# 레포 절대경로 기준. 카탈로그는 옆 폴더를 자동 탐색(CATALOG_DIR 로 덮어쓰기 가능).
+claude mcp add harness -- uv run --project /ABS/harness/harness-architect harness-mcp
+```
+
+또는 프로젝트 `.mcp.json` 에:
+
+```json
+{
+  "mcpServers": {
+    "harness": {
+      "command": "uv",
+      "args": ["run", "--project", "/ABS/harness/harness-architect", "harness-mcp"],
+      "env": { "CATALOG_DIR": "/ABS/harness/harness-catalog/components" }
+    }
+  }
+}
+```
+
+등록 후 에디터에서 "이 프로젝트에 맞는 하네스 추천 → 검증 → `.claude/` 로 eject" 를 자연어로
+시킨다. 로컬 확인만 하려면 `uv run harness-mcp` (stdio) 로 직접 띄운다.
+
+> **standalone 배포 상태** — 카탈로그 데이터는 `harness_catalog` 휠에 스냅샷으로 번들된다
+> (설치본에서 loader 가 `catalog-data/components` 를 자동 탐색, drift 는
+> `test_catalog_snapshot.py` 가 가드). 격리 설치에서 카탈로그 관통을 확인했다. 남은 건 PyPI
+> 퍼블리시인데, 배포명 `harness-mcp`·`harness-cli`·`harness-runtime` 은 이미 선점돼 있어
+> 유니크 네임스페이스(예: `harness-architect-*`)가 필요하다. 지금은 레포/`--project` 경유로
+> 동작한다(위 등록 예시). 카탈로그를 바꾸면 `python packages/catalog/scripts/sync_catalog_snapshot.py`.
+
 ## 코드 ↔ 설계 문서 대응
 
 | 코드 | 설계 문서 |
@@ -93,12 +133,14 @@ docker compose up -d db
 - ✅ 런타임: 요청 빌더 + 훅 엔진(sandbox 실행기·timeout·권한 강제) + Anthropic 러너
   (키 없으면 dry_run). `POST /run` 으로 관통.
 - ✅ 프론트엔드 화면 A~F (생성 스파인 A~D + 카탈로그 E + 대시보드 F).
-- ✅ 카탈로그 확장: 10 컴포넌트(4타입, 다facet) · 3 시나리오(PR 리뷰·이슈 분류·문서 초안).
+- ✅ 카탈로그 확장: 13 컴포넌트(4타입: skill 3·mcp 4·context 4·hook 2, 프롬프트 조각 3 포함) · 3 시나리오(PR 리뷰·이슈 분류·문서 초안).
+- ✅ 다중 런타임 컴파일(`eject`): `ResolvedHarness` → Claude Code Emitter · `POST /eject` + `harness eject/resolve` CLI (플래그십 1차 관통).
+- ✅ 프롬프트 관리: 리졸버 prompt 합성 단계 + 카탈로그 프롬프트 조각(1급 아티팩트).
 - 🚧 남은 하드닝: Voyage/Claude/Anthropic **실 네트워크 호출**(키 필요) · 훅 진짜 프로세스/
   WASM 격리 · pgvector 백엔드 전환.
-- 📋 **v2 차별화 로드맵** — 다중 런타임 컴파일(`eject`)·프롬프트 관리·실행 전 프리뷰·역방향
-  `adopt`·정책 as code·피드백 루프 활성화. `ResolvedHarness` IR 을 소스 오브 트루스로 두고
-  아무 런타임으로나 내보낸다. 우선순위·의존성·완료 기준은 [docs/plan/](./docs/plan/README.md) 의 "v2" 섹션.
+- 📋 **v2 남은 로드맵** — 이젝트 타깃 확장(Cursor·Cline·Raw API)·실행 전 프리뷰·역방향
+  `adopt`·정책 as code·경험적 검증(프롬프트 eval)·피드백 루프 활성화. `ResolvedHarness` IR 을
+  소스 오브 트루스로 두고 아무 런타임으로나 내보낸다. 우선순위·의존성·완료 기준은 [docs/plan/](./docs/plan/README.md) 의 "v2" 섹션.
 
-> 검증: 백엔드 pytest **47 통과** · ruff/mypy 클린 · 프론트 `pnpm build` 통과. 진행 플랜과
+> 검증: 백엔드 pytest **98 통과** · ruff·mypy(전체 소스) 클린 · 프론트 `pnpm build` 통과. 진행 플랜과
 > 단계별 완료 기준은 [docs/plan/](./docs/plan/README.md).

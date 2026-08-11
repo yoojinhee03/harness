@@ -18,4 +18,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
+# src/harness_catalog 안에는 배포용 카탈로그 스냅샷(catalog-data/components)이 함께 들어간다.
+# 소스 오브 트루스는 옆 폴더 harness-catalog/components 이며, 스냅샷은 그 빌드용 사본이다
+# (scripts/sync_catalog_snapshot.py 로 동기화, drift 는 test_catalog_snapshot.py 가 잡는다).
+# 설치본에선 loader 가 harness_catalog/catalog-data/components 를 자동 탐색한다.
 packages = ["src/harness_catalog"]

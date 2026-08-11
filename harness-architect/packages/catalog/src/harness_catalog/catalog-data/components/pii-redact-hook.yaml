@@ -1,0 +1,37 @@
+id: pii-redact-hook
+type: hook
+name: "PII 마스킹 변형"
+version: "1.0.0"
+status: stable
+
+summary: "응답 전 개인식별정보(PII)를 마스킹"
+description: >
+  요청·응답 페이로드에서 개인식별정보(이메일·전화·주민번호 등)를 탐지해 마스킹하는 변형
+  훅. 실패 시 fail_closed 로 유출을 막는다.
+use_when:
+  - "출력에서 개인정보가 노출되지 않게 마스킹해야 할 때"
+capability_tags: [lifecycle.transform]
+keywords: [pii, 개인정보, 마스킹, redact, 프라이버시]
+examples:
+  - "고객 응대 에이전트"
+  - "로그 마스킹이 필요한 봇"
+
+cost:
+  context_tokens: 0
+  added_tools: 0
+  latency: low
+usage_count: 0
+retention_score: 0.0
+
+provides: [lifecycle.transform]
+requires: []
+conflicts_with: []
+
+events: [after_response]
+sandbox: restricted
+blocking: false
+can_modify_request: false
+can_modify_response: true
+failure: fail_closed
+timeout_ms: 1500
+depends_on: []

@@ -1,8 +1,12 @@
-"""요청 빌더 (스켈레톤) — 기획 §3.2.
+"""요청 빌더 — 기획 §3.2.
 
-ResolvedHarness(실행 명세)를 받아 Anthropic API 요청 형태로 조립한다:
-system(컨텍스트·스킬 주입) + tools + mcp_servers + model 파라미터. 실제 MCP 도구 스펙
-회수와 API 호출은 🚧 (다음 단계).
+ResolvedHarness(실행 명세)를 받아 Anthropic Messages API 요청 형태로 조립한다:
+system(컨텍스트·스킬 주입) + tools + mcp_servers + model 파라미터.
+
+MCP: Messages API 의 MCP 커넥터는 **원격(URL) 서버만** 지원한다. 따라서 http/sse 스펙만
+요청 `mcp_servers` 에 싣고(러너가 그대로 전송), stdio 서버는 로컬 프로세스라 API 로 못 띄운다
+→ eject(클라이언트 런타임)에서 소비한다. tools 는 카탈로그에 도구 정의가 없어 현재 비어있다
+(도구는 MCP 서버가 노출).
 """
 
 from __future__ import annotations
@@ -38,9 +42,13 @@ def build_request(resolved: ResolvedHarness, user_prompt: str) -> BuiltRequest:
     tools: list[dict[str, Any]] = []
 
     for comp in resolved.components:
-        if comp.type == "mcp":
-            # 🚧 실제로는 MCP 서버에 접속해 도구 스펙을 회수한다.
-            mcp_servers.append({"id": comp.id, "version": comp.version, "config": comp.config})
+        if comp.type != "mcp":
+            continue
+        spec = comp.mcp
+        if spec is not None and spec.transport in ("http", "sse"):
+            # Messages API MCP 커넥터 형태(원격 URL 서버) — 러너가 그대로 전송한다.
+            mcp_servers.append({"type": "url", "url": spec.url, "name": comp.id})
+        # stdio(또는 스펙 없음) 서버는 API 로 못 띄움(로컬 프로세스) → eject 로 클라이언트에서 소비.
 
     if resolved.prompt is not None:
         system = resolved.prompt.system_text

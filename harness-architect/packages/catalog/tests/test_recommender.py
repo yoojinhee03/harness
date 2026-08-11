@@ -22,9 +22,9 @@ def registry():
 
 def test_seed_catalog_loads(registry):
     ids = {c.id for c in registry.all()}
-    # 확장 후 10개 — 원래 PR 봇 시드 4개는 그대로 포함.
+    # 시드 10 + 프롬프트 조각 3 = 13. 원래 PR 봇 시드 4개는 그대로 포함.
     assert {"github-mcp", "pr-review-skill", "coding-convention-ctx", "secret-scan-hook"} <= ids
-    assert len(ids) == 10
+    assert len(ids) == 13
 
 
 def test_heuristic_extraction_finds_core_capabilities():
@@ -62,3 +62,13 @@ def test_ranking_orders_matches_first(registry):
     result = rec.recommend("코드 리뷰와 PR 자동화", top_k=4)
     # 최상위는 요구 능력이 매칭된 컴포넌트여야 한다(임베딩만이 아니라 능력 매칭 가중).
     assert result.recommendations[0].matched_capabilities
+
+
+def test_recommends_prompt_fragment_for_role_description(registry):
+    """프롬프트 조각도 RAG 로 발견된다 (Phase 10) — '페르소나·톤' 설명에 role 조각이 능력 매칭으로 뜬다."""
+    rec = Recommender(registry)
+    result = rec.recommend("리뷰어 페르소나와 톤을 잡아주는 시스템 프롬프트가 필요해", top_k=6)
+    frag = next((r for r in result.recommendations if r.id == "prompt-role-reviewer"), None)
+    assert frag is not None
+    assert "prompt.role" in frag.matched_capabilities
+    assert frag.type == "context"

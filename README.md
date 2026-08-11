@@ -8,7 +8,7 @@
 프로젝트를 자연어로 설명하면 **하네스 구성요소(Skill · MCP · Context · Hook)를 추천**하고,
 선택한 구성을 검증해 **실행 가능한 `harness.yaml`** 로 만들어 주는 도구.
 
-"하네스"는 4개 요소의 고정된 정의가 아니라 모델을 감싸는 스캐폴딩 전체를 뜻하는 넓은ㅁ
+"하네스"는 4개 요소의 고정된 정의가 아니라 모델을 감싸는 스캐폴딩 전체를 뜻하는 넓은
 용어이고, 위 4개는 그중 MVP에서 프로젝트별로 조립·설정하는 표면이다.
 
 ### 핵심 가치
@@ -19,6 +19,21 @@
 ### 스코프
 - **In**: 카탈로그 기반 추천, `harness.yaml` 생성·검증, 피드백 루프.
 - **Out**: 일반적인 아키텍처 생성(베이스 LLM이 잘 함), 서브에이전트(재귀 구조만 예약, 미래 확장).
+
+### 지형도 — 우리는 어디에 있나
+
+에이전트 하네스 도구는 크게 세 부류로 나뉜다. 우리는 세 번째다.
+
+| 부류 | 대표 | 하는 일 | 한계 |
+|------|------|---------|------|
+| **런타임 내장 설정** | Claude Code(`.claude/`) · Cursor(`.cursorrules`) · Cline | 각 런타임 안에서 규칙·MCP·스킬을 손으로 조립 | 포맷 락인 · 수동 조립 · 근거/검증 없음 |
+| **팀 아키텍처 공장** | [revfactory/harness](https://github.com/revfactory/harness) 류 | 도메인 설명 → 멀티에이전트 팀·스킬을 **생성** | 특정 런타임에 **생성해 넣음**(락인) · 자유 생성이라 구조적 보증이 약함 |
+| **카탈로그 그라운딩 컴파일러** | **이 프로젝트** | 카탈로그에 **근거**해 추천 → 검증된 IR(`ResolvedHarness`) → **아무 런타임으로 컴파일**(`eject`) | 단일 모델 스캐폴딩에 집중(멀티에이전트는 스코프 아웃) |
+
+차별점 셋: **(1) 그라운딩** — 자유 생성이 아니라 실제 카탈로그 근거. **(2) 검증** — 순수 함수
+리졸버가 충돌·예산·권한·훅 순서를 구조적으로 보증. **(3) 이식성** — 하나의 IR 을 Claude
+Code·Cursor·Raw API 등으로 방출(락인 없음). 팀 아키텍처 생성은 의식적으로 스코프에서 뺐고,
+미래 확장으로 재귀 구조만 예약한다.
 
 ## 아키텍처 (2계층)
 
@@ -144,21 +159,24 @@ corepack pnpm dev                                 # http://localhost:5173
 - ✅ RAG 실연동 — Voyage 임베더·Claude Reasoner 주입 가능(키 있으면 자동, 없으면 폴백)
 - ✅ 런타임 — 빌더 + 훅 엔진(sandbox·timeout·권한 강제) + Anthropic 러너(dry_run), `POST /run`
 - ✅ 프론트엔드 — 화면 A~F (생성 A~D · 카탈로그 E · 대시보드 F)
-- ✅ 카탈로그 확장 — 10 컴포넌트 · 3 시나리오(PR 리뷰·이슈 분류·문서 초안)
+- ✅ 카탈로그 확장 — 13 컴포넌트(skill 3·mcp 4·context 4·hook 2, 프롬프트 조각 3 포함) · 3 시나리오(PR 리뷰·이슈 분류·문서 초안)
+- ✅ 다중 런타임 컴파일 (`eject`) — `ResolvedHarness` → Claude Code Emitter · `POST /eject` + `harness eject/resolve` CLI (**플래그십**). 타깃은 현재 Claude Code 하나(Cursor·Cline·Raw 는 Emitter seam 만, 미구현). MCP 서버는 실행 스펙을 갖춰 **그대로 도는 `.mcp.json`** 으로 방출된다(훅 `command` 는 아직 자리표시 — 태생적 근사).
+- ✅ 프롬프트 관리 — 시스템 프롬프트를 합성·변수·버전·린트 가능한 1급 아티팩트로(리졸버 prompt 합성 단계 + 카탈로그 프롬프트 조각)
+- ✅ MCP 서버 — recommend·resolve·eject 를 MCP 툴로(Claude Code·Cursor·Desktop), in-process·백엔드 불필요 → [harness-architect/apps/mcp](./harness-architect/apps/mcp)
 - 🚧 하드닝 — 실 네트워크 호출(키 필요) · 훅 프로세스/WASM 격리 · pgvector 전환
 
 **다음 (v2 — 차별화 로드맵):** harness.yaml 을 *실행 포맷*이 아니라 **소스 오브 트루스**로 두고,
 검증된 IR(`ResolvedHarness`)을 아무 런타임으로나 컴파일한다. 기존 플러그인의 포맷 락인·수동
 조립·런타임 터짐·학습 없음을 정면으로 뒤집는 게 목표다.
 
-- 📋 다중 런타임 컴파일 (`eject` → Claude Code·Cursor…) + CLI — **플래그십**
-- 📋 프롬프트 관리 — 시스템 프롬프트를 합성·변수·버전·린트 가능한 1급 아티팩트로(05·06 토대)
+- 📋 이젝트 타깃 확장 — Cursor(`.cursor/rules`)·Cline·Raw API Emitter (현재 Claude Code 만 관통)
 - 📋 실행 전 프리뷰/시뮬레이터 · 역방향 `adopt`(기존 설정 흡수) · 정책 as code(팀 가드레일)
+- 📋 경험적 검증 — 프롬프트 eval(입력→기대속성)로 "하네스가 실제로 낫다"를 측정해 피드백 루프에 연결 → [docs/plan/11](./harness-architect/docs/plan/11-empirical-validation.md)
 - 📋 피드백 루프 활성화 & 카탈로그 생애주기(드리프트·레시피)
 
 > 진행 플랜(v1 완료 + v2 로드맵)과 우선순위·의존성·단계별 완료 기준:
 > [harness-architect/docs/plan/](./harness-architect/docs/plan/README.md). 검증: 백엔드
-> pytest 47 · ruff/mypy 클린 · 프론트 build 통과.
+> pytest 98 · ruff·mypy(전체 소스) 클린 · 프론트 build 통과.
 
 ## 용어
 
@@ -166,3 +184,8 @@ corepack pnpm dev                                 # http://localhost:5173
 - **gap**: 선택 집합이 채우지 못한 `requires`. 추천기로 되돌리는 신호이지 에러가 아니다.
 - **harness.yaml**: 저작 레이어의 선언적 산출물이자 리졸버의 입력.
 - **ResolvedHarness**: 리졸버가 검증·해석해 만든 실행 명세.
+
+## 라이선스
+
+[Apache License 2.0](./LICENSE). 설정·프롬프트를 방출하는 도구 특성상 특허 조항이 있는
+Apache 2.0 을 택했다(인접 생태계와도 정합). 파생물은 변경 파일 명시·귀속 유지 조건을 따른다.

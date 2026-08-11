@@ -45,6 +45,33 @@ class Constraints(BaseModel):
     exclusive_group: str | None = None
 
 
+class McpServerSpec(BaseModel):
+    """MCP 서버 실행 스펙 — `.mcp.json`(및 러너) 방출의 단일 원본.
+
+    transport 별로 필요한 필드가 갈린다:
+    - stdio      : `command`(+ `args`, `env`) — 로컬 프로세스로 서버를 띄운다.
+    - http / sse : `url` — 원격 엔드포인트에 접속한다.
+
+    비밀값은 파일에 박지 말고 `${ENV_VAR}` 확장 표기를 쓴다(Claude Code 가 확장).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    transport: Literal["stdio", "http", "sse"] = "stdio"
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str | None = None
+
+    @model_validator(mode="after")
+    def _shape(self) -> McpServerSpec:
+        if self.transport == "stdio" and not self.command:
+            raise ValueError("stdio transport 는 command 가 필요합니다")
+        if self.transport in ("http", "sse") and not self.url:
+            raise ValueError(f"{self.transport} transport 는 url 이 필요합니다")
+        return self
+
+
 class Component(BaseModel):
     """카탈로그 컴포넌트. 공통 베이스 + 타입별 델타(optional).
 
@@ -87,6 +114,9 @@ class Component(BaseModel):
     # ── 타입 델타: skill ──
     entrypoint: str | None = None
     injection_mode: InjectionMode | None = None
+
+    # ── 타입 델타: mcp ──
+    mcp: McpServerSpec | None = None  # 서버 실행 스펙 — .mcp.json/러너 방출의 단일 원본
 
     # ── 타입 델타: context ──
     source: str | None = None
@@ -254,6 +284,7 @@ class ResolvedComponent(BaseModel):
     version: str
     name: str
     config: dict[str, Any] = Field(default_factory=dict)
+    mcp: McpServerSpec | None = None  # mcp 타입일 때 실행 스펙(이젝트·러너가 소비)
 
 
 class CostTotals(BaseModel):

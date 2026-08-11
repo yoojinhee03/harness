@@ -16,6 +16,7 @@ from harness_resolver import (
     HarnessConfig,
     HarnessMetadata,
     InMemoryRegistry,
+    ModelConfig,
     resolve,
 )
 
@@ -339,6 +340,42 @@ def test_extends_merges_base_components(registry: InMemoryRegistry) -> None:
     ids = {c.id for c in result.resolved.components}
     # 베이스의 secret-scan-hook + 자식의 github/skill 이 합쳐짐
     assert ids == {"secret-scan-hook", "github-mcp", "pr-review-skill"}
+
+
+def test_extends_preserves_base_model_and_merges_child_fields() -> None:
+    """회귀: base.model 이 통째로 폐기되면 안 된다.
+
+    - 자식이 model 을 아예 안 주면 base.model 유지.
+    - 자식이 일부 필드만 주면 그 필드만 오버라이드하고 나머지는 base 유지.
+    """
+    base = HarnessConfig(
+        metadata=HarnessMetadata(id="base/m"),
+        model=ModelConfig(name="base-model", temperature=0.9, max_tokens=8000),
+        components=[],
+    )
+    reg = InMemoryRegistry([github_mcp()], bases={"base/m": base})
+
+    # ① 자식이 model 미지정 → base.model 그대로
+    child_no_model = HarnessConfig(
+        metadata=HarnessMetadata(id="c1"), extends="base/m",
+        components=[ComponentSelection(ref="github-mcp@1.4.0")],
+    )
+    r1 = resolve(child_no_model, reg)
+    assert r1.ok and r1.resolved is not None
+    assert r1.resolved.model.name == "base-model"
+    assert r1.resolved.model.temperature == 0.9
+    assert r1.resolved.model.max_tokens == 8000
+
+    # ② 자식이 name 만 오버라이드 → name 은 자식, temperature/max_tokens 는 base 유지
+    child_partial = HarnessConfig(
+        metadata=HarnessMetadata(id="c2"), extends="base/m",
+        model=ModelConfig(name="child-model"),
+        components=[ComponentSelection(ref="github-mcp@1.4.0")],
+    )
+    r2 = resolve(child_partial, reg)
+    assert r2.ok and r2.resolved is not None
+    assert r2.resolved.model.name == "child-model"
+    assert r2.resolved.model.temperature == 0.9  # base 에서 보존
 
 
 def test_unknown_base_warns(registry: InMemoryRegistry) -> None:

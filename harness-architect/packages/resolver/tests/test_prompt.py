@@ -117,6 +117,41 @@ def test_variable_substitution_and_unresolved(registry: InMemoryRegistry) -> Non
     assert [d.detail["variable"] for d in unresolved] == ["project"]
 
 
+def test_required_variable_without_value_warns(registry: InMemoryRegistry) -> None:
+    """required=True 인데 값이 없으면 경고(required_variable_unset) — 필드가 실제로 동작."""
+    spec = PromptSpec(
+        system=[PromptLayer(inline="고정 지시")],  # project 를 참조하지 않아도 required 는 검사됨
+        variables={"project": PromptVariable(required=True)},
+    )
+    result = resolve(cfg(prompt=spec), registry)
+    codes = {d.code for d in result.diagnostics.warnings}
+    assert "required_variable_unset" in codes
+
+
+def test_variable_type_mismatch_warns(registry: InMemoryRegistry) -> None:
+    """default 값이 선언 타입과 다르면 경고(variable_type_mismatch)."""
+    spec = PromptSpec(
+        system=[PromptLayer(inline="n={{n}}")],
+        variables={"n": PromptVariable(type="number", default="not-a-number")},
+    )
+    result = resolve(cfg(prompt=spec), registry)
+    warn = [d for d in result.diagnostics.warnings if d.code == "variable_type_mismatch"]
+    assert [d.detail["variable"] for d in warn] == ["n"]
+
+
+def test_valid_typed_variable_no_warning(registry: InMemoryRegistry) -> None:
+    """타입이 맞으면 type 경고가 없다(오탐 방지)."""
+    spec = PromptSpec(
+        system=[PromptLayer(inline="n={{n}}, ok={{ok}}")],
+        variables={
+            "n": PromptVariable(type="number", default=3),
+            "ok": PromptVariable(type="boolean", default=True),
+        },
+    )
+    result = resolve(cfg(prompt=spec), registry)
+    assert not [d for d in result.diagnostics.warnings if d.code == "variable_type_mismatch"]
+
+
 # ─────────────────────────── dedup / 충돌 정책 ───────────────────────────
 
 

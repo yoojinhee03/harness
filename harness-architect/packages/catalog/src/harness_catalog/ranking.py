@@ -19,6 +19,9 @@ _W_EMBED = 1.0
 _W_CAPABILITY = 2.5
 _W_TOKENS = 0.15  # per 1k 컨텍스트 토큰 감점
 _W_TOOLS = 0.02  # per 도구 감점
+# ⚠️ usage_count·retention_score 는 피드백 루프(docs/plan/09)가 채우기 전까지 시드에서 전부 0 이라
+#    아래 두 항은 현재 점수에 사실상 0 을 더한다(inert). 피드백 루프가 활성화되면 그때 신호가 산다.
+#    지금은 랭킹을 실질적으로 embed(_W_EMBED)+capability(_W_CAPABILITY)-cost 가 지배한다.
 _W_USAGE = 0.10
 _W_RETENTION = 0.30
 _W_EXPLORE = 0.05  # 신규·저사용 탐색 부스트 (리치-겟-리처 완화)

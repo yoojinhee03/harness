@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 readme = "README.md"
 
 [tool.uv.workspace]
-members = ["packages/*", "apps/api"]
+members = ["packages/*", "apps/api", "apps/cli", "apps/mcp"]
 
 [tool.uv.sources]
 harness-resolver = { workspace = true }

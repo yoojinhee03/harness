@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from harness_api.main import app
@@ -18,11 +20,11 @@ def client():
 def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json()["catalog_size"] == 10
+    assert r.json()["catalog_size"] == 13  # 시드 10 + 프롬프트 조각 3
 
 
 def test_catalog_list_and_filter(client):
-    assert len(client.get("/catalog").json()) == 10
+    assert len(client.get("/catalog").json()) == 13
     mcp = client.get("/catalog", params={"type": "mcp"}).json()
     ids = {c["id"] for c in mcp}
     assert "github-mcp" in ids and len(ids) >= 4  # github·web-search·slack·notion
@@ -75,7 +77,7 @@ def test_resolve_gap(client):
 def test_run_dry_run(client):
     body = {
         "metadata": {"id": "pr-review-bot"},
-        "prompt": "이 PR 리뷰해줘",
+        "message": "이 PR 리뷰해줘",  # 사용자 메시지(시스템 prompt 블록과 분리된 필드)
         "components": [
             {"ref": "github-mcp@1.4.0"},
             {"ref": "pr-review-skill@2.1.0"},
@@ -84,10 +86,38 @@ def test_run_dry_run(client):
     }
     data = client.post("/run", json=body).json()
     assert data["ok"] is True
-    assert data["built"]["mcp_servers"] == ["github-mcp"]
+    # github-mcp 은 stdio 서버라 Messages API 로 전송 불가(원격 URL 만 지원) → API 요청엔 안 실린다.
+    # (그 서버 정의는 eject → .mcp.json 으로 나가 클라이언트 런타임이 소비한다.)
+    assert data["built"]["mcp_servers"] == []
     assert data["built"]["hook_plan"]["before_tool_call"] == ["secret-scan-hook"]
     # 키 없는 환경 → dry_run
     assert data["run"]["dry_run"] is True
+
+
+def test_resolve_with_prompt_block(client):
+    """prompt 블록(authored 레이어 + 변수)이 resolve 응답의 합성 프롬프트에 반영된다 (Phase 10)."""
+    body = {
+        "metadata": {"id": "pr-review-bot"},
+        "components": [{"ref": "coding-convention-ctx@1.0.0"}],
+        "prompt": {
+            "system": [{"inline": "너는 시니어 리뷰어다. 스타일은 {{style}}."}],
+            "variables": {"style": {"default": "google"}},
+        },
+    }
+    data = client.post("/resolve", json=body).json()
+    assert data["ok"] is True
+    p = data["resolved"]["prompt"]
+    assert p["hash"].startswith("sha256:")
+    # authored inline(변수 치환) 이 맨 앞, 그다음 컴포넌트 기여
+    assert p["system_text"].startswith("너는 시니어 리뷰어다. 스타일은 google.")
+    assert p["segments"][0]["source"] == "inline"
+    assert p["segments"][1]["source"] == "component:coding-convention-ctx"
+
+
+def test_run_rejects_missing_message(client):
+    """message 는 필수 — 빠지면 422."""
+    body = {"metadata": {"id": "x"}, "components": [{"ref": "github-mcp@1.4.0"}]}
+    assert client.post("/run", json=body).status_code == 422
 
 
 def test_generate_yaml(client):
@@ -99,3 +129,37 @@ def test_generate_yaml(client):
     assert "apiVersion: harness/v1" in data["yaml"]
     assert "github-mcp@1.4.0" in data["yaml"]
     assert data["ok"] is True
+
+
+def test_eject_claude_code(client):
+    """resolve → eject: ResolvedHarness 를 Claude Code 파일 트리로 컴파일 (Phase 5)."""
+    body = {
+        "metadata": {"id": "pr-bot"},
+        "components": [{"ref": "github-mcp@1.4.0"}],
+        "prompt": {"system": [{"inline": "너는 시니어 리뷰어다."}]},
+    }
+    data = client.post("/eject", params={"target": "claude-code"}, json=body).json()
+    assert data["ok"] is True
+    files = data["files"]
+    assert set(files) == {"CLAUDE.md", ".mcp.json", ".claude/settings.json"}
+    assert "너는 시니어 리뷰어다." in files["CLAUDE.md"]
+    settings = json.loads(files[".claude/settings.json"])
+    assert settings["permissions"]["allow"] == ["mcp__github-mcp"]
+
+
+def test_eject_unknown_target_400(client):
+    body = {"metadata": {"id": "x"}, "components": [{"ref": "github-mcp@1.4.0"}]}
+    r = client.post("/eject", params={"target": "cursor"}, json=body)
+    assert r.status_code == 400
+
+
+def test_generate_yaml_includes_prompt_block(client):
+    """prompt 블록이 harness.yaml 로 라운드트립된다 (authored 레이어·변수 보존)."""
+    body = {
+        "metadata": {"id": "pr-review-bot"},
+        "components": [{"ref": "github-mcp@1.4.0"}],
+        "prompt": {"system": [{"inline": "너는 시니어 리뷰어다."}]},
+    }
+    data = client.post("/generate", json=body).json()
+    assert "prompt:" in data["yaml"]
+    assert "너는 시니어 리뷰어다." in data["yaml"]

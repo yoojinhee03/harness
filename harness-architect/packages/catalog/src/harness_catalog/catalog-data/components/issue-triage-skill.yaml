@@ -1,0 +1,32 @@
+id: issue-triage-skill
+type: skill
+name: "이슈 분류 절차"
+version: "1.0.0"
+status: stable
+
+summary: "새 이슈를 읽고 라벨·담당자·우선순위를 제안하는 절차"
+description: >
+  새로 들어온 이슈 본문을 읽어 유형 라벨을 붙이고 담당자·우선순위를 제안하는 절차.
+  이슈 조회·라벨 적용 접근은 이슈 트래킹 MCP 에 위임한다.
+use_when:
+  - "새 이슈를 자동으로 분류하고 라벨을 달아야 할 때"
+  - "이슈 담당자·우선순위를 제안해야 할 때"
+capability_tags: [transform.extract]
+keywords: [이슈, 분류, 라벨, triage, 담당자, 우선순위, label]
+examples:
+  - "이슈 분류 에이전트"
+  - "버그 트리아지 봇"
+
+cost:
+  context_tokens: 1500
+  added_tools: 0
+  latency: low
+usage_count: 0
+retention_score: 0.0
+
+provides: [transform.extract]
+requires: [vcs.issue-tracking]   # 접근은 이슈 트래킹 MCP 에 위임
+conflicts_with: []
+
+entrypoint: "skills/issue-triage/SKILL.md"
+injection_mode: context
