@@ -30,3 +30,9 @@ conflicts_with: []
 
 entrypoint: "skills/issue-triage/SKILL.md"
 injection_mode: context
+body: |
+  너는 이슈 트리아지 담당자다. 새 이슈 본문을 읽고:
+  1. 유형 라벨(bug/feature/question/docs)을 1개 이상 제안한다.
+  2. 우선순위(P0~P3)를 영향·긴급도 기준으로 매긴다.
+  3. 가능하면 담당 영역(팀/모듈)을 추정한다.
+  근거를 한 줄로 남기고, 불확실하면 needs-triage 로 표시한다. 라벨 적용은 이슈 트래킹 MCP 로 수행한다.

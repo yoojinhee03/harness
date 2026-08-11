@@ -79,7 +79,8 @@ def resolve(config: HarnessConfig, registry: Registry) -> ResolveResult:
         comps.append(c)
         resolved_components.append(
             ResolvedComponent(
-                id=c.id, type=c.type, version=c.version, name=c.name, config=merged_config, mcp=c.mcp
+                id=c.id, type=c.type, version=c.version, name=c.name,
+                config=merged_config, mcp=c.mcp, body=c.body,
             )
         )
 
@@ -221,6 +222,7 @@ def _order_hooks(hooks: list[Component]) -> dict[str, list[HookStep]]:
                 sandbox=h.sandbox,
                 failure=h.failure,
                 timeout_ms=h.timeout_ms,
+                emit_command=h.emit_command,
             )
             for h in ordered
         ]

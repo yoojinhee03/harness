@@ -133,6 +133,7 @@ class Component(BaseModel):
     failure: Failure | None = None
     timeout_ms: int | None = None
     depends_on: list[str] = Field(default_factory=list)
+    emit_command: str | None = None  # eject 시 방출할 실제 셸 명령(없으면 자리표시). 훅 실행 모델 §eject
 
     def embedding_document(self) -> str:
         """임베딩용 합성 문서 — summary + description + use_when + tags + examples."""
@@ -267,6 +268,7 @@ class HookStep(BaseModel):
     sandbox: Sandbox | None
     failure: Failure | None
     timeout_ms: int | None
+    emit_command: str | None = None  # eject 시 방출할 실제 셸 명령(카탈로그가 제공, 없으면 자리표시)
 
 
 class AuthNeed(BaseModel):
@@ -285,6 +287,7 @@ class ResolvedComponent(BaseModel):
     name: str
     config: dict[str, Any] = Field(default_factory=dict)
     mcp: McpServerSpec | None = None  # mcp 타입일 때 실행 스펙(이젝트·러너가 소비)
+    body: str | None = None  # skill/context 본문 — 시스템 프롬프트(CLAUDE.md)에 주입되는 실제 텍스트
 
 
 class CostTotals(BaseModel):

@@ -34,17 +34,22 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
-def _component_segment_text(comp: ResolvedComponent) -> str | None:
+def component_segment_text(comp: ResolvedComponent) -> str | None:
     """context/skill 컴포넌트가 시스템 프롬프트에 기여하는 텍스트.
 
-    NOTE: `harness_runtime.builder._assemble_system_fallback` 과 **글자까지 동일**해야
-    한다(동치 회귀). 한쪽을 바꾸면 다른 쪽·회귀 테스트도 함께 갱신할 것.
+    `body` 가 있으면 그 **실제 텍스트**를, 없으면 자리표시를 쓴다. builder 도 이 함수를
+    공유해 조립 동치를 코드로 보장한다(예전엔 두 파일에 같은 문자열을 손으로 맞춰야 했다).
     """
     if comp.type == "context":
-        return f"## 컨텍스트: {comp.name} ({comp.id})\n[주입된 컨텍스트 — config={comp.config}]"
-    if comp.type == "skill":
-        return f"## 스킬 절차: {comp.name} ({comp.id})\n[주입된 절차 — config={comp.config}]"
-    return None
+        header = f"## 컨텍스트: {comp.name} ({comp.id})"
+        placeholder = f"[주입된 컨텍스트 — config={comp.config}]"
+    elif comp.type == "skill":
+        header = f"## 스킬 절차: {comp.name} ({comp.id})"
+        placeholder = f"[주입된 절차 — config={comp.config}]"
+    else:
+        return None
+    body = (comp.body or "").strip()
+    return f"{header}\n{body if body else placeholder}"
 
 
 def _resolve_variables(spec: PromptSpec | None) -> dict[str, object]:
@@ -155,7 +160,7 @@ def compose_prompt(
             raw.append((source, text))
 
     for comp in resolved_components:
-        t = _component_segment_text(comp)
+        t = component_segment_text(comp)
         if t is not None:
             raw.append((f"component:{comp.id}", t))
 

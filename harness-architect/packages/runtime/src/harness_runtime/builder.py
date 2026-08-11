@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from harness_resolver import ResolvedComponent, ResolvedHarness
+from harness_resolver import ResolvedComponent, ResolvedHarness, component_segment_text
 from pydantic import BaseModel, Field
 
 
@@ -73,13 +73,8 @@ def build_request(resolved: ResolvedHarness, user_prompt: str) -> BuiltRequest:
 def _assemble_system_fallback(components: list[ResolvedComponent]) -> str:
     """prompt 합성이 없을 때의 폴백 조립.
 
-    NOTE: `harness_resolver.prompt._component_segment_text` 와 **글자까지 동일**해야 한다
-    (동치 회귀 테스트로 고정). 한쪽을 바꾸면 다른 쪽도 함께 갱신할 것.
+    조립 규칙은 리졸버와 **동일 코드**(`component_segment_text`)를 공유한다 — 예전엔 두 파일에
+    같은 포맷 문자열을 손으로 맞춰야 했는데(취약 결합), 그 중복을 제거했다.
     """
-    parts: list[str] = []
-    for comp in components:
-        if comp.type == "context":
-            parts.append(f"## 컨텍스트: {comp.name} ({comp.id})\n[주입된 컨텍스트 — config={comp.config}]")
-        elif comp.type == "skill":
-            parts.append(f"## 스킬 절차: {comp.name} ({comp.id})\n[주입된 절차 — config={comp.config}]")
+    parts = [t for comp in components if (t := component_segment_text(comp)) is not None]
     return "\n\n".join(parts)

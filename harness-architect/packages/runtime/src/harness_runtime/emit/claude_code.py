@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 
 from harness_resolver import ResolvedComponent, ResolvedHarness
+from harness_resolver.models import HookStep
 
 from .base import FileTree
 
@@ -88,17 +89,16 @@ class ClaudeCodeEmitter:
             cc_event = _HOOK_EVENT_MAP.get(event)
             if cc_event is None:
                 continue  # after_request 등 미대응 이벤트는 생략(MAPPING.md)
-            entries = [
-                {
-                    "type": "command",
-                    # 하네스 훅은 샌드박스 핸들러라 셸 명령이 없다 → 자리표시(교체 필요).
-                    "command": (
-                        f"echo '[harness] {s.id} "
-                        f"(blocking={s.blocking}, sandbox={s.sandbox}, timeout={s.timeout_ms}ms) "
-                        f"— 실제 명령으로 교체'"
-                    ),
-                }
-                for s in steps
-            ]
+            entries = [{"type": "command", "command": self._hook_command(s)} for s in steps]
             out[cc_event] = [{"matcher": "*", "hooks": entries}]
         return out
+
+    def _hook_command(self, s: HookStep) -> str:
+        """훅의 셸 명령. 카탈로그에 emit_command 가 있으면 그걸, 없으면 정직한 자리표시."""
+        if s.emit_command:
+            return s.emit_command
+        # 셸 명령 스펙이 없는 훅(인프로세스 핸들러) → 자리표시(교체 필요, MAPPING.md).
+        return (
+            f"echo '[harness] {s.id} (blocking={s.blocking}, sandbox={s.sandbox}, "
+            f"timeout={s.timeout_ms}ms) — 실제 명령/핸들러로 교체'"
+        )

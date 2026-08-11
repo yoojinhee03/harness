@@ -121,6 +121,23 @@ def test_mcp_json_missing_spec_is_honest_placeholder() -> None:
     assert "TODO" in entry["command"]
 
 
+def test_hook_emit_command_used_when_present() -> None:
+    """훅에 emit_command 가 있으면 자리표시 대신 그 실제 명령을 방출한다."""
+    r = make_resolved()
+    r.hook_plan["before_tool_call"][0].emit_command = "grep -qiE 'secret' && exit 2 || exit 0"
+    settings = json.loads(emit(r, "claude-code")[".claude/settings.json"])
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert cmd == "grep -qiE 'secret' && exit 2 || exit 0"
+    assert "echo '[harness]" not in cmd  # 자리표시가 아님
+
+
+def test_hook_placeholder_when_no_emit_command() -> None:
+    """emit_command 가 없는 훅(인프로세스 핸들러)은 정직한 자리표시로 남는다."""
+    settings = json.loads(emit(make_resolved(), "claude-code")[".claude/settings.json"])
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "[harness]" in cmd and "secret-scan-hook" in cmd
+
+
 def test_no_mcp_omits_mcp_json() -> None:
     r = make_resolved()
     r.components = []  # MCP 없음
