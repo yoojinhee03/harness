@@ -1,0 +1,22 @@
+[project]
+name = "harness-mcp"
+version = "0.1.0"
+description = "harness MCP 서버 — recommend·resolve·eject 를 MCP 툴로 노출 (Claude Code·Cursor·Desktop 에서 호출)."
+requires-python = ">=3.12"
+dependencies = [
+    "harness-resolver",
+    "harness-catalog",
+    "harness-runtime",
+    "mcp>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+harness-mcp = "harness_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harness_mcp"]

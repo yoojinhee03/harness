@@ -1,0 +1,46 @@
+id: coding-convention-ctx
+type: context
+name: "코딩 컨벤션"
+version: "1.0.0"
+status: stable
+
+# ── 검색/랭킹용 (RAG, 퍼지) ──
+summary: "팀 코딩 스타일 가이드를 컨텍스트로 주입"
+description: >
+  팀의 코딩 스타일 가이드(네이밍·포맷·구조 규칙)를 컨텍스트로 주입해 리뷰·생성이
+  팀 기준에 맞춰지게 한다. 매 요청 토큰을 소비하므로 cost가 랭킹에서 민감하다.
+use_when:
+  - "리뷰를 팀 코딩 기준에 맞춰야 할 때"
+capability_tags: [convention.coding]
+keywords: [style, convention, lint, 컨벤션, 스타일가이드]
+examples:
+  - "PR 자동 리뷰 봇"
+  - "팀 컨벤션 준수 어시스턴트"
+
+# ── 랭킹 신호 ──
+cost:
+  context_tokens: 1200
+  added_tools: 0
+  latency: low
+usage_count: 0
+retention_score: 0.0
+
+# ── 의존성/제약 (리졸버, 엄격) ──
+provides: [convention.coding]
+requires: []
+conflicts_with: []
+
+# ── 타입 델타: context ──
+source: "file"
+size_estimate: 1200
+refresh: static
+
+# ── 실행/설정 (빌더, 엄격) ──
+config_schema:
+  type: object
+  properties:
+    style_guide:
+      type: string
+      enum: [google, airbnb, pep8]
+defaults:
+  style_guide: "google"

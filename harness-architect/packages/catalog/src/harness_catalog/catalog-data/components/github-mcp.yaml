@@ -1,0 +1,56 @@
+id: github-mcp
+type: mcp
+name: "GitHub"
+version: "1.4.0"
+status: stable
+
+# ── 검색/랭킹용 (RAG, 퍼지) ──
+summary: "GitHub 저장소·이슈·PR 접근"
+description: >
+  이슈/PR 조회·생성, 코드 검색, 커밋 조회 등 GitHub 워크플로 도구를 노출한다.
+  코드 호스팅, 이슈 트래킹, PR 리뷰 능력을 한 서버로 제공한다.
+use_when:
+  - "코드 리뷰나 PR 관련 작업이 필요할 때"
+  - "이슈 트래킹·저장소 탐색이 필요할 때"
+capability_tags: [vcs.code-hosting, vcs.issue-tracking, vcs.code-review]
+keywords: [git, repo, pull request, 깃허브, github]
+examples:
+  - "PR 자동 리뷰 봇"
+  - "이슈 분류 에이전트"
+
+# ── 랭킹 신호 ──
+cost:
+  context_tokens: 0
+  added_tools: 12
+  latency: medium
+usage_count: 0
+retention_score: 0.0
+
+# ── 의존성/제약 (리졸버, 엄격) ──
+provides: [vcs.code-hosting, vcs.issue-tracking, vcs.code-review]
+requires: []
+conflicts_with: [gitlab-mcp]
+constraints:
+  exclusive_group: vcs
+
+# ── 실행/설정 (빌더, 엄격) ──
+auth:
+  required: true
+  type: oauth
+  scopes: ["repo:read"]
+config_schema:
+  type: object
+  properties:
+    repo_filter:
+      type: string
+      description: "접근 허용 저장소 패턴"
+defaults:
+  repo_filter: "*"
+
+# ── MCP 실행 스펙 (eject/러너가 그대로 방출) ──
+mcp:
+  transport: stdio
+  command: npx
+  args: ["-y", "@modelcontextprotocol/server-github"]
+  env:
+    GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"

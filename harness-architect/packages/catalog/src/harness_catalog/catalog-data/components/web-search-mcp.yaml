@@ -1,0 +1,42 @@
+id: web-search-mcp
+type: mcp
+name: "웹 검색"
+version: "1.0.0"
+status: stable
+
+summary: "웹 검색과 URL 내용 가져오기"
+description: >
+  검색 엔진 질의와 URL 페이지 내용 가져오기를 노출한다. 리서치·근거 수집·최신 정보
+  확인이 필요한 에이전트에 쓰인다.
+use_when:
+  - "최신 정보나 외부 근거를 웹에서 찾아야 할 때"
+  - "URL 내용을 읽어와 요약·분석해야 할 때"
+capability_tags: [web.search, web.fetch]
+keywords: [search, web, 검색, 리서치, url, fetch]
+examples:
+  - "리서치 어시스턴트"
+  - "경쟁사 조사 봇"
+
+cost:
+  context_tokens: 0
+  added_tools: 4
+  latency: medium
+usage_count: 0
+retention_score: 0.0
+
+provides: [web.search, web.fetch]
+requires: []
+conflicts_with: []
+
+auth:
+  required: true
+  type: api_key
+  scopes: ["search:read"]
+
+# ── MCP 실행 스펙 (eject/러너가 그대로 방출) ──
+mcp:
+  transport: stdio
+  command: npx
+  args: ["-y", "@modelcontextprotocol/server-brave-search"]
+  env:
+    BRAVE_API_KEY: "${BRAVE_API_KEY}"

@@ -21,7 +21,7 @@
 | 3 | 프론트 화면 E(카탈로그) + F(대시보드) | [03-screens-e-f.md](./03-screens-e-f.md) | ✅ 완료 | 빌드/프록시 |
 | 4 | 카탈로그 확장 (도메인 확대 + 둘째 시나리오) | [04-catalog-expansion.md](./04-catalog-expansion.md) | ✅ 완료 | 테스트 |
 
-**v1 전체 완료** — 4개 Phase 모두 구현·검증. 백엔드 pytest 47 통과 · ruff/mypy 클린 ·
+**v1 전체 완료** — 4개 Phase 모두 구현·검증. 백엔드 pytest 98 통과 · ruff/mypy(전체 소스) 클린 ·
 프론트 `pnpm build` 통과. 실연동(Voyage/Claude/Anthropic) 실호출은 키 주입 시 자동 활성.
 
 ---
@@ -41,12 +41,13 @@
 
 | # | Phase | 문서 | 우선순위 | 의존성 | 상태 |
 |---|-------|------|---------|--------|------|
-| 5 | 다중 런타임 컴파일 (`eject`, Claude Code 먼저) + CLI | [05-multi-runtime-compile.md](./05-multi-runtime-compile.md) | **P0 (플래그십)** | 없음 — `ResolvedHarness` IR 완료 | 📋 계획 |
+| 5 | 다중 런타임 컴파일 (`eject`, Claude Code 먼저) + CLI | [05-multi-runtime-compile.md](./05-multi-runtime-compile.md) | **P0 (플래그십)** | 없음 — `ResolvedHarness` IR 완료 | ✅ 완료 (Claude Code) |
 | 6 | 실행 전 프리뷰 / 시뮬레이터 | [06-preview-simulator.md](./06-preview-simulator.md) | P0 | `build_request`(완료), 05 와 방출 뷰 공유 | 📋 계획 |
 | 7 | 역방향 임포트 (`adopt`) + gap 분석 | [07-reverse-adopt.md](./07-reverse-adopt.md) | P1 | 05 (포맷 매핑의 역) | 📋 계획 |
 | 8 | 정책 as code (조직 가드레일) | [08-policy-as-code.md](./08-policy-as-code.md) | P1 (상업 차별화) | resolver(완료) — 독립 | 📋 계획 |
 | 9 | 피드백 루프 활성화 & 카탈로그 생애주기 | [09-feedback-and-catalog-lifecycle.md](./09-feedback-and-catalog-lifecycle.md) | P2 | 05 (실사용 신호) | 📋 계획 |
-| 10 | 프롬프트 관리 (합성·변수·버전·린트) | [10-prompt-management.md](./10-prompt-management.md) | **P0 (05·06 토대)** | IR/resolver/cost(완료) — 05·06 강화 | 📋 계획 |
+| 10 | 프롬프트 관리 (합성·변수·버전·린트) | [10-prompt-management.md](./10-prompt-management.md) | **P0 (05·06 토대)** | IR/resolver/cost(완료) — 05·06 강화 | ✅ 완료 (코어) |
+| 11 | 경험적 검증 (프롬프트 eval → 품질 측정) | [11-empirical-validation.md](./11-empirical-validation.md) | P1 (신뢰도) | 10(완료) · 09 와 연동 | 📋 계획 |
 
 **의존성 그래프**
 
@@ -64,6 +65,10 @@
 깔면 05/06 이 방출·표시할 실체가 생긴다. 05 를 그 다음 두는 이유 — IR 이 이미 있어 저비용이고,
 "설명→검증"에서 멈추던 데모가 **"→ 진짜 `.claude/` 가 생성돼 실행"**까지 완결되며 이식성이라는
 차별화 서사를 초반에 증명한다.
+
+> **현재 위치** — `10`·`05` 완료(프롬프트 코어 + Claude Code eject 관통). 다음 후보:
+> `06`(프리뷰) · `07·08` 병행 · 신뢰도용 `11`(경험적 검증). `05` 는 Cursor/Cline/Raw API
+> Emitter 로 이식 폭을 넓힌다.
 
 ## 검증 원칙
 
