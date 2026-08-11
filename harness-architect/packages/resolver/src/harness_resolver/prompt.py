@@ -54,6 +54,45 @@ def _resolve_variables(spec: PromptSpec | None) -> dict[str, object]:
     return {name: v.default for name, v in spec.variables.items() if v.default is not None}
 
 
+def _type_ok(declared: str, value: object) -> bool:
+    """값이 선언 타입과 맞는지. bool 은 int 하위형이므로 number 에서 배제한다."""
+    if declared == "string":
+        return isinstance(value, str)
+    if declared == "number":
+        return isinstance(value, int | float) and not isinstance(value, bool)
+    if declared == "boolean":
+        return isinstance(value, bool)
+    return True
+
+
+def _check_variable_declarations(
+    spec: PromptSpec | None, values: dict[str, object], diag: Diagnostics
+) -> None:
+    """선언된 변수의 required/type 계약을 검증한다(값은 default 로 해소된 것 기준).
+
+    - required=True 인데 값이 없으면 경고(recoverable — 값·default 를 주면 해소, gap 성격).
+    - 값이 선언 타입과 불일치하면 경고.
+    """
+    if spec is None:
+        return
+    for name, v in spec.variables.items():
+        if name not in values:
+            if v.required:
+                diag.warn(
+                    "required_variable_unset",
+                    f"필수 변수 '{name}' 에 값(default)이 없음 — default 를 주거나 값을 지정하세요",
+                    variable=name,
+                )
+            continue
+        if not _type_ok(v.type, values[name]):
+            diag.warn(
+                "variable_type_mismatch",
+                f"변수 '{name}' 의 값이 선언 타입 '{v.type}' 과 불일치",
+                variable=name,
+                declared=v.type,
+            )
+
+
 def _substitute(text: str, values: dict[str, object]) -> tuple[str, set[str]]:
     """`{{name}}` 치환. 값 없는 참조는 placeholder 를 남기고 이름을 미해결로 반환."""
     unresolved: set[str] = set()
@@ -79,6 +118,7 @@ def compose_prompt(
     spec 이 None 이면 authored 레이어 없이 컴포넌트 기여만 합성 → 기존 build_request 조립과 동치.
     """
     values = _resolve_variables(spec)
+    _check_variable_declarations(spec, values, diag)
 
     # ── 1) 원시 조각 수집: authored 레이어(ref/inline) → 컴포넌트(context/skill) ──
     raw: list[tuple[str, str]] = []  # (source, text)

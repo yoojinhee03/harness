@@ -12,8 +12,10 @@
 from __future__ import annotations
 
 import logging
+import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -34,7 +36,7 @@ log = logging.getLogger("harness_api")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 카탈로그를 한 번 로드해 레지스트리·추천기를 준비한다. 없으면 빈 상태로 기동.
     try:
         catalog_dir = resolve_catalog_dir()
@@ -55,20 +57,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS — 기본은 개발 편의상 전체 허용. 배포 시 HARNESS_CORS_ORIGINS(쉼표 구분)로 좁힌다.
+_cors_origins = [o.strip() for o in os.environ.get("HARNESS_CORS_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 개발용. 배포 시 좁힌다.
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 def _registry(request: Request) -> InMemoryRegistry:
-    return request.app.state.registry
+    return cast(InMemoryRegistry, request.app.state.registry)
 
 
 def _recommender(request: Request) -> Recommender:
-    return request.app.state.recommender
+    return cast(Recommender, request.app.state.recommender)
 
 
 @app.get("/health")
@@ -138,7 +142,8 @@ def run_endpoint(request: Request, body: RunRequest) -> dict[str, Any]:
         "built": {
             "model": built.model,
             "system_chars": len(built.system),
-            "mcp_servers": [m["id"] for m in built.mcp_servers],
+            # API 로 전송되는 MCP 서버(원격 URL 만). stdio 서버는 eject 몫이라 여기 안 실린다.
+            "mcp_servers": [m["name"] for m in built.mcp_servers],
             "hook_plan": built.hook_plan,
             "permissions": built.permissions,
         },
@@ -180,4 +185,4 @@ def to_harness_yaml(config: HarnessConfig) -> str:
     ]
     if config.budget:
         doc["budget"] = config.budget.model_dump()
-    return yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+    return cast(str, yaml.safe_dump(doc, allow_unicode=True, sort_keys=False))

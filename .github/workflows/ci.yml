@@ -21,7 +21,7 @@ jobs:
         run: uv run ruff check .
       - name: Types (mypy)
         working-directory: harness-architect
-        run: uv run mypy packages/resolver/src
+        run: uv run mypy packages/resolver/src packages/catalog/src packages/runtime/src apps/api/src apps/cli/src apps/mcp/src
       - name: Test (pytest)
         working-directory: harness-architect
         run: uv run pytest -q
