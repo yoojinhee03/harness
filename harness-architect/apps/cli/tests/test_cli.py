@@ -58,4 +58,4 @@ def test_eject_dry_run_writes_nothing(config_file: Path, tmp_path: Path) -> None
 def test_eject_unknown_target_rejected(config_file: Path) -> None:
     # argparse choices 로 미지원 타깃은 SystemExit(2).
     with pytest.raises(SystemExit):
-        main(["eject", str(config_file), "--to", "cursor"])
+        main(["eject", str(config_file), "--to", "nonexistent-runtime"])

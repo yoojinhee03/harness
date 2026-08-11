@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import json
 
-from harness_resolver import ResolvedComponent, ResolvedHarness
+from harness_resolver import ResolvedHarness
 from harness_resolver.models import HookStep
 
-from .base import FileTree
+from .base import FileTree, mcp_servers_json
 
 # 하네스 훅 이벤트 → Claude Code 훅 이벤트 (근사; MAPPING.md 참조).
 # after_request 는 Claude Code 대응이 없어 방출을 생략한다.
@@ -33,7 +33,7 @@ class ClaudeCodeEmitter:
 
     def emit(self, resolved: ResolvedHarness) -> FileTree:
         tree: FileTree = {"CLAUDE.md": self._claude_md(resolved)}
-        mcp = self._mcp_json(resolved)
+        mcp = mcp_servers_json(resolved)  # 공용 헬퍼(Cursor 와 동일 포맷)
         if mcp is not None:
             tree[".mcp.json"] = mcp
         tree[".claude/settings.json"] = self._settings_json(resolved)
@@ -44,30 +44,6 @@ class ClaudeCodeEmitter:
         system = resolved.prompt.system_text if resolved.prompt is not None else ""
         header = f"<!-- harness-architect 생성 · id={resolved.metadata.id} · 편집 시 재-eject 로 덮어씀 -->"
         return f"{header}\n\n{system}\n"
-
-    # ── .mcp.json ← MCP 컴포넌트 (실행 스펙 있으면 그대로 도는 형태로 방출) ──
-    def _mcp_json(self, resolved: ResolvedHarness) -> str | None:
-        servers: dict[str, object] = {}
-        for c in resolved.components:
-            if c.type == "mcp":
-                servers[c.id] = self._mcp_entry(c)
-        if not servers:
-            return None
-        return json.dumps({"mcpServers": servers}, indent=2, ensure_ascii=False) + "\n"
-
-    def _mcp_entry(self, c: ResolvedComponent) -> dict[str, object]:
-        """단일 MCP 서버 엔트리. 실행 스펙(transport)에 맞는 Claude Code `.mcp.json` 형태로."""
-        spec = c.mcp
-        if spec is None:
-            # 카탈로그에 실행 스펙이 없는 컴포넌트 — 정직한 자리표시(교체 필요, MAPPING.md).
-            return {"command": f"TODO: {c.id} 실행 스펙을 카탈로그에 추가하세요", "args": []}
-        if spec.transport == "stdio":
-            entry: dict[str, object] = {"command": spec.command, "args": list(spec.args)}
-            if spec.env:
-                entry["env"] = dict(spec.env)
-            return entry
-        # http / sse — 원격 엔드포인트
-        return {"type": spec.transport, "url": spec.url}
 
     # ── .claude/settings.json ← model · permissions · hooks ──
     def _settings_json(self, resolved: ResolvedHarness) -> str:

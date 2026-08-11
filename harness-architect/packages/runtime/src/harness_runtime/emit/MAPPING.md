@@ -23,6 +23,21 @@
 | 훅 (`emit_command` 없음) | hook `command` | **자리표시** | 인프로세스 핸들러라 셸 명령 등가물이 없음 → `echo '[harness] … 교체'` (핸들러/명령 채워야 함) |
 | `auth_needs` | — | 미지원(현재) | MCP 인증은 Claude Code 커넥터 설정 몫 — 후속 |
 
+## Cursor (`CursorEmitter`, target=`cursor`)
+
+같은 IR 을 Cursor 네이티브 포맷으로 방출 — "단일 IR → 여러 런타임" 실증.
+
+| harness (IR) | Cursor | 충실도 | 비고 |
+|---|---|---|---|
+| `prompt.system_text` (합성 프롬프트) | `.cursor/rules/harness.mdc` | **손실 없음** | `.mdc` frontmatter `alwaysApply: true` 로 항상 주입(CLAUDE.md 대응) |
+| `type=mcp` 컴포넌트 | `.cursor/mcp.json` `mcpServers[id]` | **손실 없음** | Claude Code `.mcp.json` 과 동일 포맷(공용 헬퍼 재사용) |
+| `hook_plan` | — | **미지원** | Cursor 에 라이프사이클 훅(커맨드) 네이티브 대응 없음 → 생략 |
+| `model.name` | — | **미지원** | Cursor 는 모델을 UI 에서 선택 → settings 필드 아님 |
+| `permissions` | — | **미지원** | Cursor 에 도구 단위 허용 목록 대응 없음 → 생략 |
+
+Cursor 는 훅·모델·권한의 네이티브 대응이 없어 프롬프트+MCP 만 손실 없이 방출한다(생략은
+자유 생성이 아니라 명시적 소실 — 위 표로 문서화).
+
 ### 알려진 한계 (IR 태생)
 
 - skill/context 의 `body`(실제 지침 텍스트)는 이제 IR(`ResolvedComponent.body`)로 운반돼 합성

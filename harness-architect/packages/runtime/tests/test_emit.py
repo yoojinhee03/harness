@@ -152,9 +152,40 @@ def test_emit_is_deterministic() -> None:
 
 def test_unknown_target_raises() -> None:
     with pytest.raises(ValueError):
-        emit(make_resolved(), "cursor")  # 아직 미지원
+        emit(make_resolved(), "does-not-exist")  # 미등록 타깃
 
 
 def test_available_targets() -> None:
-    assert "claude-code" in available_targets()
+    targets = available_targets()
+    assert "claude-code" in targets and "cursor" in targets
     assert ClaudeCodeEmitter.target == "claude-code"
+
+
+# ─────────────────────────── Cursor 타깃 (이식성) ───────────────────────────
+
+
+def test_cursor_file_set() -> None:
+    tree = emit(make_resolved(), "cursor")
+    assert set(tree) == {".cursor/rules/harness.mdc", ".cursor/mcp.json"}
+
+
+def test_cursor_rule_has_frontmatter_and_prompt() -> None:
+    mdc = emit(make_resolved(), "cursor")[".cursor/rules/harness.mdc"]
+    assert mdc.startswith("---\n") and "alwaysApply: true" in mdc
+    assert "너는 시니어 리뷰어다." in mdc  # 합성 프롬프트가 그대로 들어감
+
+
+def test_cursor_mcp_matches_claude_code_format() -> None:
+    """단일 IR → 두 런타임의 mcpServers 는 동일 포맷(공용 헬퍼)."""
+    cursor_mcp = json.loads(emit(make_resolved(), "cursor")[".cursor/mcp.json"])
+    claude_mcp = json.loads(emit(make_resolved(), "claude-code")[".mcp.json"])
+    assert cursor_mcp == claude_mcp
+    assert cursor_mcp["mcpServers"]["github-mcp"]["command"] == "npx"
+
+
+def test_cursor_omits_mcp_when_none() -> None:
+    r = make_resolved()
+    r.components = []
+    tree = emit(r, "cursor")
+    assert ".cursor/mcp.json" not in tree
+    assert ".cursor/rules/harness.mdc" in tree

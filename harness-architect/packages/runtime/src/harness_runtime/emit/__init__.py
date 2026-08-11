@@ -12,8 +12,12 @@ from harness_resolver import ResolvedHarness
 
 from .base import Emitter, FileTree
 from .claude_code import ClaudeCodeEmitter
+from .cursor import CursorEmitter
 
-_EMITTERS: dict[str, type] = {ClaudeCodeEmitter.target: ClaudeCodeEmitter}
+_EMITTERS: dict[str, type] = {
+    ClaudeCodeEmitter.target: ClaudeCodeEmitter,
+    CursorEmitter.target: CursorEmitter,
+}
 
 
 def available_targets() -> list[str]:
@@ -29,4 +33,4 @@ def emit(resolved: ResolvedHarness, target: str) -> FileTree:
     return emitter.emit(resolved)
 
 
-__all__ = ["ClaudeCodeEmitter", "Emitter", "FileTree", "available_targets", "emit"]
+__all__ = ["ClaudeCodeEmitter", "CursorEmitter", "Emitter", "FileTree", "available_targets", "emit"]

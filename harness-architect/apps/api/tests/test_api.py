@@ -149,7 +149,7 @@ def test_eject_claude_code(client):
 
 def test_eject_unknown_target_400(client):
     body = {"metadata": {"id": "x"}, "components": [{"ref": "github-mcp@1.4.0"}]}
-    r = client.post("/eject", params={"target": "cursor"}, json=body)
+    r = client.post("/eject", params={"target": "nonexistent-runtime"}, json=body)
     assert r.status_code == 400
 
 
