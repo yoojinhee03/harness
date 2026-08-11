@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .builder import BuiltRequest, build_request
 from .emit import ClaudeCodeEmitter, Emitter, FileTree, available_targets, emit
+from .eval import CheckResult, EvalCase, EvalCaseResult, EvalExpect, EvalReport, check_expectations, run_eval
 from .hooks import HookEngine, HookOutcome
 from .runner import AnthropicRunner, RunResult
 from .sandbox import Executor, InProcessExecutor, TimeoutBoundExecutor, default_executors
@@ -15,8 +16,13 @@ from .sandbox import Executor, InProcessExecutor, TimeoutBoundExecutor, default_
 __all__ = [
     "AnthropicRunner",
     "BuiltRequest",
+    "CheckResult",
     "ClaudeCodeEmitter",
     "Emitter",
+    "EvalCase",
+    "EvalCaseResult",
+    "EvalExpect",
+    "EvalReport",
     "Executor",
     "FileTree",
     "HookEngine",
@@ -26,6 +32,8 @@ __all__ = [
     "TimeoutBoundExecutor",
     "available_targets",
     "build_request",
+    "check_expectations",
     "default_executors",
     "emit",
+    "run_eval",
 ]
