@@ -11,7 +11,7 @@ description: >
 use_when:
   - "새 이슈를 자동으로 분류하고 라벨을 달아야 할 때"
   - "이슈 담당자·우선순위를 제안해야 할 때"
-capability_tags: [transform.extract]
+capability_tags: [transform.classify]
 keywords: [이슈, 분류, 라벨, triage, 담당자, 우선순위, label]
 examples:
   - "이슈 분류 에이전트"
@@ -24,7 +24,7 @@ cost:
 usage_count: 0
 retention_score: 0.0
 
-provides: [transform.extract]
+provides: [transform.classify]
 requires: [vcs.issue-tracking]   # 접근은 이슈 트래킹 MCP 에 위임
 conflicts_with: []
 

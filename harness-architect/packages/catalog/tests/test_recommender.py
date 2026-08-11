@@ -64,6 +64,26 @@ def test_ranking_orders_matches_first(registry):
     assert result.recommendations[0].matched_capabilities
 
 
+def test_issue_triage_scenario_surfaces_triage_skill(registry):
+    """회귀: 이슈 분류 설명이 issue-triage-skill 을 능력 매칭으로 상위에 올린다.
+
+    이전엔 스킬이 transform.extract(추출)를 provide 하는데 vocab 이 '분류/라벨'을 그 능력으로
+    추출하지 못해 score 가 바닥이었다 → transform.classify 로 택소노미 정합화한 뒤 상위 진입.
+    """
+    rec = Recommender(registry)
+    result = rec.recommend("깃허브에 새 이슈가 등록되면 내용을 읽고 라벨을 자동으로 분류해 붙이는 에이전트", top_k=4)
+    ids = {r.id for r in result.recommendations}
+    assert "issue-triage-skill" in ids
+    triage = next(r for r in result.recommendations if r.id == "issue-triage-skill")
+    assert "transform.classify" in triage.matched_capabilities
+
+
+def test_guardrail_extracted_from_bimil_phrasing():
+    """회귀: '비밀키' 표현도 lifecycle.guardrail 로 추출된다(이전엔 시크릿/스캔만 매칭)."""
+    caps = set(extract_capabilities_heuristic("비밀키가 섞였는지 검사한 뒤 슬랙으로 보내는 봇"))
+    assert "lifecycle.guardrail" in caps
+
+
 def test_recommends_prompt_fragment_for_role_description(registry):
     """프롬프트 조각도 RAG 로 발견된다 (Phase 10) — '페르소나·톤' 설명에 role 조각이 능력 매칭으로 뜬다."""
     rec = Recommender(registry)
