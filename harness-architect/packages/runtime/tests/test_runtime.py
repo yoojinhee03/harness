@@ -13,6 +13,7 @@ from harness_resolver.models import (
     CostTotals,
     HarnessMetadata,
     HookStep,
+    McpServerSpec,
     ModelConfig,
     ResolvedComponent,
     ResolvedHarness,
@@ -61,7 +62,10 @@ def test_build_request_assembles_system_and_mcp():
                 config={"style_guide": "google"},
             ),
             ResolvedComponent(id="skill", type="skill", version="2.1.0", name="PR 리뷰", config={}),
-            ResolvedComponent(id="gh", type="mcp", version="1.4.0", name="GitHub", config={"repo_filter": "*"}),
+            ResolvedComponent(
+                id="gh", type="mcp", version="1.4.0", name="GitHub", config={"repo_filter": "*"},
+                mcp=McpServerSpec(transport="http", url="https://mcp.example/gh"),
+            ),
         ],
         hook_plan={"before_tool_call": [step("secret-scan", blocking=True)]},
         model=ModelConfig(name="claude-sonnet-5", max_tokens=1000, temperature=0.1),
@@ -69,7 +73,9 @@ def test_build_request_assembles_system_and_mcp():
     built = build_request(resolved, "이 PR 리뷰해줘")
     assert built.model == "claude-sonnet-5"
     assert "컨벤션" in built.system and "PR 리뷰" in built.system
-    assert [m["id"] for m in built.mcp_servers] == ["gh"]
+    # 원격(URL) MCP 서버는 API 커넥터 형태로 실린다.
+    assert [m["name"] for m in built.mcp_servers] == ["gh"]
+    assert built.mcp_servers[0] == {"type": "url", "url": "https://mcp.example/gh", "name": "gh"}
     assert built.hook_plan["before_tool_call"] == ["secret-scan"]
     assert built.messages[0]["content"] == "이 PR 리뷰해줘"
 
@@ -99,6 +105,19 @@ def test_composed_prompt_matches_builder_fallback():
     assert build_request(resolved_fallback, "x").system == composed.system_text
 
 
+def test_build_request_omits_stdio_mcp_from_api():
+    """stdio MCP 서버는 API 로 못 띄우므로 요청 mcp_servers 에서 제외된다(eject 몫)."""
+    resolved = make_resolved(
+        components=[
+            ResolvedComponent(
+                id="gh", type="mcp", version="1.4.0", name="GitHub",
+                mcp=McpServerSpec(transport="stdio", command="npx", args=["-y", "server-github"]),
+            ),
+        ]
+    )
+    assert build_request(resolved, "hi").mcp_servers == []
+
+
 # ─────────────────────────── AnthropicRunner ───────────────────────────
 
 
@@ -123,6 +142,36 @@ def test_runner_with_fake_client():
     assert result.dry_run is False
     assert result.text == "리뷰 결과입니다"
     assert result.stop_reason == "end_turn"
+
+
+def test_runner_forwards_mcp_servers_via_beta():
+    """회귀: 조립된 원격 MCP 서버를 드롭하지 않고 beta 커넥터로 실제 전송한다."""
+    captured: dict[str, object] = {}
+
+    class BetaMessages:
+        def create(self, **kw):
+            captured.update(kw)
+            return SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")], stop_reason="end_turn")
+
+    class PlainMessages:
+        def create(self, **kw):  # mcp 없을 때만 여기로 와야 함
+            captured["_plain"] = True
+            return SimpleNamespace(content=[], stop_reason=None)
+
+    fake = SimpleNamespace(messages=PlainMessages(), beta=SimpleNamespace(messages=BetaMessages()))
+    resolved = make_resolved(
+        components=[
+            ResolvedComponent(
+                id="gh", type="mcp", version="1.4.0", name="GitHub",
+                mcp=McpServerSpec(transport="http", url="https://mcp.example/gh"),
+            )
+        ]
+    )
+    result = AnthropicRunner(client=fake).run(build_request(resolved, "hi"))
+    assert result.text == "ok"
+    assert "_plain" not in captured  # 원격 MCP 있으면 beta 경로로 갔어야 함
+    assert captured["mcp_servers"] == [{"type": "url", "url": "https://mcp.example/gh", "name": "gh"}]
+    assert captured["betas"] == ["mcp-client-2025-04-04"]
 
 
 # ─────────────────────────── HookEngine: 권한 강제 ───────────────────────────
@@ -151,6 +200,18 @@ def test_modify_hook_transforms_payload():
     engine.register("redact", lambda p: {**p, "secret": "***"})
     out = engine.run("before_tool_call", {"secret": "abc"})
     assert out.payload["secret"] == "***"
+
+
+def test_modify_hook_accepts_falsy_payload():
+    """회귀: 0/1 같은 falsy 페이로드도 변형으로 반영돼야 한다(이전엔 0==False 로 삼켜짐)."""
+    engine = HookEngine(
+        make_resolved(hook_plan={"before_tool_call": [step("zero", can_modify_request=True)]})
+    )
+    engine.register("zero", lambda _p: 0)  # 정수 0 을 변형 결과로 반환
+    out = engine.run("before_tool_call", {"x": 1})
+    assert out.allowed is True
+    assert out.payload == 0  # 삼켜지지 않고 그대로 반영
+    assert any("변형" in n and "무시" not in n for n in out.notes)
 
 
 def test_unmodifiable_hook_change_ignored():
@@ -220,3 +281,22 @@ def test_timeout_fail_open_continues():
     engine.register("slow", lambda _p: time.sleep(0.3))
     out = engine.run("before_tool_call", {})
     assert out.allowed is True
+
+
+def test_timeout_returns_at_bound_not_after_handler():
+    """회귀: timeout 은 핸들러 종료까지 블록하지 않고 상한 시각에 반환해야 한다.
+
+    이전 구현은 `with ThreadPoolExecutor()` 의 `shutdown(wait=True)` 때문에 timeout 후에도
+    핸들러(여기선 1.0s)가 끝날 때까지 벽시계로 블록됐다. 상한(50ms)에 반환하는지 벽시계로 확인.
+    """
+    engine = HookEngine(
+        make_resolved(
+            hook_plan={"before_tool_call": [step("hang", sandbox="restricted", failure="fail_open", timeout_ms=50)]}
+        )
+    )
+    engine.register("hang", lambda _p: time.sleep(1.0))
+    start = time.monotonic()
+    out = engine.run("before_tool_call", {})
+    elapsed = time.monotonic() - start
+    assert out.allowed is True
+    assert elapsed < 0.5  # 핸들러 1.0s 를 다 기다리면 실패 — 상한에 반환됐음을 보장

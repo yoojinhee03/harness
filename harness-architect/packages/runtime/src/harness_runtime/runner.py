@@ -45,13 +45,24 @@ class AnthropicRunner:
                 notes=["ANTHROPIC_API_KEY 없음 — dry_run(요청은 조립됨, 전송 안 함)"],
             )
 
-        resp = client.messages.create(
-            model=built.model,
-            max_tokens=built.max_tokens,
-            temperature=built.temperature,
-            system=built.system,
-            messages=built.messages,
-        )
+        common: dict[str, Any] = {
+            "model": built.model,
+            "max_tokens": built.max_tokens,
+            "temperature": built.temperature,
+            "system": built.system,
+            "messages": built.messages,
+        }
+        if built.tools:
+            common["tools"] = built.tools
+
+        if built.mcp_servers:
+            # 조립된 MCP 서버(원격 URL)를 실제로 요청에 싣는다 — 더 이상 드롭하지 않는다.
+            # MCP 커넥터는 베타라 beta 엔드포인트 + betas 플래그가 필요하다.
+            resp = client.beta.messages.create(
+                **common, mcp_servers=built.mcp_servers, betas=["mcp-client-2025-04-04"]
+            )
+        else:
+            resp = client.messages.create(**common)
         text = _extract_text(resp)
         return RunResult(
             dry_run=False,

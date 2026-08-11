@@ -39,8 +39,13 @@ def merge_harness_configs(base: HarnessConfig, child: HarnessConfig) -> HarnessC
     for sel in child.components:
         merged_components[sel.id] = sel
 
-    # model — child 가 명시 오버라이드(스칼라). child 는 기본값이 있으므로 그대로 채택.
-    merged_model = child.model
+    # model — child 가 *명시한 필드만* base 위에 오버라이드한다. child 가 model 블록을 아예
+    #   안 주면 base 를 그대로 유지. (ModelConfig 는 전부 기본값이라 `child.model` 을 통째로
+    #   채택하면 base.model 이 항상 폐기되는 버그가 있었다 — budget/prompt 와 동일한 병합 의미로 교정.)
+    if "model" in child.model_fields_set:
+        merged_model = base.model.model_copy(update=child.model.model_dump(exclude_unset=True))
+    else:
+        merged_model = base.model
 
     merged_permissions = deep_merge_map(base.permissions, child.permissions)
 

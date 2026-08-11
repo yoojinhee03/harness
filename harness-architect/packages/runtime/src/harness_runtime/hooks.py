@@ -73,7 +73,10 @@ class HookEngine:
                 continue
 
             # 변형 — can_modify_* 선언된 훅만 반영(상한 강제).
-            if result not in (True, False, None):
+            # identity 비교(is)로 판정: `not in (True, False, None)` 은 `==` 라 0/1 같은
+            # 페이로드가 False/True 와 매칭돼 삼켜졌다(0 == False, 1 == True). 여기 도달 시
+            # result 는 이미 not-False(위에서 처리)이므로 True/None 만 배제하면 된다.
+            if result is not True and result is not None:
                 if step.can_modify_request or step.can_modify_response:
                     current = result
                     notes.append(f"{step.id} 가 페이로드 변형")

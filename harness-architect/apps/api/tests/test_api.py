@@ -86,7 +86,9 @@ def test_run_dry_run(client):
     }
     data = client.post("/run", json=body).json()
     assert data["ok"] is True
-    assert data["built"]["mcp_servers"] == ["github-mcp"]
+    # github-mcp 은 stdio 서버라 Messages API 로 전송 불가(원격 URL 만 지원) → API 요청엔 안 실린다.
+    # (그 서버 정의는 eject → .mcp.json 으로 나가 클라이언트 런타임이 소비한다.)
+    assert data["built"]["mcp_servers"] == []
     assert data["built"]["hook_plan"]["before_tool_call"] == ["secret-scan-hook"]
     # 키 없는 환경 → dry_run
     assert data["run"]["dry_run"] is True
