@@ -46,3 +46,11 @@ config_schema:
       description: "접근 허용 저장소 패턴"
 defaults:
   repo_filter: "*"
+
+# ── MCP 실행 스펙 (eject/러너가 그대로 방출) ──
+mcp:
+  transport: stdio
+  command: npx
+  args: ["-y", "@modelcontextprotocol/server-github"]
+  env:
+    GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"

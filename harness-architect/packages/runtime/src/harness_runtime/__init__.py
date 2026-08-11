@@ -10,7 +10,7 @@ from .builder import BuiltRequest, build_request
 from .emit import ClaudeCodeEmitter, Emitter, FileTree, available_targets, emit
 from .hooks import HookEngine, HookOutcome
 from .runner import AnthropicRunner, RunResult
-from .sandbox import Executor, InProcessExecutor, ThreadIsolatedExecutor, default_executors
+from .sandbox import Executor, InProcessExecutor, TimeoutBoundExecutor, default_executors
 
 __all__ = [
     "AnthropicRunner",
@@ -23,7 +23,7 @@ __all__ = [
     "HookOutcome",
     "InProcessExecutor",
     "RunResult",
-    "ThreadIsolatedExecutor",
+    "TimeoutBoundExecutor",
     "available_targets",
     "build_request",
     "default_executors",

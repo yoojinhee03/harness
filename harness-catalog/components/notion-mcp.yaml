@@ -32,3 +32,11 @@ auth:
   required: true
   type: oauth
   scopes: ["page:read", "page:write"]
+
+# ── MCP 실행 스펙 (eject/러너가 그대로 방출) ──
+mcp:
+  transport: stdio
+  command: npx
+  args: ["-y", "@notionhq/notion-mcp-server"]
+  env:
+    NOTION_TOKEN: "${NOTION_TOKEN}"

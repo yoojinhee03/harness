@@ -40,3 +40,12 @@ config_schema:
       description: "기본 전송 채널"
 defaults:
   default_channel: "#general"
+
+# ── MCP 실행 스펙 (eject/러너가 그대로 방출) ──
+mcp:
+  transport: stdio
+  command: npx
+  args: ["-y", "@modelcontextprotocol/server-slack"]
+  env:
+    SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN}"
+    SLACK_TEAM_ID: "${SLACK_TEAM_ID}"

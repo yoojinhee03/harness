@@ -13,6 +13,7 @@ from harness_resolver.models import (
     CostTotals,
     HarnessMetadata,
     HookStep,
+    McpServerSpec,
     ModelConfig,
     ResolvedComponent,
     ResolvedHarness,
@@ -27,7 +28,15 @@ def make_resolved() -> ResolvedHarness:
         model=ModelConfig(name="claude-sonnet-5"),
         permissions={"vcs.code-hosting": "read-only"},
         components=[
-            ResolvedComponent(id="github-mcp", type="mcp", version="1.4.0", name="GitHub", config={"repo_filter": "*"}),
+            ResolvedComponent(
+                id="github-mcp", type="mcp", version="1.4.0", name="GitHub", config={"repo_filter": "*"},
+                mcp=McpServerSpec(
+                    transport="stdio",
+                    command="npx",
+                    args=["-y", "@modelcontextprotocol/server-github"],
+                    env={"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"},
+                ),
+            ),
         ],
         provided={},
         hook_plan={
@@ -80,6 +89,36 @@ def test_settings_model_permissions_hooks() -> None:
 def test_mcp_json_lists_servers() -> None:
     mcp = json.loads(emit(make_resolved(), "claude-code")[".mcp.json"])
     assert "github-mcp" in mcp["mcpServers"]
+
+
+def test_mcp_json_emits_real_stdio_spec() -> None:
+    """실행 스펙이 있으면 자리표시가 아니라 그대로 도는 stdio 엔트리를 방출한다."""
+    entry = json.loads(emit(make_resolved(), "claude-code")[".mcp.json"])["mcpServers"]["github-mcp"]
+    assert entry["command"] == "npx"
+    assert entry["args"] == ["-y", "@modelcontextprotocol/server-github"]
+    assert entry["env"] == {"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"}
+    assert "TODO" not in json.dumps(entry)  # 자리표시가 남아있지 않음
+
+
+def test_mcp_json_http_transport() -> None:
+    """http/sse transport 는 type+url 형태로 방출한다."""
+    r = make_resolved()
+    r.components = [
+        ResolvedComponent(
+            id="remote-mcp", type="mcp", version="1.0.0", name="Remote",
+            mcp=McpServerSpec(transport="http", url="https://example.com/mcp"),
+        )
+    ]
+    entry = json.loads(emit(r, "claude-code")[".mcp.json"])["mcpServers"]["remote-mcp"]
+    assert entry == {"type": "http", "url": "https://example.com/mcp"}
+
+
+def test_mcp_json_missing_spec_is_honest_placeholder() -> None:
+    """실행 스펙이 없는 컴포넌트는 (환각 대신) 정직한 TODO 자리표시로 남는다."""
+    r = make_resolved()
+    r.components = [ResolvedComponent(id="mystery-mcp", type="mcp", version="0.1.0", name="Mystery")]
+    entry = json.loads(emit(r, "claude-code")[".mcp.json"])["mcpServers"]["mystery-mcp"]
+    assert "TODO" in entry["command"]
 
 
 def test_no_mcp_omits_mcp_json() -> None:
