@@ -81,6 +81,12 @@ export interface GenerateResponse {
   errors: number;
 }
 
+export interface EjectResult {
+  ok: boolean;
+  target: string;
+  files: Record<string, string> | null;
+}
+
 export interface SelectionInput {
   ref: string;
   config?: Record<string, unknown>;
@@ -113,4 +119,7 @@ export const api = {
     post<RecommendResult>("/recommend", { description, top_k }),
   resolve: (harness: HarnessInput) => post<ResolveResult>("/resolve", harness),
   generate: (harness: HarnessInput) => post<GenerateResponse>("/generate", harness),
+  ejectTargets: () => fetch(`${BASE}/eject/targets`).then((r) => r.json() as Promise<string[]>),
+  eject: (harness: HarnessInput, target: string) =>
+    post<EjectResult>(`/eject?target=${encodeURIComponent(target)}`, harness),
 };

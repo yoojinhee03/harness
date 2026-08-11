@@ -147,6 +147,19 @@ def test_eject_claude_code(client):
     assert settings["permissions"]["allow"] == ["mcp__github-mcp"]
 
 
+def test_eject_targets_lists_supported(client):
+    """프론트 타깃 셀렉터용 — 지원 타깃 목록."""
+    targets = client.get("/eject/targets").json()
+    assert "claude-code" in targets and "cursor" in targets
+
+
+def test_eject_cursor_tree(client):
+    body = {"metadata": {"id": "x"}, "components": [{"ref": "github-mcp@1.4.0"}]}
+    data = client.post("/eject", params={"target": "cursor"}, json=body).json()
+    assert data["ok"] is True
+    assert ".cursor/rules/harness.mdc" in data["files"]
+
+
 def test_eject_unknown_target_400(client):
     body = {"metadata": {"id": "x"}, "components": [{"ref": "github-mcp@1.4.0"}]}
     r = client.post("/eject", params={"target": "nonexistent-runtime"}, json=body)

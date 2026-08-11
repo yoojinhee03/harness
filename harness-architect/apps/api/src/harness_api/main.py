@@ -151,6 +151,12 @@ def run_endpoint(request: Request, body: RunRequest) -> dict[str, Any]:
     }
 
 
+@app.get("/eject/targets")
+def eject_targets() -> list[str]:
+    """지원하는 eject 타깃 목록(프론트 타깃 셀렉터용)."""
+    return available_targets()
+
+
 @app.post("/eject")
 def eject_endpoint(
     request: Request, body: ResolveRequest, target: str = Query("claude-code")
