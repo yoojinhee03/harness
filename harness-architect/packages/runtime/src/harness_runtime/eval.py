@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from harness_resolver import ResolvedHarness
+from harness_resolver import HarnessConfig, ResolvedHarness
 from pydantic import BaseModel, Field
 
 from .builder import build_request
@@ -95,3 +95,41 @@ def run_eval(resolved: ResolvedHarness, cases: list[EvalCase], client: Any | Non
     scored = [r for r in results if r.scored]
     mean = round(sum(r.score for r in scored) / len(scored), 4) if scored else None
     return EvalReport(cases=results, scored_count=len(scored), mean_score=mean)
+
+
+# ─────────────────────────── ablation (컴포넌트 기여도) ───────────────────────────
+
+
+class AblationResult(BaseModel):
+    component_id: str
+    full: EvalReport
+    ablated: EvalReport
+    delta_mean: float | None  # full.mean − ablated.mean (양수면 그 컴포넌트가 품질에 기여)
+
+
+def drop_component(config: HarnessConfig, component_id: str) -> HarnessConfig:
+    """config 에서 특정 컴포넌트를 뺀 새 config(ablation 대상 조립용)."""
+    kept = [c for c in config.components if c.id != component_id]
+    return config.model_copy(update={"components": kept})
+
+
+def run_ablation(
+    full: ResolvedHarness,
+    ablated: ResolvedHarness,
+    cases: list[EvalCase],
+    component_id: str,
+    client: Any | None = None,
+) -> AblationResult:
+    """같은 eval 셋을 full vs (컴포넌트 제거) 로 돌려 품질 델타를 낸다.
+
+    delta_mean 이 양수면 그 컴포넌트가 출력 품질에 기여한다는 경험적 근거 → 카탈로그 랭킹의
+    품질 신호 후보(Phase 9). 채점된 케이스가 없으면(키 없음) delta 는 None.
+    """
+    fr = run_eval(full, cases, client)
+    ar = run_eval(ablated, cases, client)
+    delta = (
+        round(fr.mean_score - ar.mean_score, 4)
+        if fr.mean_score is not None and ar.mean_score is not None
+        else None
+    )
+    return AblationResult(component_id=component_id, full=fr, ablated=ar, delta_mean=delta)

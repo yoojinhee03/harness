@@ -17,7 +17,15 @@ from pathlib import Path
 import yaml
 from harness_catalog import build_registry
 from harness_resolver import HarnessConfig, InMemoryRegistry, Registry, ResolveResult, resolve
-from harness_runtime import EvalCase, adopt_dir, available_targets, emit, run_eval
+from harness_runtime import (
+    EvalCase,
+    adopt_dir,
+    available_targets,
+    drop_component,
+    emit,
+    run_ablation,
+    run_eval,
+)
 
 
 def _load_config(path: str) -> HarnessConfig:
@@ -115,6 +123,25 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ablate(args: argparse.Namespace) -> int:
+    reg = _registry(args.catalog)
+    config = _load_config(args.config)
+    full = resolve(config, reg)
+    ablated = resolve(drop_component(config, args.drop), reg)
+    if full.resolved is None or ablated.resolved is None:
+        print("✗ resolve 실패 — ablation 중단", file=sys.stderr)
+        return 1
+    result = run_ablation(full.resolved, ablated.resolved, _load_cases(args.cases), args.drop)
+    print(f"full mean={result.full.mean_score} · ablated(-{args.drop}) mean={result.ablated.mean_score}")
+    d = result.delta_mean
+    if d is None:
+        print("delta: — (키 없어 dry_run 스킵 — ANTHROPIC_API_KEY 설정 시 실측)")
+    else:
+        verdict = "기여함(+)" if d > 0 else ("역효과(-)" if d < 0 else "무기여")
+        print(f"✓ '{args.drop}' 기여 델타 {d:+g} — {verdict}")
+    return 0
+
+
 def cmd_adopt(args: argparse.Namespace) -> int:
     result = adopt_dir(args.source, _registry(args.catalog), harness_id=args.id)
     doc = result.config.model_dump(exclude_none=True, exclude_defaults=True, by_alias=True)
@@ -181,6 +208,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_harvest.add_argument("descriptors", help="서버 디스크립터 JSON/YAML(servers: [...] 또는 최상위 리스트)")
     p_harvest.add_argument("--out", default=None, help="컴포넌트 YAML 을 쓸 디렉터리(미지정 시 표준출력)")
     p_harvest.set_defaults(func=cmd_harvest)
+
+    p_ablate = sub.add_parser("ablate", help="컴포넌트 하나를 빼고 eval 델타를 재 기여도를 측정한다.")
+    p_ablate.add_argument("config", help="harness.yaml 경로")
+    p_ablate.add_argument("--cases", required=True, help="eval 케이스 YAML")
+    p_ablate.add_argument("--drop", required=True, help="빼서 기여도를 잴 컴포넌트 id")
+    p_ablate.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
+    p_ablate.set_defaults(func=cmd_ablate)
 
     return parser
 

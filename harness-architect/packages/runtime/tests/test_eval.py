@@ -12,8 +12,9 @@ from harness_resolver.models import (
     HarnessMetadata,
     ModelConfig,
     ResolvedHarness,
+    ResolvedPrompt,
 )
-from harness_runtime import EvalCase, EvalExpect, check_expectations, run_eval
+from harness_runtime import EvalCase, EvalExpect, check_expectations, drop_component, run_ablation, run_eval
 
 
 def make_resolved() -> ResolvedHarness:
@@ -88,3 +89,46 @@ def test_run_eval_no_checks_passes():
     """expect 가 비면(체크 0개) 케이스는 통과로 본다(출력만 확인)."""
     report = run_eval(make_resolved(), [EvalCase(name="c", input="x")], client=fake_client("아무 출력"))
     assert report.cases[0].passed is True and report.cases[0].score == 1.0
+
+
+# ─────────────────────────── ablation ───────────────────────────
+
+
+def echo_system_client() -> object:
+    """system 프롬프트를 그대로 출력으로 돌려주는 fake — 컴포넌트 기여를 델타로 드러낸다."""
+
+    class Messages:
+        def create(self, **kw):
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text=kw.get("system", ""))], stop_reason="end_turn"
+            )
+
+    return SimpleNamespace(messages=Messages())
+
+
+def _resolved_with_system(text: str) -> ResolvedHarness:
+    r = make_resolved()
+    r.prompt = ResolvedPrompt(system_text=text, hash="sha256:x")
+    return r
+
+
+def test_ablation_measures_component_contribution():
+    """with(안전지침 포함) vs without → 델타로 그 컴포넌트의 품질 기여를 정량화."""
+    full = _resolved_with_system("너는 리뷰어다.\n\n## 안전지침: 비밀 노출 금지")
+    ablated = _resolved_with_system("너는 리뷰어다.")
+    cases = [EvalCase(name="safety", input="x", expect=EvalExpect(contains=["안전지침"]))]
+    result = run_ablation(full, ablated, cases, "safety-ctx", client=echo_system_client())
+    assert result.full.mean_score == 1.0
+    assert result.ablated.mean_score == 0.0
+    assert result.delta_mean == 1.0  # 그 컴포넌트가 품질에 기여함(경험적 근거)
+
+
+def test_drop_component_removes_from_config():
+    from harness_resolver import ComponentSelection, HarnessConfig, HarnessMetadata
+
+    cfg = HarnessConfig(
+        metadata=HarnessMetadata(id="x"),
+        components=[ComponentSelection(ref="a@1.0.0"), ComponentSelection(ref="b@1.0.0")],
+    )
+    out = drop_component(cfg, "a")
+    assert [c.id for c in out.components] == ["b"]
