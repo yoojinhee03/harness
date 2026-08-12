@@ -81,8 +81,8 @@ def resolve(config: HarnessConfig, registry: Registry) -> ResolveResult:
         comps.append(c)
         resolved_components.append(
             ResolvedComponent(
-                id=c.id, type=c.type, version=c.version, name=c.name,
-                config=merged_config, mcp=c.mcp, body=c.body,
+                id=c.id, type=c.type, version=c.version, name=c.name, summary=c.summary,
+                config=merged_config, mcp=c.mcp, usage_note=c.usage_note, body=c.body,
             )
         )
 

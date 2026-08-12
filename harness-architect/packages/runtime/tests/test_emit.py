@@ -74,6 +74,49 @@ def test_claude_md_is_composed_prompt() -> None:
     assert "너는 시니어 리뷰어다." in md and "## 컨텍스트: 컨벤션" in md
 
 
+def test_skill_emitted_as_skill_md_and_removed_from_claude_md() -> None:
+    """skill 은 .claude/skills/<id>/SKILL.md 로 분리 방출되고, 본문은 CLAUDE.md 에서 빠진다."""
+    from harness_resolver.models import PromptSegment
+
+    r = make_resolved()
+    r.components = [
+        *r.components,
+        ResolvedComponent(
+            id="pr-review-skill", type="skill", version="2.1.0", name="PR 리뷰 절차",
+            summary="PR diff 를 구조화 리뷰", body="너는 시니어 코드 리뷰어다. diff 를 리뷰한다.",
+        ),
+    ]
+    r.prompt = ResolvedPrompt(
+        system_text="(무시됨 — segments 우선)",
+        segments=[
+            PromptSegment(source="component:coding-convention-ctx", layer=0, tokens=5, text="## 컨텍스트: 컨벤션"),
+            PromptSegment(
+                source="component:pr-review-skill", layer=1, tokens=10,
+                text="## 스킬 절차: PR 리뷰 절차\n너는 시니어 코드 리뷰어다. diff 를 리뷰한다.",
+            ),
+        ],
+        hash="sha256:x",
+    )
+    tree = emit(r, "claude-code")
+    assert ".claude/skills/pr-review-skill/SKILL.md" in tree
+    skill = tree[".claude/skills/pr-review-skill/SKILL.md"]
+    assert skill.startswith("---\nname: pr-review-skill")
+    assert "description: PR diff 를 구조화 리뷰" in skill
+    assert "너는 시니어 코드 리뷰어다." in skill
+    md = tree["CLAUDE.md"]
+    assert "## 컨텍스트: 컨벤션" in md  # context 는 남고
+    assert "너는 시니어 코드 리뷰어다." not in md  # skill 본문은 빠짐
+
+
+def test_capabilities_section_from_usage_note() -> None:
+    """mcp 의 usage_note 는 CLAUDE.md Capabilities 절로 방출된다(도구 description 은 서버 몫)."""
+    r = make_resolved()
+    r.components[0].usage_note = "PR diff 는 이 서버로 가져온다."
+    md = emit(r, "claude-code")["CLAUDE.md"]
+    assert "## Capabilities" in md
+    assert "github-mcp" in md and "PR diff 는 이 서버로 가져온다." in md
+
+
 def test_settings_model_permissions_hooks() -> None:
     settings = json.loads(emit(make_resolved(), "claude-code")[".claude/settings.json"])
     assert settings["model"] == "claude-sonnet-5"

@@ -114,6 +114,8 @@ class Component(BaseModel):
 
     # ── 타입 델타: mcp ──
     mcp: McpServerSpec | None = None  # 서버 실행 스펙 — .mcp.json/러너 방출의 단일 원본
+    usage_note: str | None = None  # "이 MCP 를 언제·어떻게 쓰나" 상위 지침 — CLAUDE.md Capabilities 절로 방출
+    #   (도구별 description 은 서버가 tools/list 로 노출하므로 authoring 안 함; 이건 그 위의 사용 전략)
 
     # ── 타입 델타: context ──
     source: str | None = None
@@ -293,9 +295,11 @@ class ResolvedComponent(BaseModel):
     type: ComponentType
     version: str
     name: str
+    summary: str = ""  # 스킬 SKILL.md frontmatter description 등에 쓰는 한 줄 요약
     config: dict[str, Any] = Field(default_factory=dict)
     mcp: McpServerSpec | None = None  # mcp 타입일 때 실행 스펙(이젝트·러너가 소비)
-    body: str | None = None  # skill/context 본문 — 시스템 프롬프트(CLAUDE.md)에 주입되는 실제 텍스트
+    usage_note: str | None = None  # mcp 타입일 때 상위 사용 지침 — CLAUDE.md Capabilities 절
+    body: str | None = None  # skill/context 본문 — skill 은 SKILL.md, context 는 CLAUDE.md 로 방출
 
 
 class CostTotals(BaseModel):

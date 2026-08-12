@@ -40,9 +40,12 @@ Cursor 는 훅·모델·권한의 네이티브 대응이 없어 프롬프트+MCP
 
 ### 알려진 한계 (IR 태생)
 
-- skill/context 의 `body`(실제 지침 텍스트)는 이제 IR(`ResolvedComponent.body`)로 운반돼 합성
-  프롬프트(→ `CLAUDE.md`)에 들어간다. 다만 skill 의 `entrypoint`(개별 `skills/<id>/SKILL.md`
-  네이티브 파일)로의 분리 방출은 아직 안 한다 — 본문은 CLAUDE.md 에 합쳐진다.
+- context 의 `body`(프롬프트 조각)는 IR(`ResolvedComponent.body`)로 운반돼 합성 시스템 레이어
+  (→ `CLAUDE.md`)에 들어간다. skill 의 `body`는 이제 CLAUDE.md 에 합치지 않고 컴포넌트마다
+  `.claude/skills/<id>/SKILL.md`(네이티브 Agent Skill — frontmatter `name`/`description` + body)로
+  분리 방출한다. 모델이 필요 시 스킬을 로드하는 Claude Code 규약을 따른다.
+- MCP 상위 사용 지침(`ResolvedComponent.usage_note`)은 `CLAUDE.md` 의 `## Capabilities` 절로 방출한다.
+  도구별 description 은 서버가 `tools/list` 로 노출하므로 authoring 하지 않는다(그 위의 사용 전략만).
 - MCP **실행 스펙**은 이제 IR(`ResolvedComponent.mcp`)로 운반돼 그대로 도는 `.mcp.json` 으로
   나간다(카탈로그 `mcp:` 블록 필요). auth 는 여전히 Claude Code 커넥터/`${ENV}` 몫이며, MCP
   `config`(예: repo_filter)는 표준 `.mcp.json` 형태에 안 맞아 아직 생략한다.

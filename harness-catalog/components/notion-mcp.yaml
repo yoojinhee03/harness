@@ -33,6 +33,11 @@ auth:
   type: oauth
   scopes: ["page:read", "page:write"]
 
+# ── 상위 사용 지침 (CLAUDE.md Capabilities 절로 방출) ──
+usage_note: >
+  장기 기록·문서화는 이 서버로 페이지에 남긴다(Notion AI 가 지식베이스에 축적하듯).
+  먼저 검색해 기존 페이지가 있으면 갱신하고, 없을 때만 새로 만든다.
+
 # ── MCP 실행 스펙 (eject/러너가 그대로 방출) ──
 mcp:
   transport: stdio

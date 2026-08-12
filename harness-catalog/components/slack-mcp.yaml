@@ -41,6 +41,11 @@ config_schema:
 defaults:
   default_channel: "#general"
 
+# ── 상위 사용 지침 (CLAUDE.md Capabilities 절로 방출) ──
+usage_note: >
+  결과·알림 전달은 이 서버로 지정 채널에 보낸다. 요약을 먼저 보내고 상세는 스레드 답글로
+  잇는다(Slack 봇 관례). 사람 멘션·대량 발송은 사용자 확인 후에만.
+
 # ── MCP 실행 스펙 (eject/러너가 그대로 방출) ──
 mcp:
   transport: stdio
