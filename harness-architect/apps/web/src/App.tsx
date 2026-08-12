@@ -1,7 +1,9 @@
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { api, scopePref, type HarnessInput, type Recommendation } from "./api/client";
+import { api, auth, scopePref, type HarnessInput, type Recommendation } from "./api/client";
 import { AppShell, type View } from "./components/AppShell";
 import { CommandPalette } from "./components/CommandPalette";
+import { LoginScreen } from "./components/LoginScreen";
 import { saveHarness } from "./lib/store";
 import ScreenA from "./screens/ScreenA";
 import ScreenB from "./screens/ScreenB";
@@ -22,9 +24,25 @@ const STEPS: { key: Step; label: string }[] = [
 ];
 
 export default function App() {
+  const [authed, setAuthed] = useState(() => auth.token().length > 0);
   const [view, setView] = useState<View>("create");
   const [step, setStep] = useState<Step>("A");
   const [cmdOpen, setCmdOpen] = useState(false);
+
+  // 로그인 후 계정 정보(사이드바 표시). 토큰이 만료/무효면 401 → 자동 로그아웃.
+  const meQ = useQuery({ queryKey: ["me"], queryFn: api.me, enabled: authed, retry: false });
+  useEffect(() => {
+    if (meQ.isError) {
+      auth.clear();
+      setAuthed(false);
+    }
+  }, [meQ.isError]);
+
+  function logout() {
+    auth.clear();
+    setAuthed(false);
+    setView("create");
+  }
 
   const [description, setDescription] = useState("");
   const [requirements, setRequirements] = useState<string[]>([]);
@@ -86,12 +104,19 @@ export default function App() {
 
   const maxStep = STEPS.findIndex((s) => s.key === step);
 
+  // 앱 진입 게이트 — 미로그인이면 콘솔 대신 로그인 화면.
+  if (!authed) {
+    return <LoginScreen onLogin={() => setAuthed(true)} />;
+  }
+
   return (
     <>
       <AppShell
         view={view}
         setView={setView}
         onCmdK={() => setCmdOpen(true)}
+        account={meQ.data?.handle}
+        onLogout={logout}
         headerRight={view === "create" ? <StepNav step={step} setStep={setStep} maxStep={maxStep} /> : undefined}
       >
         {view === "create" && step === "A" && (

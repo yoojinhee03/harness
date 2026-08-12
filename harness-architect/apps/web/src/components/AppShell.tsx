@@ -22,12 +22,16 @@ export function AppShell({
   view,
   setView,
   onCmdK,
+  account,
+  onLogout,
   headerRight,
   children,
 }: {
   view: View;
   setView: (v: View) => void;
   onCmdK: () => void;
+  account?: string;
+  onLogout?: () => void;
   headerRight?: ReactNode;
   children: ReactNode;
 }) {
@@ -72,11 +76,23 @@ export function AppShell({
           })}
         </nav>
 
-        <div className="flex items-center justify-between border-t border-line px-3 py-2.5">
-          <span className="text-xs text-muted">v0.1 · MVP</span>
-          <IconButton onClick={toggleTheme} title="테마 전환" aria-label="테마 전환">
-            {theme === "dark" ? <IconSun /> : <IconMoon />}
-          </IconButton>
+        <div className="flex items-center justify-between gap-2 border-t border-line px-3 py-2.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-accent/20 text-[11px] font-semibold text-accent">
+              {(account ?? "?").slice(0, 1).toUpperCase()}
+            </span>
+            <span className="truncate text-xs font-medium text-fg">{account ?? "…"}</span>
+          </div>
+          <div className="flex shrink-0 items-center">
+            <IconButton onClick={toggleTheme} title="테마 전환" aria-label="테마 전환">
+              {theme === "dark" ? <IconSun /> : <IconMoon />}
+            </IconButton>
+            {onLogout && (
+              <IconButton onClick={onLogout} title="로그아웃" aria-label="로그아웃">
+                <IconLogout />
+              </IconButton>
+            )}
+          </div>
         </div>
       </aside>
 
@@ -104,4 +120,5 @@ function IconGear() { return <svg {...S}><circle cx="12" cy="12" r="3" /><path d
 function IconSearch() { return <svg {...S} width={13} height={13}><circle cx="11" cy="11" r="7" /><path d="M21 21l-4-4" /></svg>; }
 function IconSun() { return <svg {...S}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19" /></svg>; }
 function IconMoon() { return <svg {...S}><path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z" /></svg>; }
+function IconLogout() { return <svg {...S}><path d="M15 4h3a1 1 0 011 1v14a1 1 0 01-1 1h-3M10 17l5-5-5-5M15 12H3" /></svg>; }
 function IconLogo() { return <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" /><path d="M8 10h8M8 13.5h8" strokeWidth={1.6} /></svg>; }

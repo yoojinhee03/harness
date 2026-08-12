@@ -1,70 +1,27 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, auth, scopePref, subscribeHarnessEvents, type Team } from "../api/client";
-import { Badge, Button, Card, codeBlock, EmptyState, Input, PageHeader } from "../lib/ui";
+import { api, scopePref, subscribeHarnessEvents, type Team } from "../api/client";
+import { Badge, Button, Card, codeBlock, EmptyState, Input, Modal, PageHeader } from "../lib/ui";
+import { useToast } from "../lib/toast";
 
+/**
+ * 하네스 화면 — 내 personal + 내 팀들의 하네스(스코프 격리). 실시간 동기화(SSE).
+ * 인증은 앱 진입 게이트에서 보장되므로 여기선 로그인 UI 가 없다.
+ */
 export default function ScreenSync() {
-  const [loggedIn, setLoggedIn] = useState(() => auth.token().length > 0);
-  if (!loggedIn) return <LoginGate onLogin={() => setLoggedIn(true)} />;
-  return <SyncBoard onLogout={() => setLoggedIn(false)} />;
-}
-
-function LoginGate({ onLogin }: { onLogin: () => void }) {
-  const [handle, setHandle] = useState("");
-  const [token, setToken] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-
-  async function register() {
-    setErr(null);
-    try {
-      const acct = await api.register(handle.trim());
-      auth.setToken(acct.token);
-      onLogin();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
-  }
-  function useToken() {
-    if (!token.trim()) return;
-    auth.setToken(token.trim());
-    onLogin();
-  }
-
-  return (
-    <div className="mx-auto max-w-md">
-      <PageHeader title="공유 저장소 로그인" subtitle="사용자별 격리 + 팀 공유를 위한 신원. 토큰은 브라우저에 저장됩니다." />
-      <Card className="space-y-4">
-        <div>
-          <label className="text-xs font-medium text-muted">새 계정 만들기 — handle</label>
-          <div className="mt-1.5 flex gap-2">
-            <Input placeholder="예: alice" value={handle} onChange={(e) => setHandle(e.target.value)} onKeyDown={(e) => e.key === "Enter" && register()} />
-            <Button onClick={register} disabled={!handle.trim()}>
-              가입
-            </Button>
-          </div>
-        </div>
-        <div className="border-t border-line pt-4">
-          <label className="text-xs font-medium text-muted">또는 기존 토큰 붙여넣기</label>
-          <div className="mt-1.5 flex gap-2">
-            <Input type="password" placeholder="토큰" value={token} onChange={(e) => setToken(e.target.value)} />
-            <Button variant="subtle" onClick={useToken} disabled={!token.trim()}>
-              로그인
-            </Button>
-          </div>
-        </div>
-        {err && <p className="text-sm text-err">{err}</p>}
-      </Card>
-    </div>
-  );
-}
-
-function SyncBoard({ onLogout }: { onLogout: () => void }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const me = useQuery({ queryKey: ["me"], queryFn: api.me });
   const { data: list = [], isError } = useQuery({ queryKey: ["harnesses"], queryFn: api.listHarnesses });
   const [scope, setScope] = useState(() => scopePref.get());
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [doc, setDoc] = useState<string | null>(null);
+
+  // 다이얼로그 상태(네이티브 prompt/confirm 대체)
+  const [teamName, setTeamName] = useState<string | null>(null);
+  const [inviteFor, setInviteFor] = useState<Team | null>(null);
+  const [inviteHandle, setInviteHandle] = useState("");
+  const [delFor, setDelFor] = useState<{ id: string; scope: string; name: string } | null>(null);
 
   useEffect(() => subscribeHarnessEvents(() => qc.invalidateQueries({ queryKey: ["harnesses"] })), [qc]);
 
@@ -85,34 +42,48 @@ function SyncBoard({ onLogout }: { onLogout: () => void }) {
     setOpenKey(key);
     setDoc(full.yaml);
   }
-  async function del(id: string, sc: string) {
-    await api.deleteHarness(id, sc);
-    qc.invalidateQueries({ queryKey: ["harnesses"] });
+  async function confirmDelete() {
+    if (!delFor) return;
+    const target = delFor;
+    setDelFor(null);
+    try {
+      await api.deleteHarness(target.id, target.scope);
+      qc.invalidateQueries({ queryKey: ["harnesses"] });
+      toast(`삭제됨: ${target.name}`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "삭제 실패", "error");
+    }
   }
-  async function newTeam() {
-    const name = prompt("새 팀 이름");
+  async function createTeam() {
+    const name = (teamName ?? "").trim();
     if (!name) return;
-    await api.createTeam(name);
-    qc.invalidateQueries({ queryKey: ["me"] });
+    setTeamName(null);
+    try {
+      const t = await api.createTeam(name);
+      qc.invalidateQueries({ queryKey: ["me"] });
+      toast(`팀 생성됨: ${t.name}`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "팀 생성 실패", "error");
+    }
   }
-  async function invite(tid: string) {
-    const handle = prompt("추가할 멤버 handle");
-    if (!handle) return;
-    await api.addMember(tid, handle);
-    qc.invalidateQueries({ queryKey: ["me"] });
+  async function invite() {
+    if (!inviteFor || !inviteHandle.trim()) return;
+    const team = inviteFor;
+    const handle = inviteHandle.trim();
+    setInviteFor(null);
+    setInviteHandle("");
+    try {
+      const t = await api.addMember(team.id, handle);
+      qc.invalidateQueries({ queryKey: ["me"] });
+      toast(`'${handle}' 추가됨 — ${t.name} 멤버 ${t.members.length}명`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "멤버 추가 실패", "error");
+    }
   }
 
   return (
     <div className="mx-auto max-w-3xl">
-      <PageHeader
-        title={`${me.data?.handle ?? "…"} 의 하네스`}
-        subtitle="사용자별 격리 + 팀 공유 · 실시간 동기화(SSE) · VSCode 확장과 동일"
-        actions={
-          <button className="text-xs text-muted hover:text-fg" onClick={() => { auth.clear(); onLogout(); }}>
-            로그아웃
-          </button>
-        }
-      />
+      <PageHeader title="하네스" subtitle="내 하네스 · 팀 공유 · 실시간 동기화(SSE) · VSCode 확장과 동일" />
 
       {/* 저장 스코프 스위처 */}
       <Card className="mb-3">
@@ -126,7 +97,7 @@ function SyncBoard({ onLogout }: { onLogout: () => void }) {
               👥 {t.name}
             </ScopeChip>
           ))}
-          <button className="ml-1 text-xs text-muted hover:text-fg" onClick={newTeam}>
+          <button className="ml-1 text-xs text-muted hover:text-fg" onClick={() => setTeamName("")}>
             + 새 팀
           </button>
         </div>
@@ -165,7 +136,11 @@ function SyncBoard({ onLogout }: { onLogout: () => void }) {
                     <Button variant="ghost" onClick={() => openOne(h.id, h.scope)}>
                       {openKey === key ? "닫기" : "열기"}
                     </Button>
-                    <button className="rounded-lg px-2 text-muted hover:text-err" onClick={() => del(h.id, h.scope)} title="삭제">
+                    <button
+                      className="rounded-lg px-2 text-muted hover:text-err"
+                      onClick={() => setDelFor({ id: h.id, scope: h.scope, name: h.name || h.id })}
+                      title="삭제"
+                    >
                       ✕
                     </button>
                   </div>
@@ -187,13 +162,68 @@ function SyncBoard({ onLogout }: { onLogout: () => void }) {
                   <span className="font-medium text-fg">{t.name}</span>
                   <span className="ml-2 text-xs text-muted">team:{t.id} · 멤버 {t.members.length}명</span>
                 </div>
-                <Button variant="ghost" onClick={() => invite(t.id)}>
+                <Button variant="ghost" onClick={() => setInviteFor(t)}>
                   + 멤버 초대
                 </Button>
               </Card>
             ))}
           </div>
         </div>
+      )}
+
+      {/* ── 다이얼로그 ── */}
+      {teamName !== null && (
+        <Modal title="새 팀 만들기" onClose={() => setTeamName(null)}>
+          <Input
+            autoFocus
+            placeholder="팀 이름"
+            value={teamName}
+            onChange={(e) => setTeamName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && createTeam()}
+          />
+          <div className="mt-3 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setTeamName(null)}>
+              취소
+            </Button>
+            <Button onClick={createTeam} disabled={!teamName.trim()}>
+              만들기
+            </Button>
+          </div>
+        </Modal>
+      )}
+      {inviteFor && (
+        <Modal title={`${inviteFor.name} — 멤버 초대`} onClose={() => setInviteFor(null)}>
+          <Input
+            autoFocus
+            placeholder="추가할 멤버 handle"
+            value={inviteHandle}
+            onChange={(e) => setInviteHandle(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && invite()}
+          />
+          <div className="mt-3 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setInviteFor(null)}>
+              취소
+            </Button>
+            <Button onClick={invite} disabled={!inviteHandle.trim()}>
+              초대
+            </Button>
+          </div>
+        </Modal>
+      )}
+      {delFor && (
+        <Modal title="하네스 삭제" onClose={() => setDelFor(null)}>
+          <p className="text-sm text-muted">
+            <b className="text-fg">{delFor.name}</b> 를 삭제할까요? ({delFor.scope})
+          </p>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setDelFor(null)}>
+              취소
+            </Button>
+            <Button variant="danger" onClick={confirmDelete}>
+              삭제
+            </Button>
+          </div>
+        </Modal>
       )}
     </div>
   );

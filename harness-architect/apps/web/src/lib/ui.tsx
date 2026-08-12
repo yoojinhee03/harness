@@ -139,3 +139,21 @@ export function EmptyState({ title, hint }: { title: string; hint?: ReactNode })
 
 export const codeBlock =
   "overflow-x-auto rounded-lg border border-line bg-[rgb(var(--bg))] p-3 text-xs leading-relaxed text-fg/90";
+
+export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[22vh]"
+      onClick={onClose}
+      onKeyDown={(e) => e.key === "Escape" && onClose()}
+    >
+      <div
+        className="w-full max-w-sm rounded-xl border border-line bg-surface p-4 shadow-panel"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="mb-3 text-sm font-semibold text-fg">{title}</h3>
+        {children}
+      </div>
+    </div>
+  );
+}

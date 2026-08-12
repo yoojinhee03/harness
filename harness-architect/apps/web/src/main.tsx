@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import "./index.css";
 import { initTheme } from "./lib/theme";
+import { ToastProvider } from "./lib/toast";
 
 initTheme(); // <html data-theme> — FOUC 방지 위해 렌더 전 적용
 
@@ -14,7 +15,9 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      <ToastProvider>
+        <App />
+      </ToastProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );
