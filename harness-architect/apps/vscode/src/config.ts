@@ -8,6 +8,11 @@ export function workspaceRoot(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
+/** 공유 하네스 저장소 백엔드 URL(웹과 동일 FastAPI). 웹↔확장 동기화 허브. */
+export function getApiUrl(): string {
+  return (vscode.workspace.getConfiguration("harness").get<string>("apiUrl") ?? "http://localhost:8000").trim();
+}
+
 /** 설정 문자열의 `${workspaceFolder}` 와 선행 `~` 를 확장한다. */
 export function expand(value: string): string {
   const root = workspaceRoot() ?? "";

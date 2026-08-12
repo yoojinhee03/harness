@@ -1,11 +1,13 @@
 import * as vscode from "vscode";
 import { CatalogProvider } from "./catalog";
 import { registerChat } from "./chat";
-import { readConfig } from "./config";
+import { getApiUrl, readConfig } from "./config";
 import { runEject, runResolve } from "./harnessOps";
+import { connectEvents, HarnessStoreClient } from "./harnessStore";
 import { HarnessServer } from "./mcp";
 import { runRecommend } from "./recommend";
 import { openStarter, type StarterComponent } from "./starter";
+import { deleteFromStore, openFromStore, saveActiveToStore, StoreProvider } from "./storeView";
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Harness");
@@ -18,11 +20,18 @@ export function activate(context: vscode.ExtensionContext): void {
   let server = new HarnessServer(boot.spec, output);
   const catalog = new CatalogProvider(server);
 
+  // 공유 하네스 저장소(웹↔확장 동기화) — 백엔드 HTTP + SSE 라이브.
+  let storeClient = new HarnessStoreClient(getApiUrl());
+  const store = new StoreProvider(storeClient);
+  let sse = connectEvents(getApiUrl(), () => store.refresh(), output);
+
   context.subscriptions.push(
     output,
     diagnostics,
     { dispose: () => server.dispose() },
+    { dispose: () => sse.dispose() },
     vscode.window.registerTreeDataProvider("harnessCatalog", catalog),
+    vscode.window.registerTreeDataProvider("harnessStore", store),
   );
 
   const withServer = (fn: (s: HarnessServer) => Promise<void> | void) => async () => {
@@ -76,12 +85,17 @@ export function activate(context: vscode.ExtensionContext): void {
       "harness.createStarter",
       (description: string, comps: StarterComponent[]) => openStarter(description ?? "", comps ?? []),
     ),
+    // 공유 저장소 커맨드 (웹↔확장 동기화)
+    vscode.commands.registerCommand("harness.saveToStore", () => saveActiveToStore(storeClient)),
+    vscode.commands.registerCommand("harness.openFromStore", (h) => openFromStore(storeClient, h)),
+    vscode.commands.registerCommand("harness.deleteFromStore", (h) => deleteFromStore(storeClient, h)),
+    vscode.commands.registerCommand("harness.refreshStore", () => store.refresh()),
   );
 
   // 챗 참가자 @harness — Copilot Chat 패널에서 자연어로 추천.
   registerChat(context, () => server);
 
-  // 설정 변경 → 서버 재생성.
+  // 설정 변경 → 서버 재생성 / 저장소 재연결.
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (
@@ -90,6 +104,13 @@ export function activate(context: vscode.ExtensionContext): void {
         e.affectsConfiguration("harness.catalogDir")
       ) {
         vscode.commands.executeCommand("harness.restartServer");
+      }
+      if (e.affectsConfiguration("harness.apiUrl")) {
+        sse.dispose();
+        storeClient = new HarnessStoreClient(getApiUrl());
+        store.setClient(storeClient);
+        sse = connectEvents(getApiUrl(), () => store.refresh(), output);
+        output.appendLine(`[store] apiUrl 변경 — 재연결: ${getApiUrl()}`);
       }
     }),
   );

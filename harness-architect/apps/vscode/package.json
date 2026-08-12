@@ -71,6 +71,29 @@
         "command": "harness.createStarter",
         "title": "추천으로 harness.yaml 스타터 생성",
         "category": "Harness Architect"
+      },
+      {
+        "command": "harness.saveToStore",
+        "title": "공유 저장소에 저장 (웹과 동기화)",
+        "category": "Harness Architect",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "harness.refreshStore",
+        "title": "내 하네스 새로고침",
+        "category": "Harness Architect",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "harness.openFromStore",
+        "title": "저장소에서 열기",
+        "category": "Harness Architect"
+      },
+      {
+        "command": "harness.deleteFromStore",
+        "title": "저장소에서 삭제",
+        "category": "Harness Architect",
+        "icon": "$(trash)"
       }
     ],
     "chatParticipants": [
@@ -98,6 +121,12 @@
           "name": "카탈로그",
           "icon": "media/harness.svg",
           "contextualTitle": "Harness Architect 카탈로그"
+        },
+        {
+          "id": "harnessStore",
+          "name": "내 하네스 (동기화)",
+          "icon": "media/harness.svg",
+          "contextualTitle": "내 하네스 — 웹과 동기화"
         }
       ]
     },
@@ -105,6 +134,10 @@
       {
         "view": "harnessCatalog",
         "contents": "카탈로그를 불러오지 못했습니다.\n[구성요소 추천](command:harness.recommend)\n[새로고침](command:harness.refreshCatalog)\n서버 경로는 설정 `harness.serverCommand` 에서 지정합니다."
+      },
+      {
+        "view": "harnessStore",
+        "contents": "저장된 하네스가 없거나 백엔드에 연결되지 않았습니다.\nharness.yaml 을 연 뒤 [공유 저장소에 저장](command:harness.saveToStore) 하면 웹에도 나타납니다.\n[새로고침](command:harness.refreshStore)\n백엔드 주소는 설정 `harness.apiUrl` (기본 http://localhost:8000)."
       }
     ],
     "menus": {
@@ -118,6 +151,18 @@
           "command": "harness.refreshCatalog",
           "when": "view == harnessCatalog",
           "group": "navigation@2"
+        },
+        {
+          "command": "harness.refreshStore",
+          "when": "view == harnessStore",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "harness.deleteFromStore",
+          "when": "view == harnessStore && viewItem == harnessStoreItem",
+          "group": "inline"
         }
       ],
       "editor/title": [
@@ -130,6 +175,11 @@
           "command": "harness.eject",
           "when": "resourceFilename =~ /harness\\.ya?ml$/",
           "group": "navigation@2"
+        },
+        {
+          "command": "harness.saveToStore",
+          "when": "resourceFilename =~ /harness\\.ya?ml$/",
+          "group": "navigation@3"
         }
       ],
       "explorer/context": [
@@ -151,6 +201,14 @@
         },
         {
           "command": "harness.createStarter",
+          "when": "false"
+        },
+        {
+          "command": "harness.openFromStore",
+          "when": "false"
+        },
+        {
+          "command": "harness.deleteFromStore",
           "when": "false"
         }
       ]
@@ -184,6 +242,11 @@
           ],
           "default": "claude-code",
           "description": "eject 기본 타깃 런타임."
+        },
+        "harness.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "markdownDescription": "공유 하네스 저장소 백엔드 URL(웹과 동일 FastAPI). '내 하네스' 뷰가 이 백엔드로 저장·동기화한다. SSE 로 웹의 변경을 실시간 수신."
         }
       }
     }
