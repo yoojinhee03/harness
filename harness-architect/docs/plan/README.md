@@ -48,6 +48,11 @@
 | 9 | 피드백 루프 활성화 & 카탈로그 생애주기 | [09-feedback-and-catalog-lifecycle.md](./09-feedback-and-catalog-lifecycle.md) | P2 | 05 (실사용 신호) | 📋 계획 |
 | 10 | 프롬프트 관리 (합성·변수·버전·린트) | [10-prompt-management.md](./10-prompt-management.md) | **P0 (05·06 토대)** | IR/resolver/cost(완료) — 05·06 강화 | ✅ 완료 (코어) |
 | 11 | 경험적 검증 (프롬프트 eval → 품질 측정) | [11-empirical-validation.md](./11-empirical-validation.md) | P1 (신뢰도) | 10(완료) · 09 와 연동 | 📋 계획 |
+| 12 | 프로덕션 하드닝 (MVP→실서비스: 보안·데이터·스케일·배포) | [12-production-hardening.md](./12-production-hardening.md) | **P0 (실서비스 잠금)** | 멀티테넌시(완료) 위 | 📋 계획 (12a~12d) |
+
+> **참고** — 12 는 기능이 아니라 **횡단 하드닝 트랙**이다. 웹↔확장 동기화 + 멀티테넌시(Bearer 인증·
+> 사용자 격리·팀 공유)는 구현됨. 12 는 그 위에서 다중 사용자 실서비스를 막는 잔여 과제(API 키
+> 스코프·CORS·SSE 스케일아웃·저장소 DB화·배포 CI/CD·관측성)를 12a~12d 로 실행한다.
 
 **의존성 그래프**
 
