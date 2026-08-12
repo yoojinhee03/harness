@@ -162,6 +162,18 @@ def test_event_stream_only_visible_scopes(tmp_path):
     asyncio.run(run())
 
 
+def test_register_rate_limited(client):
+    """register 레이트리밋(20/hour) — 한정적으로 켜서 초과 시 429 확인."""
+    import harness_api.main as m
+
+    m.limiter.enabled = True
+    try:
+        codes = [client.post("/auth/register", json={"handle": f"u{i}"}).status_code for i in range(22)]
+        assert codes.count(200) <= 20 and 429 in codes
+    finally:
+        m.limiter.enabled = False
+
+
 def test_safe_id_blocks_traversal_and_empty():
     from harness_api.store import safe_id
 

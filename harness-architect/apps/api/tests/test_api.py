@@ -147,21 +147,20 @@ def test_eject_claude_code(client):
     assert settings["permissions"]["allow"] == ["mcp__github-mcp"]
 
 
-def test_key_management_set_mask_delete(client):
-    """키 설정→마스킹 상태 반환(원본 미노출)→삭제. os.environ 은 삭제로 원복."""
-    assert client.get("/settings/keys").json()["anthropic"]["set"] is False
-    r = client.put("/settings/keys", json={"anthropic_api_key": "sk-ant-fake-1234567890abcd"}).json()
-    assert r["anthropic"]["set"] is True
-    assert r["anthropic"]["masked"] == "sk-ant…abcd"  # 마스킹(원본 아님)
-    assert "1234567890" not in json.dumps(r)  # 원본 키가 응답에 없음
-    assert client.get("/settings/keys").json()["anthropic"]["masked"] == "sk-ant…abcd"
-    d = client.delete("/settings/keys/anthropic").json()
-    assert d["anthropic"]["set"] is False
+def test_key_status_read_only(client):
+    """키는 배포 env 로만 설정. 화면엔 상태(설정 여부·품질 모드)만 노출하고 런타임 변조는 없다
+    (구설계의 전역 os.environ 변조 = 멀티테넌시 누수를 제거)."""
+    st = client.get("/settings/keys").json()
+    assert st["anthropic"]["set"] is False and st["voyage"]["set"] is False  # 테스트 env 에 키 없음
+    assert st["quality_mode"]["ranker"] in ("heuristic", "claude")
+    assert st["quality_mode"]["embedder"] in ("local", "voyage")
+    # 런타임 변조 엔드포인트는 제거됨
+    assert client.put("/settings/keys", json={"anthropic_api_key": "x"}).status_code in (404, 405)
+    assert client.delete("/settings/keys/anthropic").status_code in (404, 405)
+
+
+def test_verify_reports_unset(client):
     assert client.post("/settings/keys/verify").json()["anthropic"] == "unset"
-
-
-def test_delete_unknown_provider_404(client):
-    assert client.delete("/settings/keys/nope").status_code == 404
 
 
 def test_eject_targets_lists_supported(client):

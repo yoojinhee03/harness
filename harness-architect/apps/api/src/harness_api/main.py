@@ -23,6 +23,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from harness_catalog import Recommender, build_registry, resolve_catalog_dir
 from harness_resolver import HarnessConfig, InMemoryRegistry, ResolveResult, resolve
 from harness_runtime import AnthropicRunner, available_targets, build_request, emit
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
 
 from .accounts import AccountStore
@@ -30,7 +33,6 @@ from .schemas import (
     CatalogItem,
     GenerateResponse,
     HarnessSaveBody,
-    KeyUpdate,
     MemberBody,
     RecommendRequest,
     RegisterBody,
@@ -54,8 +56,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.warning("카탈로그를 찾지 못함 — 빈 레지스트리로 기동: %s", exc)
         registry = InMemoryRegistry([])
     app.state.registry = registry
-    app.state.keys = {}  # 런타임 API 키(메모리만 — 디스크 저장 안 함)
-    app.state.recommender = Recommender(registry)
+    app.state.recommender = Recommender(registry)  # 키는 배포 env 로 startup 에 결정(런타임 변조 없음)
     # 공유 하네스 저장소(스코프 격리) + 계정(사용자·팀) + SSE 브로드캐스터.
     store_dir = resolve_store_dir()
     app.state.store = HarnessStore(store_dir / "harnesses")
@@ -72,14 +73,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — 기본은 개발 편의상 전체 허용. 배포 시 HARNESS_CORS_ORIGINS(쉼표 구분)로 좁힌다.
-_cors_origins = [o.strip() for o in os.environ.get("HARNESS_CORS_ORIGINS", "*").split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 레이트리밋(slowapi) — IP 기준. 계정 스팸·비용 유발 완화. 테스트에선 HARNESS_RATELIMIT=off 로 비활성.
+limiter = Limiter(key_func=get_remote_address, enabled=os.environ.get("HARNESS_RATELIMIT", "on") != "off")
+app.state.limiter = limiter
+# slowapi 핸들러 시그니처(RateLimitExceeded)와 Starlette 기대(Exception)의 타입 불일치 — 런타임 정상.
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+
+# CORS — 기본 거부(빈 allowlist). 웹은 리버스 프록시로 동일 오리진, 확장은 Node fetch(브라우저 CORS
+# 무관)라 기본은 필요 없다. 크로스 오리진으로 API 를 직접 노출할 때만 HARNESS_CORS_ORIGINS(쉼표 구분).
+_cors_origins = [o.strip() for o in os.environ.get("HARNESS_CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 def _registry(request: Request) -> InMemoryRegistry:
@@ -96,41 +106,30 @@ def health(request: Request) -> dict[str, Any]:
     return {"status": "ok", "catalog_size": len(reg.all())}
 
 
-# ─────────────────────────── 설정: API 키 (메모리만 · 마스킹 반환) ───────────────────────────
-
-_KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "voyage": "VOYAGE_API_KEY"}
+# ─────────── 설정: LLM 키 상태 (배포 env 전용 · 읽기전용) ───────────
+# 키는 배포 환경변수(ANTHROPIC_API_KEY·VOYAGE_API_KEY)로만 주입한다. 런타임에 사용자별로 바꾸지
+# 않는다 — LLM 키는 서비스가 소유하는 운영 시크릿이라, 사용자 변조는 멀티테넌시 누수(전역 os.environ)를
+# 낳는다(구설계의 결함). 화면엔 마스킹된 '설정 여부'만 노출한다.
 
 
 def _mask(key: str) -> str:
     return f"{key[:6]}…{key[-4:]}" if len(key) > 12 else "****"
 
 
-def _apply_keys(request: Request) -> None:
-    """메모리 키를 os.environ 에 반영하고 추천기를 재구성(embedder/reasoner 모드 전환)."""
-    keys: dict[str, str] = request.app.state.keys
-    for provider, env in _KEY_ENV.items():
-        val = keys.get(provider)
-        if val:
-            os.environ[env] = val
-        else:
-            os.environ.pop(env, None)
-    request.app.state.recommender = Recommender(_registry(request))
-
-
-def _provider_status(keys: dict[str, str], provider: str) -> dict[str, Any]:
-    key = keys.get(provider)
+def _provider_status(env_var: str) -> dict[str, Any]:
+    key = os.environ.get(env_var)
     return {"set": bool(key), "masked": _mask(key) if key else None}
 
 
-def _key_status(request: Request) -> dict[str, Any]:
+@app.get("/settings/keys")
+def get_keys() -> dict[str, Any]:
+    """LLM 키 상태(배포 구성) — 읽기전용. 값 설정은 배포 env 로만."""
     from harness_catalog import load_settings
 
-    keys: dict[str, str] = request.app.state.keys
     s = load_settings()
     return {
-        "anthropic": _provider_status(keys, "anthropic"),
-        "voyage": _provider_status(keys, "voyage"),
-        # 유효 품질 모드(연동 결과가 실제로 어디에 반영되는지)
+        "anthropic": _provider_status("ANTHROPIC_API_KEY"),
+        "voyage": _provider_status("VOYAGE_API_KEY"),
         "quality_mode": {
             "embedder": "voyage" if s.use_voyage else "local",
             "ranker": "claude" if s.use_claude else "heuristic",
@@ -138,39 +137,11 @@ def _key_status(request: Request) -> dict[str, Any]:
     }
 
 
-@app.get("/settings/keys")
-def get_keys(request: Request) -> dict[str, Any]:
-    return _key_status(request)
-
-
-@app.put("/settings/keys")
-def put_keys(request: Request, body: KeyUpdate) -> dict[str, Any]:
-    """키 설정/수정. 빈 문자열·None 은 변경 없음(삭제는 DELETE)."""
-    keys: dict[str, str] = request.app.state.keys
-    if body.anthropic_api_key:
-        keys["anthropic"] = body.anthropic_api_key.strip()
-    if body.voyage_api_key:
-        keys["voyage"] = body.voyage_api_key.strip()
-    _apply_keys(request)
-    return _key_status(request)
-
-
-@app.delete("/settings/keys/{provider}")
-def delete_key(request: Request, provider: str) -> dict[str, Any]:
-    if provider not in _KEY_ENV:
-        raise HTTPException(status_code=404, detail=f"알 수 없는 provider: {provider}")
-    request.app.state.keys.pop(provider, None)
-    _apply_keys(request)
-    return _key_status(request)
-
-
 @app.post("/settings/keys/verify")
-def verify_keys(request: Request) -> dict[str, str]:
-    """설정된 키로 최소 호출을 시도해 실제 연동 여부를 확인(원본 키는 반환 안 함)."""
-    keys: dict[str, str] = request.app.state.keys
+def verify_keys() -> dict[str, str]:
+    """배포 env 키로 최소 호출을 시도해 실제 연동 여부를 확인(원본 키는 반환 안 함)."""
     out: dict[str, str] = {}
-
-    ak = keys.get("anthropic")
+    ak = os.environ.get("ANTHROPIC_API_KEY")
     if not ak:
         out["anthropic"] = "unset"
     else:
@@ -183,8 +154,7 @@ def verify_keys(request: Request) -> dict[str, str]:
             out["anthropic"] = "ok"
         except Exception as exc:  # noqa: BLE001 - 네트워크/인증 오류를 사용자에게 요약 전달
             out["anthropic"] = f"error: {type(exc).__name__}"
-
-    vk = keys.get("voyage")
+    vk = os.environ.get("VOYAGE_API_KEY")
     if not vk:
         out["voyage"] = "unset"
     else:
@@ -221,6 +191,7 @@ def catalog_detail(request: Request, component_id: str) -> dict[str, Any]:
 
 
 @app.post("/recommend")
+@limiter.limit("60/minute")
 def recommend(request: Request, body: RecommendRequest) -> dict[str, Any]:
     result = _recommender(request).recommend(body.description, top_k=body.top_k)
     return result.model_dump()
@@ -246,6 +217,7 @@ def generate(request: Request, body: ResolveRequest) -> GenerateResponse:
 
 
 @app.post("/run")
+@limiter.limit("30/minute")
 def run_endpoint(request: Request, body: RunRequest) -> dict[str, Any]:
     """resolve → build_request → (키 있으면) Anthropic 전송, 없으면 dry_run. 런타임 관통."""
     config = body.to_config()
@@ -335,6 +307,7 @@ def _resolve_scope(request: Request, user: dict[str, Any], scope: str) -> str:
 
 
 @app.post("/auth/register")
+@limiter.limit("20/hour")
 def register(request: Request, body: RegisterBody) -> dict[str, Any]:
     """handle 로 계정 생성 + 토큰 발급(원문은 이 응답에서만 노출)."""
     try:

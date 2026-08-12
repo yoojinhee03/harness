@@ -193,10 +193,8 @@ export const api = {
   ejectTargets: () => fetch(`${BASE}/eject/targets`).then((r) => r.json() as Promise<string[]>),
   eject: (harness: HarnessInput, target: string) =>
     post<EjectResult>(`/eject?target=${encodeURIComponent(target)}`, harness),
+  // LLM 키는 배포 env 로만 설정 — 상태(읽기전용)만 조회/검증.
   getKeys: () => send<KeyStatus>("GET", "/settings/keys"),
-  putKeys: (body: { anthropic_api_key?: string; voyage_api_key?: string }) =>
-    send<KeyStatus>("PUT", "/settings/keys", body),
-  deleteKey: (provider: string) => send<KeyStatus>("DELETE", `/settings/keys/${provider}`),
   verifyKeys: () => send<Record<string, string>>("POST", "/settings/keys/verify"),
 
   // ── 인증 · 팀 (멀티테넌시) ──
