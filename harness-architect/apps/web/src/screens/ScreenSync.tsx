@@ -19,6 +19,7 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
   const [teamName, setTeamName] = useState<string | null>(null);
   const [inviteFor, setInviteFor] = useState<Team | null>(null);
   const [inviteHandle, setInviteHandle] = useState("");
+  const [inviteRole, setInviteRole] = useState("editor");
   const [delFor, setDelFor] = useState<{ id: string; scope: string; name: string } | null>(null);
 
   useEffect(() => subscribeHarnessEvents(() => qc.invalidateQueries({ queryKey: ["harnesses"] })), [qc]);
@@ -59,12 +60,14 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
     if (!inviteFor || !inviteHandle.trim()) return;
     const team = inviteFor;
     const handle = inviteHandle.trim();
+    const role = inviteRole;
     setInviteFor(null);
     setInviteHandle("");
+    setInviteRole("editor");
     try {
-      const t = await api.addMember(team.id, handle);
+      const t = await api.addMember(team.id, handle, role);
       qc.invalidateQueries({ queryKey: ["me"] });
-      toast(`'${handle}' 추가됨 — ${t.name} 멤버 ${t.members.length}명`);
+      toast(`'${handle}' (${role}) 추가됨 — ${t.name} 멤버 ${t.members.length}명`);
     } catch (e) {
       toast(e instanceof Error ? e.message : "멤버 추가 실패", "error");
     }
@@ -143,14 +146,24 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
           <h3 className="mb-2 text-sm font-semibold text-fg">내 팀</h3>
           <div className="space-y-2">
             {teams.map((t) => (
-              <Card key={t.id} className="flex items-center justify-between">
-                <div className="text-sm">
-                  <span className="font-medium text-fg">{t.name}</span>
-                  <span className="ml-2 text-xs text-muted">team:{t.id} · 멤버 {t.members.length}명</span>
+              <Card key={t.id}>
+                <div className="flex items-center justify-between">
+                  <div className="text-sm">
+                    <span className="font-medium text-fg">{t.name}</span>
+                    <span className="ml-2 text-xs text-muted">team:{t.id} · 멤버 {t.members.length}명</span>
+                  </div>
+                  <Button variant="ghost" onClick={() => setInviteFor(t)}>
+                    + 멤버 초대
+                  </Button>
                 </div>
-                <Button variant="ghost" onClick={() => setInviteFor(t)}>
-                  + 멤버 초대
-                </Button>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {t.members.map((uid) => (
+                    <span key={uid} className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-xs">
+                      <span className="text-fg/90">{uid}</span>
+                      <RoleBadge role={t.roles?.[uid] ?? "editor"} />
+                    </span>
+                  ))}
+                </div>
               </Card>
             ))}
           </div>
@@ -170,6 +183,22 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
       {inviteFor && (
         <Modal title={`${inviteFor.name} — 멤버 초대`} onClose={() => setInviteFor(null)}>
           <Input autoFocus placeholder="추가할 멤버 handle" value={inviteHandle} onChange={(e) => setInviteHandle(e.target.value)} onKeyDown={(e) => e.key === "Enter" && invite()} />
+          <div className="mt-2.5">
+            <label className="text-xs text-muted">역할</label>
+            <div className="mt-1 flex gap-1.5">
+              {["viewer", "editor", "owner"].map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setInviteRole(r)}
+                  className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${
+                    inviteRole === r ? "border-accent bg-accent/10 text-fg" : "border-line text-muted hover:text-fg"
+                  }`}
+                >
+                  {r === "viewer" ? "뷰어(읽기)" : r === "editor" ? "에디터(쓰기)" : "오너"}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="mt-3 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setInviteFor(null)}>취소</Button>
             <Button onClick={invite} disabled={!inviteHandle.trim()}>초대</Button>
@@ -189,6 +218,16 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
       )}
     </div>
   );
+}
+
+function RoleBadge({ role }: { role: string }) {
+  const cls =
+    role === "owner"
+      ? "bg-violet-500/15 text-violet-400"
+      : role === "viewer"
+        ? "bg-surface-2 text-muted"
+        : "bg-sky-500/15 text-sky-400";
+  return <span className={`rounded px-1 py-0.5 text-[10px] font-medium ${cls}`}>{role}</span>;
 }
 
 function HistoryPanel({ id, scope }: { id: string; scope: string }) {

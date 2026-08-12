@@ -118,6 +118,7 @@ export interface Team {
   name: string;
   owner_id: string;
   members: string[];
+  roles?: Record<string, string>; // uid → owner|editor|viewer
 }
 
 export interface Me {
@@ -203,8 +204,8 @@ export const api = {
   me: () => send<Me>("GET", "/me"),
   listTeams: () => send<Team[]>("GET", "/teams"),
   createTeam: (name: string) => send<Team>("POST", "/teams", { name }),
-  addMember: (tid: string, handle: string) =>
-    send<Team>("POST", `/teams/${encodeURIComponent(tid)}/members`, { handle }),
+  addMember: (tid: string, handle: string, role = "editor") =>
+    send<Team>("POST", `/teams/${encodeURIComponent(tid)}/members`, { handle, role }),
 
   // ── 공유 하네스 저장소 (VSCode 확장과 동일 백엔드 — 스코프 격리 · 양방향 동기화) ──
   listHarnesses: () => send<HarnessSummary[]>("GET", "/harnesses"),

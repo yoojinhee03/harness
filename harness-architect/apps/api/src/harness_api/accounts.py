@@ -90,8 +90,12 @@ class AccountStore:
             row = conn.execute(select(teams).where(teams.c.id == tid)).mappings().first()
             if row is None:
                 return None
-            members = conn.execute(select(team_members.c.user_id).where(team_members.c.team_id == tid)).scalars().all()
-        return {"id": row["id"], "name": row["name"], "owner_id": row["owner_id"], "members": list(members)}
+            mrows = conn.execute(
+                select(team_members.c.user_id, team_members.c.role).where(team_members.c.team_id == tid)
+            ).all()
+        members = [r[0] for r in mrows]
+        roles = {r[0]: r[1] for r in mrows}
+        return {"id": row["id"], "name": row["name"], "owner_id": row["owner_id"], "members": members, "roles": roles}
 
     def add_member(self, tid: str, actor_id: str, handle_or_id: str, role: str = "editor") -> dict[str, Any]:
         role = role if role in ("owner", "editor", "viewer") else "editor"

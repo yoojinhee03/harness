@@ -139,8 +139,19 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!handle) {
           return;
         }
-        const t = await storeClient.addMember(pick.id, handle);
-        vscode.window.showInformationMessage(`'${handle}' 추가됨 — ${t.name} 멤버 ${t.members.length}명`);
+        const rolePick = await vscode.window.showQuickPick(
+          [
+            { label: "에디터 (쓰기)", value: "editor" as const },
+            { label: "뷰어 (읽기 전용)", value: "viewer" as const },
+            { label: "오너", value: "owner" as const },
+          ],
+          { title: `${pick.label} — 역할` },
+        );
+        if (!rolePick) {
+          return;
+        }
+        const t = await storeClient.addMember(pick.id, handle, rolePick.value);
+        vscode.window.showInformationMessage(`'${handle}' (${rolePick.value}) 추가됨 — ${t.name} 멤버 ${t.members.length}명`);
       } catch (e) {
         vscode.window.showErrorMessage(`멤버 추가 실패: ${e instanceof Error ? e.message : String(e)}`);
       }

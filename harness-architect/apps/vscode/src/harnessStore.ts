@@ -104,8 +104,8 @@ export class HarnessStoreClient {
     return this.req<Team>("POST", "/teams", { name });
   }
 
-  addMember(tid: string, handle: string): Promise<Team> {
-    return this.req<Team>("POST", `/teams/${encodeURIComponent(tid)}/members`, { handle });
+  addMember(tid: string, handle: string, role = "editor"): Promise<Team> {
+    return this.req<Team>("POST", `/teams/${encodeURIComponent(tid)}/members`, { handle, role });
   }
 }
 
