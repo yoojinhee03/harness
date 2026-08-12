@@ -21,11 +21,15 @@ services:
     environment:
       # 마운트한 카탈로그 컴포넌트 폴더를 직접 가리킨다(loader 의 CATALOG_DIR 계약).
       CATALOG_DIR: /catalog
+      # 공유 하네스 저장소 위치(웹↔확장 동기화). 아래 볼륨으로 호스트에 영속·공유.
+      HARNESS_STORE_DIR: /store
       # 없으면 빈 값 → 자동으로 로컬 폴백. 있으면 품질 모드 자동 활성.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
     volumes:
       - ./harness-catalog/components:/catalog:ro
+      # 저장한 하네스를 호스트에 영속(compose down 후에도 유지) + 호스트 백엔드와 동일 폴더 공유.
+      - ./.harness-store:/store
     ports:
       - "${API_PORT:-8000}:8000"   # OpenAPI: http://localhost:8000/docs
     healthcheck:

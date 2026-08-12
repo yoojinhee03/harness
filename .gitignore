@@ -3,3 +3,6 @@
 
 # OS/editor
 .DS_Store
+
+# 공유 하네스 저장소(도커 볼륨 마운트 대상) — 런타임 데이터, 커밋 금지.
+.harness-store/
