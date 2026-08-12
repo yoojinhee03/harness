@@ -385,6 +385,37 @@ def test_unknown_base_warns(registry: InMemoryRegistry) -> None:
 # ─────────────────────────── permissions 축소 검증 ───────────────────────────
 
 
+def test_subagents_resolve_as_team(registry: InMemoryRegistry) -> None:
+    """멀티에이전트 — 각 서브에이전트가 재귀 검증돼 팀으로 해소된다."""
+    from harness_resolver import PromptLayer, PromptSpec, SubAgentSpec
+
+    config = pr_bot_config()
+    config.subagents = [
+        SubAgentSpec(
+            name="reviewer",
+            components=[ComponentSelection(ref="github-mcp@1.4.0")],
+            prompt=PromptSpec(system=[PromptLayer(inline="너는 코드 리뷰어다.")]),
+        ),
+        SubAgentSpec(name="notifier", prompt=PromptSpec(system=[PromptLayer(inline="너는 알림 담당이다.")])),
+    ]
+    result = resolve(config, registry)
+    assert result.ok is True and result.resolved is not None
+    assert [s.name for s in result.resolved.subagents] == ["reviewer", "notifier"]
+    reviewer = result.resolved.subagents[0]
+    assert [c.id for c in reviewer.components] == ["github-mcp"]
+    assert reviewer.prompt is not None and "리뷰어" in reviewer.prompt.system_text
+
+
+def test_duplicate_subagent_name_errors(registry: InMemoryRegistry) -> None:
+    from harness_resolver import SubAgentSpec
+
+    config = pr_bot_config()
+    config.subagents = [SubAgentSpec(name="dup"), SubAgentSpec(name="dup")]
+    result = resolve(config, registry)
+    assert result.ok is False
+    assert any(d.code == "duplicate_subagent" for d in result.diagnostics.errors)
+
+
 def test_permission_for_unprovided_capability_warns(registry: InMemoryRegistry) -> None:
     config = pr_bot_config()
     config.permissions = {"comms.messaging": "read-only"}  # 아무도 제공 안 함

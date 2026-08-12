@@ -233,6 +233,18 @@ class PromptSpec(BaseModel):
     compose: PromptCompose = Field(default_factory=PromptCompose)
 
 
+class SubAgentSpec(BaseModel):
+    """harness.yaml subagents[] 항목 — 팀의 한 역할(재귀 하네스). 스코프: 1레벨.
+
+    각 서브에이전트는 자체 components·prompt 를 갖고 리졸버가 재귀 검증한다.
+    """
+
+    name: str
+    description: str = ""
+    components: list[ComponentSelection] = Field(default_factory=list)
+    prompt: PromptSpec | None = None
+
+
 class HarnessConfig(BaseModel):
     """harness.yaml — 저작 레이어의 산출물이자 리졸버의 입력."""
 
@@ -247,6 +259,7 @@ class HarnessConfig(BaseModel):
     components: list[ComponentSelection] = Field(default_factory=list)
     budget: Budget | None = None
     prompt: PromptSpec | None = None
+    subagents: list[SubAgentSpec] = Field(default_factory=list)  # 멀티에이전트 팀(선택)
 
 
 # ─────────────────────────── ResolvedHarness (실행 명세) ───────────────────────────
@@ -308,6 +321,15 @@ class ResolvedPrompt(BaseModel):
     hash: str = ""  # "sha256:…" — 드리프트·캐시 키(system_text 기준, 결정적)
 
 
+class ResolvedSubAgent(BaseModel):
+    """리졸브된 서브에이전트 — 팀의 한 역할(검증 완료)."""
+
+    name: str
+    description: str = ""
+    components: list[ResolvedComponent] = Field(default_factory=list)
+    prompt: ResolvedPrompt | None = None
+
+
 class ResolvedHarness(BaseModel):
     """리졸버 출력(성공) — 실행 가능한 명세. 런타임 빌더의 입력."""
 
@@ -320,3 +342,4 @@ class ResolvedHarness(BaseModel):
     auth_needs: list[AuthNeed]
     cost: CostTotals
     prompt: ResolvedPrompt | None = None  # 합성된 시스템 프롬프트(resolve 는 항상 채움)
+    subagents: list[ResolvedSubAgent] = Field(default_factory=list)  # 멀티에이전트 팀(선택)

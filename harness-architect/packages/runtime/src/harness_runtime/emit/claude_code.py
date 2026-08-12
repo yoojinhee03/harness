@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 
 from harness_resolver import ResolvedHarness
-from harness_resolver.models import HookStep
+from harness_resolver.models import HookStep, ResolvedSubAgent
 
 from .base import FileTree, mcp_servers_json
 
@@ -37,7 +37,15 @@ class ClaudeCodeEmitter:
         if mcp is not None:
             tree[".mcp.json"] = mcp
         tree[".claude/settings.json"] = self._settings_json(resolved)
+        # 멀티에이전트 팀 → Claude Code 서브에이전트 파일(.claude/agents/<name>.md)
+        for sub in resolved.subagents:
+            tree[f".claude/agents/{sub.name}.md"] = self._agent_md(sub)
         return tree
+
+    def _agent_md(self, sub: ResolvedSubAgent) -> str:
+        system = sub.prompt.system_text if sub.prompt is not None else ""
+        frontmatter = "\n".join(["---", f"name: {sub.name}", f"description: {sub.description}", "---"])
+        return f"{frontmatter}\n\n{system}\n"
 
     # ── CLAUDE.md ← 합성 시스템 프롬프트 (context·skill·authored 레이어를 모두 담는다) ──
     def _claude_md(self, resolved: ResolvedHarness) -> str:

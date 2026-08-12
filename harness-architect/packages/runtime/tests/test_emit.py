@@ -146,6 +146,24 @@ def test_no_mcp_omits_mcp_json() -> None:
     assert "CLAUDE.md" in tree and ".claude/settings.json" in tree
 
 
+def test_emit_subagent_files() -> None:
+    """멀티에이전트 팀 → Claude Code 서브에이전트 파일(.claude/agents/<name>.md)."""
+    from harness_resolver.models import ResolvedPrompt, ResolvedSubAgent
+
+    r = make_resolved()
+    r.subagents = [
+        ResolvedSubAgent(
+            name="reviewer", description="코드 리뷰 역할",
+            prompt=ResolvedPrompt(system_text="너는 리뷰어다.", hash="sha256:x"),
+        )
+    ]
+    tree = emit(r, "claude-code")
+    assert ".claude/agents/reviewer.md" in tree
+    md = tree[".claude/agents/reviewer.md"]
+    assert md.startswith("---\nname: reviewer")
+    assert "코드 리뷰 역할" in md and "너는 리뷰어다." in md
+
+
 def test_emit_is_deterministic() -> None:
     assert emit(make_resolved(), "claude-code") == emit(make_resolved(), "claude-code")
 

@@ -26,9 +26,11 @@ from .models import (
     ComponentSelection,
     CostTotals,
     HarnessConfig,
+    HarnessMetadata,
     HookStep,
     ResolvedComponent,
     ResolvedHarness,
+    ResolvedSubAgent,
 )
 from .prompt import compose_prompt
 from .registry import Registry
@@ -158,6 +160,9 @@ def resolve(config: HarnessConfig, registry: Registry) -> ResolveResult:
     #    on_conflict=error 인 중복 등은 여기서 error 를 낼 수 있어 아래 has_errors 로 차단된다.
     resolved_prompt = compose_prompt(effective.prompt, resolved_components, registry, diag)
 
+    # ── 10. 서브에이전트(팀) 재귀 해소 (멀티에이전트) — 이름 유일성 + 각 역할 검증 ──
+    resolved_subagents = _resolve_subagents(effective, registry, diag)
+
     if diag.has_errors():
         return ResolveResult(ok=False, resolved=None, diagnostics=diag)
 
@@ -171,8 +176,40 @@ def resolve(config: HarnessConfig, registry: Registry) -> ResolveResult:
         auth_needs=auth_needs,
         cost=CostTotals(context_tokens=tokens, added_tools=tools),
         prompt=resolved_prompt,
+        subagents=resolved_subagents,
     )
     return ResolveResult(ok=True, resolved=resolved, diagnostics=diag)
+
+
+def _resolve_subagents(effective: HarnessConfig, registry: Registry, diag: Diagnostics) -> list[ResolvedSubAgent]:
+    """서브에이전트 팀을 재귀 해소한다(1레벨). 이름 중복은 error, 각 역할은 resolve 로 검증."""
+    out: list[ResolvedSubAgent] = []
+    seen: set[str] = set()
+    for sub in effective.subagents:
+        if sub.name in seen:
+            diag.error("duplicate_subagent", f"서브에이전트 이름 '{sub.name}' 가 중복됨", name=sub.name)
+            continue
+        seen.add(sub.name)
+        sub_config = HarnessConfig(
+            metadata=HarnessMetadata(id=f"{effective.metadata.id}:{sub.name}"),
+            model=effective.model,
+            components=sub.components,
+            prompt=sub.prompt,
+        )
+        sub_result = resolve(sub_config, registry)  # 재귀(sub_config 엔 subagents 없음 → 종료)
+        if not sub_result.ok or sub_result.resolved is None:
+            for e in sub_result.diagnostics.errors:
+                diag.error("subagent_error", f"서브에이전트 '{sub.name}': {e.message}", name=sub.name)
+            continue
+        out.append(
+            ResolvedSubAgent(
+                name=sub.name,
+                description=sub.description,
+                components=sub_result.resolved.components,
+                prompt=sub_result.resolved.prompt,
+            )
+        )
+    return out
 
 
 def _validate_config(
