@@ -41,10 +41,13 @@ def _scope_dir_name(scope_key: str) -> str:
     return scope_key.replace(":", "__")
 
 
-class HarnessStore:
-    """스코프별 디렉터리에 하네스당 JSON 한 파일. 목록은 요약만, 상세는 yaml 포함."""
+_HISTORY_CAP = 20  # 하네스당 보관할 이전 버전 수(최근 N)
 
-    _SUMMARY = ("id", "scope", "owner_id", "name", "description", "updated_at")
+
+class HarnessStore:
+    """스코프별 디렉터리에 하네스당 JSON 한 파일. 목록은 요약만, 상세는 yaml + 버전 히스토리."""
+
+    _SUMMARY = ("id", "scope", "owner_id", "name", "description", "version", "updated_at")
 
     def __init__(self, directory: Path) -> None:
         self.dir = directory
@@ -82,6 +85,17 @@ class HarnessStore:
         self, scope_key: str, hid: str, owner_id: str, name: str, description: str, yaml_text: str
     ) -> dict[str, Any]:
         sid = safe_id(hid)
+        existing = self.get(scope_key, sid)
+        version = 1
+        history: list[dict[str, Any]] = []
+        if existing is not None:
+            version = int(existing.get("version", 1)) + 1
+            prev = {
+                "version": existing.get("version", 1),
+                "updated_at": existing.get("updated_at"),
+                "yaml": existing.get("yaml", ""),
+            }
+            history = [prev, *existing.get("history", [])][:_HISTORY_CAP]
         doc = {
             "id": sid,
             "scope": scope_key,
@@ -89,12 +103,23 @@ class HarnessStore:
             "name": name or sid,
             "description": description,
             "yaml": yaml_text,
+            "version": version,
             "updated_at": now_iso(),
+            "history": history,
         }
         path = self._path(scope_key, sid)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
         return doc
+
+    def versions(self, scope_key: str, hid: str) -> list[dict[str, Any]] | None:
+        """현재 + 이전 버전들(최신순) — 각 {version, updated_at, yaml}. 없으면 None."""
+        doc = self.get(scope_key, hid)
+        if doc is None:
+            return None
+        current = {"version": doc.get("version", 1), "updated_at": doc.get("updated_at"), "yaml": doc.get("yaml", "")}
+        history = doc.get("history", [])
+        return [current, *history]
 
     def delete(self, scope_key: str, hid: str) -> bool:
         p = self._path(scope_key, hid)

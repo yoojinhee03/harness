@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, scopePref, subscribeHarnessEvents, type Team } from "../api/client";
+import { diffLines } from "../lib/diff";
 import { Badge, Button, Card, codeBlock, EmptyState, Input, Modal, PageHeader, SkeletonCards } from "../lib/ui";
 import { useToast } from "../lib/toast";
 
@@ -15,7 +16,6 @@ export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
   const { data: list = [], isError, isLoading } = useQuery({ queryKey: ["harnesses"], queryFn: api.listHarnesses });
   const [scope, setScope] = useState(() => scopePref.get());
   const [openKey, setOpenKey] = useState<string | null>(null);
-  const [doc, setDoc] = useState<string | null>(null);
 
   // 다이얼로그 상태(네이티브 prompt/confirm 대체)
   const [teamName, setTeamName] = useState<string | null>(null);
@@ -31,16 +31,8 @@ export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
   }
   const teams: Team[] = me.data?.teams ?? [];
 
-  async function openOne(id: string, sc: string) {
-    const key = `${sc}/${id}`;
-    if (openKey === key) {
-      setOpenKey(null);
-      setDoc(null);
-      return;
-    }
-    const full = await api.getHarness(id, sc);
-    setOpenKey(key);
-    setDoc(full.yaml);
+  function toggleOpen(key: string) {
+    setOpenKey((k) => (k === key ? null : key));
   }
   async function confirmDelete() {
     if (!delFor) return;
@@ -131,6 +123,7 @@ export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
                       <Badge className={isTeam ? "bg-violet-500/15 text-violet-400" : "bg-surface-2 text-muted"}>
                         {isTeam ? `👥 ${h.scope.slice(5)}` : "개인"}
                       </Badge>
+                      {h.version > 1 && <Badge className="bg-surface-2 text-muted">v{h.version}</Badge>}
                     </div>
                     <div className="mt-1 text-xs text-muted">
                       <code className="rounded bg-surface-2 px-1.5 py-0.5">{h.id}</code>
@@ -139,7 +132,7 @@ export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
                     </div>
                   </div>
                   <div className="flex shrink-0 gap-2">
-                    <Button variant="ghost" onClick={() => openOne(h.id, h.scope)}>
+                    <Button variant="ghost" onClick={() => toggleOpen(key)}>
                       {openKey === key ? "닫기" : "열기"}
                     </Button>
                     <button
@@ -151,7 +144,7 @@ export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
                     </button>
                   </div>
                 </div>
-                {openKey === key && doc && <pre className={`mt-3 ${codeBlock}`}>{doc}</pre>}
+                {openKey === key && <HistoryPanel id={h.id} scope={h.scope} />}
               </Card>
             );
           })}
@@ -232,6 +225,63 @@ export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
         </Modal>
       )}
     </div>
+  );
+}
+
+function HistoryPanel({ id, scope }: { id: string; scope: string }) {
+  const { data: versions = [], isLoading } = useQuery({
+    queryKey: ["versions", scope, id],
+    queryFn: () => api.harnessVersions(id, scope),
+  });
+  const [sel, setSel] = useState<number | null>(null); // 비교할 이전 버전(null=최신 원문)
+
+  if (isLoading || versions.length === 0) return <pre className={`mt-3 ${codeBlock}`}> </pre>;
+  const latest = versions[0];
+  const older = sel != null ? versions.find((v) => v.version === sel) : null;
+
+  return (
+    <div className="mt-3">
+      {versions.length > 1 && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-muted">버전</span>
+          {versions.map((v, idx) => {
+            const active = idx === 0 ? sel == null : sel === v.version;
+            return (
+              <button
+                key={v.version}
+                onClick={() => setSel(idx === 0 ? null : v.version)}
+                className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                  active ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted hover:text-fg"
+                }`}
+              >
+                v{v.version}
+                {idx === 0 ? " 최신" : ""}
+              </button>
+            );
+          })}
+          {older && (
+            <span className="text-xs text-muted">
+              v{older.version} → v{latest.version} 변경점
+            </span>
+          )}
+        </div>
+      )}
+      {older ? <DiffView oldText={older.yaml} newText={latest.yaml} /> : <pre className={codeBlock}>{latest.yaml}</pre>}
+    </div>
+  );
+}
+
+function DiffView({ oldText, newText }: { oldText: string; newText: string }) {
+  const lines = diffLines(oldText, newText);
+  return (
+    <pre className={`${codeBlock} whitespace-pre`}>
+      {lines.map((l, i) => (
+        <div key={i} className={l.type === "add" ? "bg-ok/10 text-ok" : l.type === "del" ? "bg-err/10 text-err" : ""}>
+          {l.type === "add" ? "+ " : l.type === "del" ? "− " : "  "}
+          {l.text || " "}
+        </div>
+      ))}
+    </pre>
   );
 }
 

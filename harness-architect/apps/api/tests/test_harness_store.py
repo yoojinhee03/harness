@@ -49,6 +49,18 @@ def test_me_lists_teams(client):
     assert me["id"] == "alice" and me["teams"] == []
 
 
+def test_versions_history(client):
+    a = auth(client, "alice")
+    client.put("/harnesses/h", json={"yaml": "v1\n"}, headers=a)
+    client.put("/harnesses/h", json={"yaml": "v2\n"}, headers=a)
+    doc = client.get("/harnesses/h", headers=a).json()
+    assert doc["version"] == 2
+    versions = client.get("/harnesses/h/versions", headers=a).json()
+    assert [v["version"] for v in versions] == [2, 1]
+    assert versions[0]["yaml"] == "v2\n" and versions[1]["yaml"] == "v1\n"
+    assert [h["version"] for h in client.get("/harnesses", headers=a).json()] == [2]  # 목록 요약에 버전
+
+
 def test_token_rotate_invalidates_old(client):
     a = auth(client, "alice")
     new = client.post("/auth/token/rotate", headers=a).json()["token"]

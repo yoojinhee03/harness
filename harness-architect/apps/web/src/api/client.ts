@@ -93,10 +93,17 @@ export interface HarnessSummary {
   owner_id: string;
   name: string;
   description: string;
+  version: number;
   updated_at: string;
 }
 
 export interface HarnessDoc extends HarnessSummary {
+  yaml: string;
+}
+
+export interface HarnessVersion {
+  version: number;
+  updated_at: string;
   yaml: string;
 }
 
@@ -205,6 +212,8 @@ export const api = {
   listHarnesses: () => send<HarnessSummary[]>("GET", "/harnesses"),
   getHarness: (id: string, scope = "personal") =>
     send<HarnessDoc>("GET", `/harnesses/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`),
+  harnessVersions: (id: string, scope = "personal") =>
+    send<HarnessVersion[]>("GET", `/harnesses/${encodeURIComponent(id)}/versions?scope=${encodeURIComponent(scope)}`),
   putHarness: (id: string, scope: string, body: { name: string; description: string; yaml: string }) =>
     send<HarnessDoc>("PUT", `/harnesses/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`, body),
   deleteHarness: (id: string, scope = "personal") =>

@@ -400,6 +400,21 @@ async def harness_events(
     return EventSourceResponse(event_stream(_store(request), _broadcaster(request), scopes))
 
 
+@app.get("/harnesses/{hid}/versions")
+def harness_versions(
+    request: Request,
+    hid: str,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> list[dict[str, Any]]:
+    """현재 + 이전 버전들(최신순). 웹이 버전 간 diff 를 그린다."""
+    sk = _resolve_scope(request, user, scope)
+    v = _store(request).versions(sk, hid)
+    if v is None:
+        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음(scope={scope})")
+    return v
+
+
 @app.get("/harnesses/{hid}")
 def get_harness(
     request: Request,
