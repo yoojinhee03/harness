@@ -6,6 +6,7 @@ RAG 엔진 *코드* 는 백엔드에 잔류하고, 컴포넌트 *데이터* 는 
 from __future__ import annotations
 
 from .embeddings import Embedder, LocalEmbedder, VoyageEmbedder, get_embedder
+from .harvest import ServerDescriptor, component_to_yaml, harvest, harvest_component, uncovered
 from .loader import build_registry, load_components, resolve_catalog_dir
 from .ranking import RankedComponent, rank
 from .reasoning import ClaudeReasoner, NullReasoner, Reasoner, get_reasoner
@@ -25,15 +26,20 @@ __all__ = [
     "RecommendResult",
     "Recommendation",
     "Recommender",
+    "ServerDescriptor",
     "Settings",
     "VectorStore",
     "VoyageEmbedder",
     "build_registry",
+    "component_to_yaml",
     "extract_capabilities_heuristic",
     "get_embedder",
     "get_reasoner",
+    "harvest",
+    "harvest_component",
     "load_components",
     "load_settings",
     "rank",
     "resolve_catalog_dir",
+    "uncovered",
 ]

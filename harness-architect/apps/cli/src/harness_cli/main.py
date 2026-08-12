@@ -124,6 +124,30 @@ def cmd_adopt(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_harvest(args: argparse.Namespace) -> int:
+    from harness_catalog import ServerDescriptor, component_to_yaml, harvest, uncovered
+
+    raw = yaml.safe_load(Path(args.descriptors).read_text(encoding="utf-8")) or {}
+    items = raw.get("servers") if isinstance(raw, dict) else raw
+    descriptors = [ServerDescriptor.model_validate(d) for d in (items or [])]
+    components = harvest(descriptors)
+    if args.out:
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        for c in components:
+            (out / f"{c.id}.yaml").write_text(component_to_yaml(c), encoding="utf-8")
+            print(f"  wrote {out}/{c.id}.yaml (caps={c.capability_tags})")
+    else:
+        for c in components:
+            print(f"===== {c.id}.yaml (caps={c.capability_tags}) =====")
+            print(component_to_yaml(c).rstrip())
+    unc = uncovered(components)
+    if unc:
+        print(f"# capability 미추론(어휘 확장 후보): {unc}", file=sys.stderr)
+    print(f"✓ {len(components)}개 수확", file=sys.stderr)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="harness", description="harness.yaml 을 resolve/eject 한다.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -152,6 +176,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_adopt.add_argument("--id", default="adopted", help="생성할 harness metadata.id")
     p_adopt.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
     p_adopt.set_defaults(func=cmd_adopt)
+
+    p_harvest = sub.add_parser("harvest", help="MCP 레지스트리 서버 디스크립터 → 카탈로그 컴포넌트로 수확한다.")
+    p_harvest.add_argument("descriptors", help="서버 디스크립터 JSON/YAML(servers: [...] 또는 최상위 리스트)")
+    p_harvest.add_argument("--out", default=None, help="컴포넌트 YAML 을 쓸 디렉터리(미지정 시 표준출력)")
+    p_harvest.set_defaults(func=cmd_harvest)
 
     return parser
 
