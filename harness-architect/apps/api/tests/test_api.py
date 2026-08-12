@@ -147,6 +147,23 @@ def test_eject_claude_code(client):
     assert settings["permissions"]["allow"] == ["mcp__github-mcp"]
 
 
+def test_key_management_set_mask_delete(client):
+    """키 설정→마스킹 상태 반환(원본 미노출)→삭제. os.environ 은 삭제로 원복."""
+    assert client.get("/settings/keys").json()["anthropic"]["set"] is False
+    r = client.put("/settings/keys", json={"anthropic_api_key": "sk-ant-fake-1234567890abcd"}).json()
+    assert r["anthropic"]["set"] is True
+    assert r["anthropic"]["masked"] == "sk-ant…abcd"  # 마스킹(원본 아님)
+    assert "1234567890" not in json.dumps(r)  # 원본 키가 응답에 없음
+    assert client.get("/settings/keys").json()["anthropic"]["masked"] == "sk-ant…abcd"
+    d = client.delete("/settings/keys/anthropic").json()
+    assert d["anthropic"]["set"] is False
+    assert client.post("/settings/keys/verify").json()["anthropic"] == "unset"
+
+
+def test_delete_unknown_provider_404(client):
+    assert client.delete("/settings/keys/nope").status_code == 404
+
+
 def test_eject_targets_lists_supported(client):
     """프론트 타깃 셀렉터용 — 지원 타깃 목록."""
     targets = client.get("/eject/targets").json()

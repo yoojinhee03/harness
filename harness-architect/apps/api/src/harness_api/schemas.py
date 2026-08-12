@@ -53,6 +53,13 @@ class RecommendRequest(BaseModel):
     top_k: int = 6
 
 
+class KeyUpdate(BaseModel):
+    """설정 화면 — 런타임 API 키 설정/수정(빈 값/None 은 변경 없음)."""
+
+    anthropic_api_key: str | None = None
+    voyage_api_key: str | None = None
+
+
 class SelectionInput(BaseModel):
     ref: str
     config: dict[str, Any] = Field(default_factory=dict)

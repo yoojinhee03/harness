@@ -100,14 +100,27 @@ export interface HarnessInput {
   budget?: { context_tokens: number; added_tools: number };
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
+    method,
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`${path} 실패: ${res.status}`);
   return res.json() as Promise<T>;
+}
+
+const post = <T>(path: string, body: unknown) => send<T>("POST", path, body);
+
+export interface ProviderStatus {
+  set: boolean;
+  masked: string | null;
+}
+
+export interface KeyStatus {
+  anthropic: ProviderStatus;
+  voyage: ProviderStatus;
+  quality_mode: { embedder: string; ranker: string };
 }
 
 export const api = {
@@ -122,4 +135,9 @@ export const api = {
   ejectTargets: () => fetch(`${BASE}/eject/targets`).then((r) => r.json() as Promise<string[]>),
   eject: (harness: HarnessInput, target: string) =>
     post<EjectResult>(`/eject?target=${encodeURIComponent(target)}`, harness),
+  getKeys: () => send<KeyStatus>("GET", "/settings/keys"),
+  putKeys: (body: { anthropic_api_key?: string; voyage_api_key?: string }) =>
+    send<KeyStatus>("PUT", "/settings/keys", body),
+  deleteKey: (provider: string) => send<KeyStatus>("DELETE", `/settings/keys/${provider}`),
+  verifyKeys: () => send<Record<string, string>>("POST", "/settings/keys/verify"),
 };

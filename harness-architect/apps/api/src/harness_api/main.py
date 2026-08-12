@@ -27,6 +27,7 @@ from harness_runtime import AnthropicRunner, available_targets, build_request, e
 from .schemas import (
     CatalogItem,
     GenerateResponse,
+    KeyUpdate,
     RecommendRequest,
     ResolveRequest,
     RunRequest,
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.warning("카탈로그를 찾지 못함 — 빈 레지스트리로 기동: %s", exc)
         registry = InMemoryRegistry([])
     app.state.registry = registry
+    app.state.keys = {}  # 런타임 API 키(메모리만 — 디스크 저장 안 함)
     app.state.recommender = Recommender(registry)
     yield
 
@@ -79,6 +81,108 @@ def _recommender(request: Request) -> Recommender:
 def health(request: Request) -> dict[str, Any]:
     reg = _registry(request)
     return {"status": "ok", "catalog_size": len(reg.all())}
+
+
+# ─────────────────────────── 설정: API 키 (메모리만 · 마스킹 반환) ───────────────────────────
+
+_KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "voyage": "VOYAGE_API_KEY"}
+
+
+def _mask(key: str) -> str:
+    return f"{key[:6]}…{key[-4:]}" if len(key) > 12 else "****"
+
+
+def _apply_keys(request: Request) -> None:
+    """메모리 키를 os.environ 에 반영하고 추천기를 재구성(embedder/reasoner 모드 전환)."""
+    keys: dict[str, str] = request.app.state.keys
+    for provider, env in _KEY_ENV.items():
+        val = keys.get(provider)
+        if val:
+            os.environ[env] = val
+        else:
+            os.environ.pop(env, None)
+    request.app.state.recommender = Recommender(_registry(request))
+
+
+def _provider_status(keys: dict[str, str], provider: str) -> dict[str, Any]:
+    key = keys.get(provider)
+    return {"set": bool(key), "masked": _mask(key) if key else None}
+
+
+def _key_status(request: Request) -> dict[str, Any]:
+    from harness_catalog import load_settings
+
+    keys: dict[str, str] = request.app.state.keys
+    s = load_settings()
+    return {
+        "anthropic": _provider_status(keys, "anthropic"),
+        "voyage": _provider_status(keys, "voyage"),
+        # 유효 품질 모드(연동 결과가 실제로 어디에 반영되는지)
+        "quality_mode": {
+            "embedder": "voyage" if s.use_voyage else "local",
+            "ranker": "claude" if s.use_claude else "heuristic",
+        },
+    }
+
+
+@app.get("/settings/keys")
+def get_keys(request: Request) -> dict[str, Any]:
+    return _key_status(request)
+
+
+@app.put("/settings/keys")
+def put_keys(request: Request, body: KeyUpdate) -> dict[str, Any]:
+    """키 설정/수정. 빈 문자열·None 은 변경 없음(삭제는 DELETE)."""
+    keys: dict[str, str] = request.app.state.keys
+    if body.anthropic_api_key:
+        keys["anthropic"] = body.anthropic_api_key.strip()
+    if body.voyage_api_key:
+        keys["voyage"] = body.voyage_api_key.strip()
+    _apply_keys(request)
+    return _key_status(request)
+
+
+@app.delete("/settings/keys/{provider}")
+def delete_key(request: Request, provider: str) -> dict[str, Any]:
+    if provider not in _KEY_ENV:
+        raise HTTPException(status_code=404, detail=f"알 수 없는 provider: {provider}")
+    request.app.state.keys.pop(provider, None)
+    _apply_keys(request)
+    return _key_status(request)
+
+
+@app.post("/settings/keys/verify")
+def verify_keys(request: Request) -> dict[str, str]:
+    """설정된 키로 최소 호출을 시도해 실제 연동 여부를 확인(원본 키는 반환 안 함)."""
+    keys: dict[str, str] = request.app.state.keys
+    out: dict[str, str] = {}
+
+    ak = keys.get("anthropic")
+    if not ak:
+        out["anthropic"] = "unset"
+    else:
+        try:
+            import anthropic
+
+            anthropic.Anthropic(api_key=ak).messages.create(
+                model="claude-sonnet-5", max_tokens=1, messages=[{"role": "user", "content": "ping"}]
+            )
+            out["anthropic"] = "ok"
+        except Exception as exc:  # noqa: BLE001 - 네트워크/인증 오류를 사용자에게 요약 전달
+            out["anthropic"] = f"error: {type(exc).__name__}"
+
+    vk = keys.get("voyage")
+    if not vk:
+        out["voyage"] = "unset"
+    else:
+        try:
+            import voyageai
+
+            voyageai.Client(api_key=vk).embed(["ping"], model="voyage-3.5", input_type="document")
+            out["voyage"] = "ok"
+        except Exception as exc:  # noqa: BLE001
+            out["voyage"] = f"error: {type(exc).__name__}"
+    return out
 
 
 @app.get("/catalog", response_model=list[CatalogItem])

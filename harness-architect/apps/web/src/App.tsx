@@ -7,9 +7,10 @@ import ScreenC from "./screens/ScreenC";
 import ScreenD from "./screens/ScreenD";
 import ScreenE from "./screens/ScreenE";
 import ScreenF from "./screens/ScreenF";
+import ScreenSettings from "./screens/ScreenSettings";
 
 export type Step = "A" | "B" | "C" | "D";
-export type View = "create" | "catalog" | "dashboard";
+export type View = "create" | "catalog" | "dashboard" | "settings";
 
 const STEPS: { key: Step; label: string }[] = [
   { key: "A", label: "설명" },
@@ -22,6 +23,7 @@ const NAV: { key: View; label: string }[] = [
   { key: "create", label: "생성" },
   { key: "catalog", label: "카탈로그" },
   { key: "dashboard", label: "대시보드" },
+  { key: "settings", label: "설정" },
 ];
 
 export type Selection = Record<string, Recommendation>;
@@ -131,6 +133,7 @@ export default function App() {
 
       {view === "catalog" && <ScreenE onColdStart={newHarness} />}
       {view === "dashboard" && <ScreenF onNew={newHarness} onReopen={reopen} />}
+      {view === "settings" && <ScreenSettings />}
 
       {view === "create" && step === "A" && (
         <ScreenA
