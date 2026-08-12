@@ -61,6 +61,18 @@ class AccountStore:
             self._write(self._users_path, users)
             return {"id": uid, "handle": handle, "token": token}
 
+    def rotate_token(self, uid: str) -> str:
+        """토큰 재발급 — 기존 토큰 무효화. 유출 대응·정기 회전. 새 토큰 원문을 반환(1회)."""
+        with self._lock:
+            users = self._read(self._users_path)
+            u = users.get(uid)
+            if u is None:
+                raise KeyError(f"사용자 없음: {uid}")
+            token = secrets.token_urlsafe(32)
+            u["token_sha"] = _hash_token(token)
+            self._write(self._users_path, users)
+            return token
+
     def user_by_token(self, token: str) -> dict[str, Any] | None:
         if not token:
             return None

@@ -348,6 +348,12 @@ def whoami(request: Request, user: dict[str, Any] = Depends(current_user)) -> di
     return {**user, "teams": _accounts(request).teams_of(user["id"])}
 
 
+@app.post("/auth/token/rotate")
+def rotate_token(request: Request, user: dict[str, Any] = Depends(current_user)) -> dict[str, str]:
+    """현재 사용자의 토큰 재발급(기존 무효화). 새 토큰 원문을 1회 반환."""
+    return {"token": _accounts(request).rotate_token(user["id"])}
+
+
 @app.post("/teams")
 def create_team(
     request: Request, body: TeamCreateBody, user: dict[str, Any] = Depends(current_user)

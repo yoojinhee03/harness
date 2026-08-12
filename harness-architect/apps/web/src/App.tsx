@@ -171,7 +171,7 @@ export default function App() {
 
         {view === "catalog" && <ScreenE onColdStart={newHarness} />}
         {view === "harnesses" && <ScreenSync onCreate={newHarness} />}
-        {view === "settings" && <ScreenSettings />}
+        {view === "settings" && <ScreenSettings onLogout={logout} />}
       </AppShell>
 
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} setView={setView} onNewHarness={newHarness} />

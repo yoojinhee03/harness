@@ -49,6 +49,13 @@ def test_me_lists_teams(client):
     assert me["id"] == "alice" and me["teams"] == []
 
 
+def test_token_rotate_invalidates_old(client):
+    a = auth(client, "alice")
+    new = client.post("/auth/token/rotate", headers=a).json()["token"]
+    assert client.get("/me", headers=a).status_code == 401  # 기존 토큰 무효
+    assert client.get("/me", headers={"Authorization": f"Bearer {new}"}).json()["id"] == "alice"
+
+
 # ── 사용자 격리 ──
 
 

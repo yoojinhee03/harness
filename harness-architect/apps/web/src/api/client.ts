@@ -194,6 +194,7 @@ export const api = {
 
   // ── 인증 · 팀 (멀티테넌시) ──
   register: (handle: string) => send<Account>("POST", "/auth/register", { handle }),
+  rotateToken: () => send<{ token: string }>("POST", "/auth/token/rotate"),
   me: () => send<Me>("GET", "/me"),
   listTeams: () => send<Team[]>("GET", "/teams"),
   createTeam: (name: string) => send<Team>("POST", "/teams", { name }),
