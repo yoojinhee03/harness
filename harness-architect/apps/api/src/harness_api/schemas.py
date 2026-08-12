@@ -100,6 +100,14 @@ class GenerateResponse(BaseModel):
     errors: int
 
 
+class HarnessSaveBody(BaseModel):
+    """공유 하네스 저장소 upsert 본문 — 웹·VSCode 확장이 같은 백엔드로 저장/동기화."""
+
+    name: str = ""
+    description: str = ""
+    yaml: str = Field(min_length=1)
+
+
 class RunRequest(ResolveRequest):
     """런타임 dry-run — 선택 구성 + 사용자 메시지로 요청을 조립하고(키 있으면) 전송.
 

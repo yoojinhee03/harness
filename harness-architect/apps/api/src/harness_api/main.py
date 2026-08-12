@@ -23,15 +23,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from harness_catalog import Recommender, build_registry, resolve_catalog_dir
 from harness_resolver import HarnessConfig, InMemoryRegistry, ResolveResult, resolve
 from harness_runtime import AnthropicRunner, available_targets, build_request, emit
+from sse_starlette.sse import EventSourceResponse
 
 from .schemas import (
     CatalogItem,
     GenerateResponse,
+    HarnessSaveBody,
     KeyUpdate,
     RecommendRequest,
     ResolveRequest,
     RunRequest,
 )
+from .store import Broadcaster, HarnessStore, event_stream, resolve_store_dir
 
 log = logging.getLogger("harness_api")
 
@@ -49,6 +52,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.registry = registry
     app.state.keys = {}  # 런타임 API 키(메모리만 — 디스크 저장 안 함)
     app.state.recommender = Recommender(registry)
+    # 공유 하네스 저장소 + SSE 브로드캐스터 — 웹·확장이 같은 백엔드로 동기화.
+    store_dir = resolve_store_dir()
+    app.state.store = HarnessStore(store_dir)
+    app.state.broadcaster = Broadcaster()
+    log.info("하네스 저장소: %s", store_dir)
     yield
 
 
@@ -272,6 +280,55 @@ def eject_endpoint(
     if not result.ok or result.resolved is None:
         return {"ok": False, "target": target, "diagnostics": result.diagnostics.model_dump(), "files": None}
     return {"ok": True, "target": target, "files": emit(result.resolved, target)}
+
+
+# ─────────────── 공유 하네스 저장소 (웹 ↔ VSCode 확장 양방향 동기화) ───────────────
+
+
+def _store(request: Request) -> HarnessStore:
+    return cast(HarnessStore, request.app.state.store)
+
+
+def _broadcaster(request: Request) -> Broadcaster:
+    return cast(Broadcaster, request.app.state.broadcaster)
+
+
+@app.get("/harnesses")
+def list_harnesses(request: Request) -> list[dict[str, Any]]:
+    """저장된 하네스 요약 목록(최신순). yaml 본문은 상세에서."""
+    return _store(request).list()
+
+
+# ⚠ 라우트 순서: 고정 경로(/harnesses/events)를 {hid} 보다 먼저 선언해야 매칭이 가로채이지 않는다.
+@app.get("/harnesses/events")
+async def harness_events(request: Request) -> EventSourceResponse:
+    """SSE — 저장소 변경(upsert/delete)을 실시간 푸시. 연결 시 현재 목록을 ready 로 먼저 보낸다."""
+    return EventSourceResponse(event_stream(_store(request), _broadcaster(request)))
+
+
+@app.get("/harnesses/{hid}")
+def get_harness(request: Request, hid: str) -> dict[str, Any]:
+    doc = _store(request).get(hid)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음")
+    return doc
+
+
+@app.put("/harnesses/{hid}")
+async def put_harness(request: Request, hid: str, body: HarnessSaveBody) -> dict[str, Any]:
+    """하네스 저장(upsert). 저장 후 SSE 로 upsert 이벤트를 브로드캐스트 → 다른 클라이언트가 즉시 반영."""
+    store = _store(request)
+    doc = store.put(hid, body.name, body.description, body.yaml)
+    await _broadcaster(request).publish({"type": "upsert", "id": doc["id"], "harness": store.summary(doc)})
+    return doc
+
+
+@app.delete("/harnesses/{hid}")
+async def delete_harness(request: Request, hid: str) -> dict[str, Any]:
+    if not _store(request).delete(hid):
+        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음")
+    await _broadcaster(request).publish({"type": "delete", "id": hid})
+    return {"ok": True, "id": hid}
 
 
 def to_harness_yaml(config: HarnessConfig) -> str:

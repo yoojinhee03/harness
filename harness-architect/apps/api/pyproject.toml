@@ -9,6 +9,7 @@ dependencies = [
     "harness-runtime",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
+    "sse-starlette>=2.0",
     "pyyaml>=6.0",
     "pydantic>=2.7",
 ]
