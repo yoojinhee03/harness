@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "harness": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/harness-architect/.venv/bin/harness-mcp",
+      "env": {
+        "CATALOG_DIR": "${workspaceFolder}/harness-catalog/components"
+      }
+    }
+  }
+}
