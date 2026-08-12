@@ -35,44 +35,44 @@
       {
         "command": "harness.recommend",
         "title": "구성요소 추천",
-        "category": "Harness",
+        "category": "Harness Architect",
         "icon": "$(sparkle)"
       },
       {
         "command": "harness.resolve",
         "title": "현재 harness.yaml 검증(resolve)",
-        "category": "Harness",
+        "category": "Harness Architect",
         "icon": "$(check-all)"
       },
       {
         "command": "harness.eject",
         "title": "eject — 런타임 네이티브 포맷으로 컴파일",
-        "category": "Harness",
+        "category": "Harness Architect",
         "icon": "$(export)"
       },
       {
         "command": "harness.refreshCatalog",
         "title": "카탈로그 새로고침",
-        "category": "Harness",
+        "category": "Harness Architect",
         "icon": "$(refresh)"
       },
       {
         "command": "harness.restartServer",
         "title": "서버 재시작",
-        "category": "Harness",
+        "category": "Harness Architect",
         "icon": "$(debug-restart)"
       },
       {
         "command": "harness.copyRef",
         "title": "컴포넌트 ref 복사",
-        "category": "Harness"
+        "category": "Harness Architect"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "harness",
-          "title": "Harness",
+          "title": "Harness Architect",
           "icon": "media/harness.svg"
         }
       ]
@@ -83,7 +83,7 @@
           "id": "harnessCatalog",
           "name": "카탈로그",
           "icon": "media/harness.svg",
-          "contextualTitle": "Harness 카탈로그"
+          "contextualTitle": "Harness Architect 카탈로그"
         }
       ]
     },
