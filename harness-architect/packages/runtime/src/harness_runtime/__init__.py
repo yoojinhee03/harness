@@ -10,6 +10,7 @@ from .adopt import AdoptResult, adopt, adopt_dir
 from .builder import BuiltRequest, build_request
 from .emit import ClaudeCodeEmitter, CursorEmitter, Emitter, FileTree, available_targets, emit
 from .eval import CheckResult, EvalCase, EvalCaseResult, EvalExpect, EvalReport, check_expectations, run_eval
+from .guardrails import pii_redact_handler, presidio_redact
 from .hooks import HookEngine, HookOutcome
 from .openharness_runner import OpenHarnessRunner
 from .runner import AnthropicRunner, RunResult
@@ -39,6 +40,8 @@ __all__ = [
     "adopt_dir",
     "available_targets",
     "build_request",
+    "pii_redact_handler",
+    "presidio_redact",
     "check_expectations",
     "default_executors",
     "emit",
