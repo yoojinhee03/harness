@@ -1,7 +1,7 @@
-import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { useState } from "react";
 import { api, type RecommendResult } from "../api/client";
-import { Button, Card } from "../lib/ui";
+import { Button, Card, PageHeader, Spinner, Textarea } from "../lib/ui";
 
 const EXAMPLES = [
   "PR 자동 리뷰 봇: 코드 리뷰 코멘트 자동화, 팀 코딩 컨벤션 준수, 보안 시크릿 스캔.",
@@ -29,13 +29,13 @@ export default function ScreenA({
 
   return (
     <div className="mx-auto max-w-2xl">
+      <PageHeader
+        title="만들려는 걸 설명해 주세요"
+        subtitle="아키텍처를 직접 설계하지 않아도 됩니다 — 요구사항만 적으면 필요한 능력을 추출합니다."
+      />
       <Card>
-        <h2 className="text-lg font-semibold text-slate-900">만들려는 걸 자연어로 설명해 주세요</h2>
-        <p className="mt-1 text-sm text-slate-500">
-          아키텍처를 직접 설계하지 않아도 됩니다 — 요구사항만 적으면 필요한 능력을 추출합니다.
-        </p>
-        <textarea
-          className="mt-4 h-36 w-full resize-none rounded-lg border border-slate-300 p-3 text-sm focus:border-slate-500 focus:outline-none"
+        <Textarea
+          className="h-40"
           placeholder="예: PR을 자동으로 리뷰하는 봇을 만들고 싶어요…"
           value={local}
           onChange={(e) => setLocal(e.target.value)}
@@ -45,7 +45,7 @@ export default function ScreenA({
             <button
               key={ex}
               onClick={() => setLocal(ex)}
-              className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-left text-xs text-slate-600 hover:bg-slate-100"
+              className="rounded-full border border-line bg-surface-2 px-3 py-1 text-left text-xs text-muted transition-colors hover:text-fg"
             >
               {ex.slice(0, 28)}…
             </button>
@@ -56,7 +56,13 @@ export default function ScreenA({
         )}
         <div className="mt-5 flex justify-end">
           <Button onClick={() => mutation.mutate()} disabled={!local.trim() || mutation.isPending}>
-            {mutation.isPending ? "요구사항 추출 중…" : "추천 받기 →"}
+            {mutation.isPending ? (
+              <>
+                <Spinner /> 요구사항 추출 중…
+              </>
+            ) : (
+              "추천 받기 →"
+            )}
           </Button>
         </div>
       </Card>

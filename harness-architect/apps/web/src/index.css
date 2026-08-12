@@ -2,12 +2,81 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
+/* ─────────── 디자인 토큰 (Linear 풍 · 다크 우선 + 라이트 토글) ───────────
+   색은 "R G B"(공백 구분)로 두어 tailwind 의 rgb(var(--x) / <alpha>) 와 맞춘다. */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: 8 9 10;
+  --surface: 17 17 19;
+  --surface-2: 26 27 30;
+  --line: 38 39 43;
+  --fg: 237 238 240;
+  --muted: 138 143 152;
+  --accent: 94 106 210;
+  --accent-hover: 110 122 226;
+  --accent-fg: 255 255 255;
+  --ok: 74 179 122;
+  --warn: 219 158 60;
+  --err: 229 92 92;
+}
+
+:root[data-theme="light"] {
   color-scheme: light;
+  --bg: 255 255 255;
+  --surface: 250 250 251;
+  --surface-2: 244 244 246;
+  --line: 230 230 233;
+  --fg: 24 24 27;
+  --muted: 113 113 122;
+  --accent: 94 106 210;
+  --accent-hover: 79 91 195;
+  --accent-fg: 255 255 255;
+  --ok: 22 163 74;
+  --warn: 217 119 6;
+  --err: 220 38 38;
+}
+
+* {
+  border-color: rgb(var(--line));
+}
+
+html,
+body,
+#root {
+  height: 100%;
 }
 
 body {
-  @apply bg-slate-50 text-slate-800 antialiased;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Apple SD Gothic Neo",
-    "Malgun Gothic", sans-serif;
+  @apply bg-bg text-fg antialiased;
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic",
+    sans-serif;
+  letter-spacing: -0.011em;
+  font-feature-settings: "cv11", "ss01";
+}
+
+::selection {
+  background: rgb(var(--accent) / 0.28);
+}
+
+/* 얇은 스크롤바 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--muted) / 0.28);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--muted) / 0.45);
+  background-clip: content-box;
+}
+
+/* 포커스 링 — 접근성 */
+:focus-visible {
+  outline: 2px solid rgb(var(--accent) / 0.6);
+  outline-offset: 1px;
 }
