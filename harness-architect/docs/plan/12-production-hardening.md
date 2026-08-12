@@ -4,6 +4,15 @@
 > **멀티테넌시(Bearer 인증·사용자 격리·팀 공유)** 까지 구현된 상태에서, "실제 서비스 배포"를
 > 막는 잔여 과제를 설계한다. 이 문서는 여러 하위 Phase(12a~12d)로 쪼개 실행한다.
 
+## 구현 상태 (2026-08-12)
+
+- **12a 완료** — API 키 배포 env 전용·읽기전용(전역 누수 제거), CORS 기본 거부, slowapi 레이트리밋.
+- **12b 완료(코드)** — 저장소 SQLAlchemy(SQLite 개발·테스트 / Postgres 프로덕션 via DATABASE_URL),
+  버전 히스토리, SSE Redis 브로드캐스터 옵션(REDIS_URL, 인메모리 기본). *실 Postgres/Redis 스테이징 검증 남음.*
+- **12c 완료** — CI 트리거 확대, 확장 잡, 도커 이미지 빌드·Trivy·compose e2e, dependabot.
+- **12d 완료** — 요청 ID·Prometheus `/metrics`·`/ready`·구조적 로깅·Sentry(옵션), 웹 ErrorBoundary·nginx CSP.
+- **남은 것** — 낙관적 잠금·페이지네이션(SQL 위 얇은 후속), 배포 파이프라인(레지스트리·시크릿), 팀 RBAC.
+
 ## 배경 — 지금 어디까지 왔나
 
 **구현됨**: 카탈로그 그라운딩 추천 → resolve → eject(claude-code·cursor) 파이프라인, 순수함수
