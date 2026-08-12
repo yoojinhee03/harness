@@ -17,17 +17,41 @@
 
 `*.harness.yaml` / `harness.yaml` 파일 상단엔 **resolve · eject 코드렌즈**가 뜬다.
 
-## 사전 준비 — 백엔드 서버
+## 백엔드 서버 — 두 가지 모드
 
-확장은 harness MCP 서버 실행 파일을 호출한다. 레포 루트에서 한 번 설치하면 venv 콘솔 스크립트가 생긴다:
+확장은 harness MCP 서버 실행 파일을 호출한다. 서버를 찾는 **우선순위**는:
+
+1. **사용자 지정** — `harness.serverCommand` 를 명시적으로 설정한 경우 그것.
+2. **동봉된 자립 바이너리** — `.vsix` 안에 `server/bin/harness-mcp` 가 있으면 그것(+ `server/catalog`).
+   **파이썬이 없어도 동작**한다. 마켓/사내 배포용.
+3. **venv 기본값** — `${workspaceFolder}/harness-architect/.venv/bin/harness-mcp`. 모노레포 개발자용.
+
+### 모노레포 개발자 (모드 3)
 
 ```bash
 cd harness-architect
 uv sync            # harness-architect/.venv/bin/harness-mcp 생성
 ```
+이 모노레포를 워크스페이스로 열면 추가 설정 없이 동작한다(server/ 를 빌드하지 않았다면).
 
-기본 설정이 이 경로(`${workspaceFolder}/harness-architect/.venv/bin/harness-mcp`)를 가리키므로, 이
-모노레포를 워크스페이스로 열면 추가 설정 없이 동작한다. 다른 위치면 아래 설정을 바꾼다.
+### 파이썬 없는 사용자에게 배포 (모드 2)
+
+서버를 자립 실행파일로 구워 `.vsix` 안에 동봉한다 — 받는 쪽은 파이썬·uv·소스가 필요 없다.
+
+```bash
+cd harness-architect/apps/vscode
+npm run vsix:bundled      # 서버 빌드(PyInstaller) → server/ 동봉 → .vsix 패키징
+```
+
+`server/bin/harness-mcp`(현재 OS/아키텍처용, ~24MB) + `server/catalog/`(13개 YAML)가 vsix 에 들어간다.
+설치한 사용자의 확장은 이 동봉 바이너리를 자동으로(모드 2) 쓰고, `CATALOG_DIR` 은 동봉 카탈로그로 맞춰진다.
+
+> **오프라인 휴리스틱 모드** — 동봉 서버는 `anthropic`·`voyageai` 를 포함하지 않는다(용량·키 불요).
+> 임베딩·랭킹은 로컬 휴리스틱 폴백으로 동작한다. Claude/Voyage 실측 랭킹이 필요하면 모드 1·3(키 주입)으로.
+
+> **플랫폼별 빌드** — PyInstaller 산출물은 OS/아키텍처 종속이다. 여러 플랫폼에 뿌리려면 각 OS 러너
+> (mac-arm64·mac-x64·linux-x64·win-x64)에서 `npm run build:server` 후
+> `vsce package --target <platform>` 로 플랫폼별 vsix 를 만든다(§ 멀티플랫폼 배포).
 
 ## 설정
 
@@ -43,12 +67,32 @@ uv sync            # harness-architect/.venv/bin/harness-mcp 생성
 ```bash
 cd harness-architect/apps/vscode
 npm install
-npm run compile        # dist/extension.js 번들
+npm run compile        # dist/extension.js 번들(esbuild)
+npm run check-types    # tsc 타입체크
 # F5 (Run Harness Extension) — 확장 개발 호스트로 실행
 
-npm run vsix           # harness-architect.vsix 패키징
+npm run vsix           # 확장만 패키징(서버 미동봉 — 모드 1·3 전제)
+npm run vsix:bundled   # 서버까지 구워 동봉(모드 2 — 파이썬 없는 사용자용)
 code --install-extension harness-architect.vsix   # 로컬 설치
 ```
+
+`npm run build:server` 만 따로 돌리면 `server/` 만 갱신한다(내부에서 PyInstaller 로 굽고 카탈로그를 복사).
+전제: `cd harness-architect && uv sync` 로 venv 가 있어야 한다.
+
+## 멀티플랫폼 배포
+
+PyInstaller 산출물은 빌드한 OS/아키텍처에서만 돈다. 여러 플랫폼에 뿌리려면 각 OS 러너에서 빌드해
+**플랫폼별 vsix** 를 만든다(VSCode Marketplace 는 `--target` 별 vsix 를 지원):
+
+```bash
+# 각 러너(darwin-arm64 / darwin-x64 / linux-x64 / win32-x64)에서:
+npm ci
+npm run build:server
+npx vsce package --no-dependencies --target darwin-arm64 -o harness-darwin-arm64.vsix
+```
+
+CI(GitHub Actions) 매트릭스로 4개 러너에서 위를 돌리고, `vsce publish --target <t>` 로 각각 올리면
+사용자는 자기 플랫폼에 맞는 vsix 를 자동으로 받는다. 소스 배포(모드 3)만 쓸 거면 이 절은 건너뛴다.
 
 ## 아키텍처
 
@@ -56,7 +100,10 @@ code --install-extension harness-architect.vsix   # 로컬 설치
 VSCode 확장(TS)  ──stdio JSON-RPC(MCP)──►  harness-mcp (파이썬)
   · 커맨드/트리/웹뷰/코드렌즈                 · recommend / list_catalog
   · Problems 패널 진단                        · resolve / eject
-                                             └─ packages: resolver·catalog·runtime
+  · 서버 자동 선택(사용자>동봉>venv)          └─ packages: resolver·catalog·runtime
+
+배포 모드: (1) 사용자 지정 경로  (2) vsix 동봉 자립 바이너리(파이썬 불요)  (3) venv(개발)
 ```
 
 확장은 얇은 UI 셸이고 모든 도메인 로직은 파이썬 패키지에 남는다 — CLI·API·MCP 와 같은 로직을 공유한다.
+자립 바이너리는 그 파이썬 로직을 인터프리터째 얼려 담은 것이라 로직 중복이 없다.

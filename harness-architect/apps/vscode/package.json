@@ -176,7 +176,9 @@
     "watch": "node esbuild.js --watch",
     "package": "node esbuild.js --production",
     "check-types": "tsc --noEmit",
-    "vsix": "vsce package --no-dependencies -o harness-architect.vsix"
+    "build:server": "bash scripts/build-server.sh",
+    "vsix": "vsce package --no-dependencies -o harness-architect.vsix",
+    "vsix:bundled": "npm run build:server && vsce package --no-dependencies -o harness-architect.vsix"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

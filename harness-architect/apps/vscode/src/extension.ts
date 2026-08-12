@@ -8,8 +8,11 @@ import { runRecommend } from "./recommend";
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Harness");
   const diagnostics = vscode.languages.createDiagnosticCollection("harness");
+  const extPath = context.extensionUri.fsPath;
 
-  let server = new HarnessServer(readConfig().spec, output);
+  const boot = readConfig(extPath);
+  output.appendLine(`[harness] 서버 출처: ${boot.source} — ${boot.spec.command}`);
+  let server = new HarnessServer(boot.spec, output);
   const catalog = new CatalogProvider(server);
 
   context.subscriptions.push(
@@ -48,14 +51,16 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand(
       "harness.eject",
-      (uri?: vscode.Uri) => withServer((s) => runEject(s, readConfig().defaultTarget, uri))(),
+      (uri?: vscode.Uri) => withServer((s) => runEject(s, readConfig(extPath).defaultTarget, uri))(),
     ),
     vscode.commands.registerCommand("harness.refreshCatalog", () => catalog.refresh()),
     vscode.commands.registerCommand("harness.restartServer", () => {
       server.dispose();
-      server = new HarnessServer(readConfig().spec, output);
+      const next = readConfig(extPath);
+      output.appendLine(`[harness] 서버 재시작 — 출처: ${next.source} — ${next.spec.command}`);
+      server = new HarnessServer(next.spec, output);
       catalog.setServer(server);
-      vscode.window.setStatusBarMessage("Harness: 서버 재시작됨", 3000);
+      vscode.window.setStatusBarMessage(`Harness: 서버 재시작됨 (${next.source})`, 3000);
     }),
     vscode.commands.registerCommand("harness.copyRef", async (ref: string) => {
       if (ref) {
