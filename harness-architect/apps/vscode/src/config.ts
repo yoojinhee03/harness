@@ -60,23 +60,33 @@ export function readConfig(extensionPath?: string, devMode = false): HarnessConf
   let catalogDir: string;
   let source: HarnessConfig["source"];
 
-  const bundled = !devMode && extensionPath ? bundledServer(extensionPath) : undefined;
+  // 번들은 확장 경로(절대)라 어느 워크스페이스에서도 존재하면 쓸 수 있다.
+  // venv 기본값은 ${workspaceFolder} 상대라 모노레포를 열었을 때만 존재한다 → 존재 여부로 판단.
+  const bundled = extensionPath ? bundledServer(extensionPath) : undefined;
+  const venvDefault = expand(cfg.get<string>("serverCommand") ?? "");
+  const venvExists = venvDefault !== "" && fs.existsSync(venvDefault);
+  const venvCatalog = expand(cfg.get<string>("catalogDir") ?? "");
 
   if (userCommand) {
     command = expand(userCommand);
     args = serverArgs;
-    catalogDir = userCatalog ? expand(userCatalog) : expand(cfg.get<string>("catalogDir") ?? "");
+    catalogDir = userCatalog ? expand(userCatalog) : venvCatalog;
     source = "user";
-  } else if (bundled) {
-    command = bundled.bin;
-    args = [];
-    catalogDir = userCatalog ? expand(userCatalog) : bundled.catalog;
-    source = "bundled";
   } else {
-    command = expand(cfg.get<string>("serverCommand") ?? "");
-    args = serverArgs;
-    catalogDir = expand(cfg.get<string>("catalogDir") ?? "");
-    source = "venv";
+    // dev: 라이브 venv 우선하되 없으면 번들로 폴백(모노레포 밖 폴더). prod: 번들 우선하되 없으면 venv.
+    const order: Array<"venv" | "bundled"> = devMode ? ["venv", "bundled"] : ["bundled", "venv"];
+    const pick = order.find((o) => (o === "venv" ? venvExists : !!bundled)) ?? order[0];
+    if (pick === "bundled" && bundled) {
+      command = bundled.bin;
+      args = [];
+      catalogDir = userCatalog ? expand(userCatalog) : bundled.catalog;
+      source = "bundled";
+    } else {
+      command = venvDefault;
+      args = serverArgs;
+      catalogDir = userCatalog ? expand(userCatalog) : venvCatalog;
+      source = "venv";
+    }
   }
 
   const env: NodeJS.ProcessEnv = { ...process.env };
