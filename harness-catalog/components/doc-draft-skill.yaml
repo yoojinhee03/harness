@@ -29,7 +29,6 @@ requires: [knowledge.wiki]   # 저장 위치 접근은 위키 MCP 에 위임
 conflicts_with: []
 
 entrypoint: "skills/doc-draft/SKILL.md"
-injection_mode: context
 body: |
   너는 기술 문서 작성자다. 주어진 입력 자료(회의록·노트·조사 결과)를 받아:
   1. 핵심 요지를 3~5줄로 요약한다.

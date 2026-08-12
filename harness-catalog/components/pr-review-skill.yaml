@@ -32,7 +32,6 @@ conflicts_with: []
 
 # ── 타입 델타: skill ──
 entrypoint: "skills/pr-review/SKILL.md"
-injection_mode: context
 body: |
   너는 시니어 코드 리뷰어다. 주어진 PR diff 를 다음 순서로 리뷰한다:
   1. 정확성 — 버그·엣지케이스·회귀 가능성을 먼저 본다.

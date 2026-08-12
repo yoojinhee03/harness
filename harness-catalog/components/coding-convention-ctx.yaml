@@ -32,8 +32,6 @@ conflicts_with: []
 
 # ── 타입 델타: context ──
 source: "file"
-size_estimate: 1200
-refresh: static
 body: |
   팀 코딩 컨벤션(요약):
   - 네이밍: 함수·변수 snake_case, 클래스 PascalCase, 상수 UPPER_SNAKE.

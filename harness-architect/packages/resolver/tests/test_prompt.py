@@ -33,14 +33,14 @@ def ctx_component() -> Component:
     return Component(
         id="conv", type="context", name="컨벤션", version="1.0.0",
         cost=Cost(context_tokens=1200), provides=["convention.coding"],
-        source="file", refresh="static",
+        source="file",
     )
 
 
 def skill_component() -> Component:
     return Component(
         id="pr", type="skill", name="PR 리뷰", version="2.1.0",
-        provides=["review.code"], entrypoint="skills/pr/SKILL.md", injection_mode="context",
+        provides=["review.code"], entrypoint="skills/pr/SKILL.md",
     )
 
 
@@ -48,7 +48,7 @@ def role_fragment() -> Component:
     """prompt.system[].ref 로 주입되는 프롬프트 조각 — context facet + body 텍스트."""
     return Component(
         id="role-reviewer", type="context", name="시니어 리뷰어 역할", version="1.0.0",
-        capability_tags=["prompt.role"], source="inline", refresh="static",
+        capability_tags=["prompt.role"], source="inline",
         body="너는 신중한 시니어 코드 리뷰어다.",
     )
 

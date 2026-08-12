@@ -58,11 +58,6 @@ CAPABILITY_VOCAB: dict[str, tuple[Facet, list[str]]] = {
 }
 
 
-def facet_of(capability: str) -> Facet | None:
-    entry = CAPABILITY_VOCAB.get(capability)
-    return entry[0] if entry else None
-
-
 def extract_capabilities_heuristic(description: str) -> list[str]:
     """LLM 없이 키워드 매칭으로 요구 능력을 추출한다(로컬 폴백)."""
     text = description.lower()

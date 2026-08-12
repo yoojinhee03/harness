@@ -29,7 +29,6 @@ requires: [vcs.issue-tracking]   # 접근은 이슈 트래킹 MCP 에 위임
 conflicts_with: []
 
 entrypoint: "skills/issue-triage/SKILL.md"
-injection_mode: context
 body: |
   너는 이슈 트리아지 담당자다. 새 이슈 본문을 읽고:
   1. 유형 라벨(bug/feature/question/docs)을 1개 이상 제안한다.

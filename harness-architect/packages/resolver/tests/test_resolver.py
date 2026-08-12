@@ -55,7 +55,6 @@ def pr_review_skill() -> Component:
         provides=["review.code"],
         requires=["vcs.code-hosting", "vcs.code-review"],
         entrypoint="skills/pr-review/SKILL.md",
-        injection_mode="context",
     )
 
 
@@ -70,8 +69,6 @@ def coding_convention_ctx() -> Component:
         cost=Cost(context_tokens=1200, added_tools=0, latency="low"),
         provides=["convention.coding"],
         source="file",
-        size_estimate=1200,
-        refresh="static",
         config_schema={
             "type": "object",
             "properties": {"style_guide": {"type": "string", "enum": ["google", "airbnb", "pep8"]}},

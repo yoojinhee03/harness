@@ -23,8 +23,6 @@ HookEvent = Literal[
 ]
 Sandbox = Literal["none", "restricted", "external"]
 Failure = Literal["fail_open", "fail_closed"]
-InjectionMode = Literal["context", "tool"]
-Refresh = Literal["static", "per_session"]
 
 
 class Cost(BaseModel):
@@ -112,16 +110,13 @@ class Component(BaseModel):
     defaults: dict[str, Any] = Field(default_factory=dict)
 
     # ── 타입 델타: skill ──
-    entrypoint: str | None = None
-    injection_mode: InjectionMode | None = None
+    entrypoint: str | None = None  # skills/<id>/SKILL.md — 네이티브 스킬 방출의 파일 경로
 
     # ── 타입 델타: mcp ──
     mcp: McpServerSpec | None = None  # 서버 실행 스펙 — .mcp.json/러너 방출의 단일 원본
 
     # ── 타입 델타: context ──
     source: str | None = None
-    size_estimate: int | None = None
-    refresh: Refresh | None = None
     body: str | None = None  # 프롬프트 조각 본문 — prompt.system[].ref 로 주입되는 실제 텍스트
 
     # ── 타입 델타: hook ──
