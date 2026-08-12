@@ -73,8 +73,17 @@ class AccountStore:
             while conn.execute(select(teams.c.id).where(teams.c.id == tid)).first():
                 tid, n = f"{base}-{n}", n + 1
             conn.execute(insert(teams).values(id=tid, name=name, owner_id=owner_id))
-            conn.execute(insert(team_members).values(team_id=tid, user_id=owner_id))
+            conn.execute(insert(team_members).values(team_id=tid, user_id=owner_id, role="owner"))
         return {"id": tid, "name": name, "owner_id": owner_id, "members": [owner_id]}
+
+    def member_role(self, tid: str, uid: str) -> str | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                select(team_members.c.role).where(
+                    and_(team_members.c.team_id == tid, team_members.c.user_id == uid)
+                )
+            ).first()
+        return str(row[0]) if row else None
 
     def get_team(self, tid: str) -> dict[str, Any] | None:
         with self.engine.connect() as conn:
@@ -84,17 +93,18 @@ class AccountStore:
             members = conn.execute(select(team_members.c.user_id).where(team_members.c.team_id == tid)).scalars().all()
         return {"id": row["id"], "name": row["name"], "owner_id": row["owner_id"], "members": list(members)}
 
-    def add_member(self, tid: str, actor_id: str, handle_or_id: str) -> dict[str, Any]:
+    def add_member(self, tid: str, actor_id: str, handle_or_id: str, role: str = "editor") -> dict[str, Any]:
+        role = role if role in ("owner", "editor", "viewer") else "editor"
         with self.engine.begin() as conn:
             if conn.execute(select(teams.c.id).where(teams.c.id == tid)).first() is None:
                 raise KeyError(f"팀 없음: {tid}")
-            actor_in = conn.execute(
-                select(team_members.c.user_id).where(
+            actor = conn.execute(
+                select(team_members.c.role).where(
                     and_(team_members.c.team_id == tid, team_members.c.user_id == actor_id)
                 )
             ).first()
-            if not actor_in:
-                raise PermissionError("팀 멤버만 초대할 수 있습니다")
+            if actor is None or actor[0] not in ("owner", "editor"):
+                raise PermissionError("초대 권한이 없습니다(owner/editor 만)")
             new_uid = self._resolve_uid(conn, handle_or_id)
             if new_uid is None:
                 raise ValueError(f"사용자를 찾을 수 없음: {handle_or_id}")
@@ -103,8 +113,14 @@ class AccountStore:
                     and_(team_members.c.team_id == tid, team_members.c.user_id == new_uid)
                 )
             ).first()
-            if not already:
-                conn.execute(insert(team_members).values(team_id=tid, user_id=new_uid))
+            if already:
+                conn.execute(
+                    update(team_members)
+                    .where(and_(team_members.c.team_id == tid, team_members.c.user_id == new_uid))
+                    .values(role=role)
+                )
+            else:
+                conn.execute(insert(team_members).values(team_id=tid, user_id=new_uid, role=role))
         team = self.get_team(tid)
         assert team is not None
         return team

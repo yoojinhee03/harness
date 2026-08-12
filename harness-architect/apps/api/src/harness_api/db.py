@@ -36,6 +36,7 @@ team_members = Table(
     metadata,
     Column("team_id", String(128), primary_key=True),
     Column("user_id", String(128), primary_key=True),
+    Column("role", String(16), nullable=False, default="editor"),  # owner | editor | viewer
 )
 
 harnesses = Table(

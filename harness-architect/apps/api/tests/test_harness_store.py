@@ -61,6 +61,25 @@ def test_versions_history(client):
     assert [h["version"] for h in client.get("/harnesses", headers=a).json()] == [2]  # 목록 요약에 버전
 
 
+def test_optimistic_locking(client):
+    a = auth(client, "alice")
+    client.put("/harnesses/h", json={"yaml": "v1\n"}, headers=a)  # v1
+    r2 = client.put("/harnesses/h", json={"yaml": "v2\n"}, headers={**a, "If-Match": "1"})
+    assert r2.status_code == 200 and r2.json()["version"] == 2
+    # 오래된 버전(1) 기준 저장 → 충돌 409
+    r3 = client.put("/harnesses/h", json={"yaml": "v2b\n"}, headers={**a, "If-Match": "1"})
+    assert r3.status_code == 409
+
+
+def test_pagination(client):
+    a = auth(client, "alice")
+    for i in range(3):
+        client.put(f"/harnesses/h{i}", json={"yaml": f"y{i}\n"}, headers=a)
+    assert len(client.get("/harnesses", headers=a).json()) == 3
+    assert len(client.get("/harnesses", params={"limit": 2}, headers=a).json()) == 2
+    assert len(client.get("/harnesses", params={"limit": 2, "offset": 2}, headers=a).json()) == 1
+
+
 def test_token_rotate_invalidates_old(client):
     a = auth(client, "alice")
     new = client.post("/auth/token/rotate", headers=a).json()["token"]
@@ -117,6 +136,25 @@ def test_add_member_requires_membership(client):
     tid = client.post("/teams", json={"name": "sq"}, headers=a).json()["id"]
     # bob(비멤버)이 carol 을 초대 → 403
     assert client.post(f"/teams/{tid}/members", json={"handle": "carol"}, headers=b).status_code == 403
+
+
+def test_rbac_viewer_read_only(client):
+    a, b = auth(client, "alice"), auth(client, "bob")
+    tid = client.post("/teams", json={"name": "sq"}, headers=a).json()["id"]
+    client.post(f"/teams/{tid}/members", json={"handle": "bob", "role": "viewer"}, headers=a)
+    client.put("/harnesses/t", json={"yaml": "y\n"}, params={"scope": f"team:{tid}"}, headers=a)
+
+    # viewer: 읽기 O, 쓰기 403
+    assert client.get("/harnesses/t", params={"scope": f"team:{tid}"}, headers=b).status_code == 200
+    assert client.put(
+        "/harnesses/t2", json={"yaml": "z\n"}, params={"scope": f"team:{tid}"}, headers=b
+    ).status_code == 403
+
+    # editor 로 승격 → 쓰기 O
+    client.post(f"/teams/{tid}/members", json={"handle": "bob", "role": "editor"}, headers=a)
+    assert client.put(
+        "/harnesses/t2", json={"yaml": "z\n"}, params={"scope": f"team:{tid}"}, headers=b
+    ).status_code == 200
 
 
 def test_persistence_across_restart(tmp_path, monkeypatch):

@@ -122,9 +122,10 @@ class TeamCreateBody(BaseModel):
 
 
 class MemberBody(BaseModel):
-    """팀 멤버 초대 — handle 로 지정."""
+    """팀 멤버 초대 — handle + 역할(owner/editor/viewer, 기본 editor)."""
 
     handle: str = Field(min_length=1)
+    role: str = "editor"
 
 
 class RunRequest(ResolveRequest):

@@ -24,6 +24,14 @@ _SLUG_RE = re.compile(r"[^a-z0-9._-]+")
 _HISTORY_CAP = 20  # 하네스당 보관할 이전 버전 수
 
 
+class VersionConflict(Exception):
+    """낙관적 잠금 — 클라이언트가 기대한 버전과 현재 버전이 다름(동시 편집 충돌)."""
+
+    def __init__(self, current: int) -> None:
+        super().__init__(f"버전 충돌 — 현재 v{current}")
+        self.current = current
+
+
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -49,14 +57,17 @@ class HarnessStore:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
 
-    def list_scopes(self, scope_keys: list[str]) -> list[dict[str, Any]]:
+    def list_scopes(
+        self, scope_keys: list[str], limit: int | None = None, offset: int = 0
+    ) -> list[dict[str, Any]]:
         if not scope_keys:
             return []
         cols = [harnesses.c[k] for k in self._SUMMARY]
+        stmt = select(*cols).where(harnesses.c.scope.in_(scope_keys)).order_by(harnesses.c.updated_at.desc())
+        if limit is not None:
+            stmt = stmt.limit(limit).offset(offset)
         with self.engine.connect() as conn:
-            rows = conn.execute(
-                select(*cols).where(harnesses.c.scope.in_(scope_keys)).order_by(harnesses.c.updated_at.desc())
-            ).mappings().all()
+            rows = conn.execute(stmt).mappings().all()
         return [dict(r) for r in rows]
 
     def get(self, scope_key: str, hid: str) -> dict[str, Any] | None:
@@ -77,8 +88,16 @@ class HarnessStore:
         return doc
 
     def put(
-        self, scope_key: str, hid: str, owner_id: str, name: str, description: str, yaml_text: str
+        self,
+        scope_key: str,
+        hid: str,
+        owner_id: str,
+        name: str,
+        description: str,
+        yaml_text: str,
+        expected_version: int | None = None,
     ) -> dict[str, Any]:
+        """저장(upsert). expected_version 을 주면 낙관적 잠금 — 현재 버전과 다르면 VersionConflict."""
         sid = safe_id(hid)
         ts = now_iso()
         nm = name or sid
@@ -88,6 +107,10 @@ class HarnessStore:
                     and_(harnesses.c.scope == scope_key, harnesses.c.id == sid)
                 )
             ).mappings().first()
+            if expected_version is not None:
+                current = int(existing["version"]) if existing is not None else 0
+                if current != expected_version:
+                    raise VersionConflict(current)
             if existing is None:
                 version = 1
                 conn.execute(

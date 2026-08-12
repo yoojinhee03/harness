@@ -48,7 +48,15 @@ from .schemas import (
     RunRequest,
     TeamCreateBody,
 )
-from .store import HarnessStore, SSEBroadcaster, event_stream, make_broadcaster, resolve_store_dir, safe_id
+from .store import (
+    HarnessStore,
+    SSEBroadcaster,
+    VersionConflict,
+    event_stream,
+    make_broadcaster,
+    resolve_store_dir,
+    safe_id,
+)
 
 log = logging.getLogger("harness_api")
 
@@ -321,14 +329,20 @@ async def current_user(
     return user
 
 
-def _resolve_scope(request: Request, user: dict[str, Any], scope: str) -> str:
-    """쿼리 scope('personal'|'team:<tid>')를 스코프 키로. 팀은 멤버십을 검사(격리)."""
+def _resolve_scope(request: Request, user: dict[str, Any], scope: str, write: bool = False) -> str:
+    """쿼리 scope('personal'|'team:<tid>')를 스코프 키로. 팀은 멤버십·역할을 검사.
+
+    write=True(저장·삭제)면 owner/editor 만 허용(viewer 는 읽기 전용). 격리는 항상.
+    """
     if scope in ("", "personal"):
         return f"personal:{user['id']}"
     if scope.startswith("team:"):
         tid = scope[len("team:") :]
-        if not _accounts(request).is_member(tid, user["id"]):
+        role = _accounts(request).member_role(tid, user["id"])
+        if role is None:
             raise HTTPException(status_code=403, detail="이 팀의 멤버가 아닙니다")
+        if write and role not in ("owner", "editor"):
+            raise HTTPException(status_code=403, detail="뷰어는 쓰기 권한이 없습니다(읽기 전용)")
         return f"team:{tid}"
     raise HTTPException(status_code=400, detail=f"잘못된 scope: {scope} (personal|team:<id>)")
 
@@ -374,7 +388,7 @@ def add_team_member(
     request: Request, tid: str, body: MemberBody, user: dict[str, Any] = Depends(current_user)
 ) -> dict[str, Any]:
     try:
-        return _accounts(request).add_member(tid, user["id"], body.handle)
+        return _accounts(request).add_member(tid, user["id"], body.handle, body.role)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
@@ -387,10 +401,15 @@ def add_team_member(
 
 
 @app.get("/harnesses")
-def list_harnesses(request: Request, user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
-    """내 가시 스코프(personal + 내 팀들)의 하네스 요약 목록(최신순)."""
+def list_harnesses(
+    request: Request,
+    limit: int | None = Query(default=None, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: dict[str, Any] = Depends(current_user),
+) -> list[dict[str, Any]]:
+    """내 가시 스코프(personal + 내 팀들)의 하네스 요약 목록(최신순). limit/offset 으로 페이지네이션."""
     scopes = sorted(_accounts(request).visible_scope_keys(user["id"]))
-    return _store(request).list_scopes(scopes)
+    return _store(request).list_scopes(scopes, limit=limit, offset=offset)
 
 
 # ⚠ 라우트 순서: 고정 경로(/harnesses/events)를 {hid} 보다 먼저 선언해야 매칭이 가로채이지 않는다.
@@ -438,12 +457,19 @@ async def put_harness(
     hid: str,
     body: HarnessSaveBody,
     scope: str = Query("personal"),
+    if_match: str | None = Header(default=None, alias="If-Match"),
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
-    """하네스 저장(upsert). 스코프(personal|team:<id>) 안에 저장하고 그 스코프 구독자에게 SSE 푸시."""
-    sk = _resolve_scope(request, user, scope)
+    """하네스 저장(upsert). 스코프 안에 저장하고 SSE 푸시. If-Match(버전)를 주면 낙관적 잠금 → 409."""
+    sk = _resolve_scope(request, user, scope, write=True)
     store = _store(request)
-    doc = store.put(sk, hid, user["id"], body.name, body.description, body.yaml)
+    expected = int(if_match) if if_match and if_match.isdigit() else None
+    try:
+        doc = store.put(sk, hid, user["id"], body.name, body.description, body.yaml, expected_version=expected)
+    except VersionConflict as exc:
+        raise HTTPException(
+            status_code=409, detail=f"버전 충돌 — 현재 v{exc.current}. 최신을 다시 불러온 뒤 저장하세요."
+        ) from exc
     await _broadcaster(request).publish(
         {"type": "upsert", "id": doc["id"], "scope": sk, "harness": store.summary(doc)}
     )
@@ -457,7 +483,7 @@ async def delete_harness(
     scope: str = Query("personal"),
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
-    sk = _resolve_scope(request, user, scope)
+    sk = _resolve_scope(request, user, scope, write=True)
     if not _store(request).delete(sk, hid):
         raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음(scope={scope})")
     await _broadcaster(request).publish({"type": "delete", "id": safe_id(hid), "scope": sk})
