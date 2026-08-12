@@ -13,6 +13,18 @@ export function getApiUrl(): string {
   return (vscode.workspace.getConfiguration("harness").get<string>("apiUrl") ?? "http://localhost:8000").trim();
 }
 
+/** 공유 저장소 Bearer 토큰(사용자 신원). 비어 있으면 로그인 필요. */
+export function getApiToken(): string {
+  return (vscode.workspace.getConfiguration("harness").get<string>("apiToken") ?? "").trim();
+}
+
+/** 토큰을 전역 설정에 저장(로그인·가입 후). */
+export async function setApiToken(token: string): Promise<void> {
+  await vscode.workspace
+    .getConfiguration("harness")
+    .update("apiToken", token, vscode.ConfigurationTarget.Global);
+}
+
 /** 설정 문자열의 `${workspaceFolder}` 와 선행 `~` 를 확장한다. */
 export function expand(value: string): string {
   const root = workspaceRoot() ?? "";

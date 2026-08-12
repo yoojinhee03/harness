@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { api, type HarnessInput, type Recommendation } from "./api/client";
+import { api, scopePref, type HarnessInput, type Recommendation } from "./api/client";
 import { saveHarness, type SavedHarness } from "./lib/store";
 import ScreenA from "./screens/ScreenA";
 import ScreenB from "./screens/ScreenB";
@@ -61,9 +61,13 @@ export default function App() {
       components: Object.values(selection),
       permissions: harnessInput.permissions ?? {},
     });
-    // 공유 백엔드에도 저장 → VSCode 확장·다른 웹에 실시간 동기화(백엔드 꺼져 있으면 조용히 무시).
+    // 공유 백엔드에도 저장(선택한 스코프) → 확장·다른 웹에 실시간 동기화. 미로그인/백엔드다운이면 무시.
     api
-      .putHarness(metadataId, { name: harnessInput.metadata?.name || metadataId, description: description.slice(0, 120), yaml })
+      .putHarness(metadataId, scopePref.get(), {
+        name: harnessInput.metadata?.name || metadataId,
+        description: description.slice(0, 120),
+        yaml,
+      })
       .catch(() => undefined);
   }
 

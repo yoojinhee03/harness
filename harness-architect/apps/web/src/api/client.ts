@@ -89,6 +89,8 @@ export interface EjectResult {
 
 export interface HarnessSummary {
   id: string;
+  scope: string; // "personal:<uid>" | "team:<tid>"
+  owner_id: string;
   name: string;
   description: string;
   updated_at: string;
@@ -97,6 +99,40 @@ export interface HarnessSummary {
 export interface HarnessDoc extends HarnessSummary {
   yaml: string;
 }
+
+export interface Account {
+  id: string;
+  handle: string;
+  token: string;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  owner_id: string;
+  members: string[];
+}
+
+export interface Me {
+  id: string;
+  handle: string;
+  teams: Team[];
+}
+
+// ── 로컬 자격/선호(브라우저) ──
+const TOKEN_KEY = "harness.token";
+const SCOPE_KEY = "harness.scope";
+
+export const auth = {
+  token: () => localStorage.getItem(TOKEN_KEY) ?? "",
+  setToken: (t: string) => localStorage.setItem(TOKEN_KEY, t),
+  clear: () => localStorage.removeItem(TOKEN_KEY),
+};
+
+export const scopePref = {
+  get: () => localStorage.getItem(SCOPE_KEY) ?? "personal",
+  set: (s: string) => localStorage.setItem(SCOPE_KEY, s),
+};
 
 export interface SelectionInput {
   ref: string;
@@ -112,11 +148,15 @@ export interface HarnessInput {
 }
 
 async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const t = auth.token();
+  if (t) headers.authorization = `Bearer ${t}`;
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: { "content-type": "application/json" },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (res.status === 401) throw new Error("인증 필요 — 로그인하세요");
   if (!res.ok) throw new Error(`${path} 실패: ${res.status}`);
   return res.json() as Promise<T>;
 }
@@ -152,21 +192,31 @@ export const api = {
   deleteKey: (provider: string) => send<KeyStatus>("DELETE", `/settings/keys/${provider}`),
   verifyKeys: () => send<Record<string, string>>("POST", "/settings/keys/verify"),
 
-  // ── 공유 하네스 저장소 (VSCode 확장과 동일 백엔드 — 양방향 동기화) ──
-  listHarnesses: () =>
-    fetch(`${BASE}/harnesses`).then((r) => r.json() as Promise<HarnessSummary[]>),
-  getHarness: (id: string) =>
-    fetch(`${BASE}/harnesses/${encodeURIComponent(id)}`).then((r) => r.json() as Promise<HarnessDoc>),
-  putHarness: (id: string, body: { name: string; description: string; yaml: string }) =>
-    send<HarnessDoc>("PUT", `/harnesses/${encodeURIComponent(id)}`, body),
-  deleteHarness: (id: string) => send<{ ok: boolean }>("DELETE", `/harnesses/${encodeURIComponent(id)}`),
+  // ── 인증 · 팀 (멀티테넌시) ──
+  register: (handle: string) => send<Account>("POST", "/auth/register", { handle }),
+  me: () => send<Me>("GET", "/me"),
+  listTeams: () => send<Team[]>("GET", "/teams"),
+  createTeam: (name: string) => send<Team>("POST", "/teams", { name }),
+  addMember: (tid: string, handle: string) =>
+    send<Team>("POST", `/teams/${encodeURIComponent(tid)}/members`, { handle }),
+
+  // ── 공유 하네스 저장소 (VSCode 확장과 동일 백엔드 — 스코프 격리 · 양방향 동기화) ──
+  listHarnesses: () => send<HarnessSummary[]>("GET", "/harnesses"),
+  getHarness: (id: string, scope = "personal") =>
+    send<HarnessDoc>("GET", `/harnesses/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`),
+  putHarness: (id: string, scope: string, body: { name: string; description: string; yaml: string }) =>
+    send<HarnessDoc>("PUT", `/harnesses/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`, body),
+  deleteHarness: (id: string, scope = "personal") =>
+    send<{ ok: boolean }>("DELETE", `/harnesses/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`),
 };
 
-/** 저장소 변경(upsert/delete)을 SSE 로 실시간 구독. 언구독 함수를 반환. 브라우저가 자동 재연결. */
+/** 저장소 변경(가시 스코프)을 SSE 로 실시간 구독. 토큰은 EventSource 제약상 쿼리로 전달. */
 export function subscribeHarnessEvents(onEvent: (type: string) => void): () => void {
-  const es = new EventSource(`${BASE}/harnesses/events`);
-  for (const t of ["ready", "upsert", "delete"]) {
-    es.addEventListener(t, () => onEvent(t));
+  const t = auth.token();
+  if (!t) return () => undefined; // 로그인 전엔 구독 안 함
+  const es = new EventSource(`${BASE}/harnesses/events?token=${encodeURIComponent(t)}`);
+  for (const ev of ["ready", "upsert", "delete"]) {
+    es.addEventListener(ev, () => onEvent(ev));
   }
   return () => es.close();
 }
