@@ -11,7 +11,11 @@
   버전 히스토리, SSE Redis 브로드캐스터 옵션(REDIS_URL, 인메모리 기본). *실 Postgres/Redis 스테이징 검증 남음.*
 - **12c 완료** — CI 트리거 확대, 확장 잡, 도커 이미지 빌드·Trivy·compose e2e, dependabot.
 - **12d 완료** — 요청 ID·Prometheus `/metrics`·`/ready`·구조적 로깅·Sentry(옵션), 웹 ErrorBoundary·nginx CSP.
-- **남은 것** — 낙관적 잠금·페이지네이션(SQL 위 얇은 후속), 배포 파이프라인(레지스트리·시크릿), 팀 RBAC.
+- **후속 완료** — 낙관적 잠금(If-Match→409)·페이지네이션(limit/offset)·팀 RBAC(owner/editor/viewer).
+  실 Postgres+Redis e2e 검증 완료(격리·잠금·페이징·RBAC·SSE via Redis). GHCR 이미지 빌드·푸시
+  워크플로(`deploy.yml`) + 배포 잡 골격.
+- **남은 것(외부 결정)** — 배포 타깃(호스트) 선택 + 프로덕션 시크릿 주입, Alembic 마이그레이션(스키마
+  변경 시), 팀 역할 UI(현재는 API 만).
 
 ## 배경 — 지금 어디까지 왔나
 
