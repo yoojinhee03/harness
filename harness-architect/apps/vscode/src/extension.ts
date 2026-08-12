@@ -1,16 +1,19 @@
 import * as vscode from "vscode";
 import { CatalogProvider } from "./catalog";
+import { registerChat } from "./chat";
 import { readConfig } from "./config";
 import { runEject, runResolve } from "./harnessOps";
 import { HarnessServer } from "./mcp";
 import { runRecommend } from "./recommend";
+import { openStarter, type StarterComponent } from "./starter";
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Harness");
   const diagnostics = vscode.languages.createDiagnosticCollection("harness");
   const extPath = context.extensionUri.fsPath;
+  const devMode = context.extensionMode === vscode.ExtensionMode.Development;
 
-  const boot = readConfig(extPath);
+  const boot = readConfig(extPath, devMode);
   output.appendLine(`[harness] 서버 출처: ${boot.source} — ${boot.spec.command}`);
   let server = new HarnessServer(boot.spec, output);
   const catalog = new CatalogProvider(server);
@@ -56,7 +59,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("harness.refreshCatalog", () => catalog.refresh()),
     vscode.commands.registerCommand("harness.restartServer", () => {
       server.dispose();
-      const next = readConfig(extPath);
+      const next = readConfig(extPath, devMode);
       output.appendLine(`[harness] 서버 재시작 — 출처: ${next.source} — ${next.spec.command}`);
       server = new HarnessServer(next.spec, output);
       catalog.setServer(server);
@@ -68,7 +71,15 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.setStatusBarMessage(`복사됨: ${ref}`, 3000);
       }
     }),
+    // 챗 참가자의 "스타터 생성" 버튼이 호출 — 추천 컴포넌트로 harness.yaml 초안을 연다.
+    vscode.commands.registerCommand(
+      "harness.createStarter",
+      (description: string, comps: StarterComponent[]) => openStarter(description ?? "", comps ?? []),
+    ),
   );
+
+  // 챗 참가자 @harness — Copilot Chat 패널에서 자연어로 추천.
+  registerChat(context, () => server);
 
   // 설정 변경 → 서버 재생성.
   context.subscriptions.push(

@@ -6,3 +6,7 @@
   eject(claude-code·cursor) 커맨드. 백엔드는 harness MCP 서버를 자식 프로세스로 재사용.
 - 서버 번들링(PyInstaller) — `vsix:bundled` 로 자립 바이너리를 vsix 에 동봉해 파이썬 없는
   사용자에게도 배포 가능. 서버 자동 선택 우선순위: 사용자 지정 > 동봉 바이너리 > venv.
+  (개발 모드 F5 에서는 동봉을 건너뛰고 venv 를 우선 — 파이썬 변경이 바로 반영되도록.)
+- 챗 참가자 `@harness` — Copilot Chat 패널에서 프로젝트를 설명하면 카탈로그 근거로 추천.
+  그라운딩은 MCP 서버(recommend), 벤치마크 이유 표현은 사용자의 Copilot 모델(request.model),
+  정확한 ref 목록 + "harness.yaml 스타터 생성" 버튼 + 후속 프롬프트 제안.

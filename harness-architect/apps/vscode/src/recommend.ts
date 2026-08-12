@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { HarnessServer } from "./mcp";
+import { openStarter } from "./starter";
 
 interface Recommendation {
   id: string;
@@ -81,32 +82,11 @@ async function onMessage(msg: any, getResult: () => RecommendResult | undefined)
     vscode.window.setStatusBarMessage(`복사됨: ${msg.ref}`, 3000);
   } else if (msg?.type === "createHarness") {
     const ids: string[] = msg.ids ?? result.recommendations.map((r) => r.id);
-    const chosen = result.recommendations.filter((r) => ids.includes(r.id));
-    const doc = await vscode.workspace.openTextDocument({
-      content: starterYaml(result.description, chosen),
-      language: "yaml",
-    });
-    await vscode.window.showTextDocument(doc, { preview: false });
+    const chosen = result.recommendations
+      .filter((r) => ids.includes(r.id))
+      .map((r) => ({ id: r.id, version: r.version, type: r.type, name: r.name }));
+    await openStarter(result.description, chosen);
   }
-}
-
-/** 추천 결과 → 검증 가능한 harness.yaml 스타터. */
-function starterYaml(description: string, recs: Recommendation[]): string {
-  const lines: string[] = [];
-  lines.push(`# ${description.replace(/\n/g, " ").slice(0, 100)}`);
-  lines.push("metadata:");
-  lines.push("  id: my-harness");
-  lines.push('  name: "My Harness"');
-  lines.push("model:");
-  lines.push("  name: claude-sonnet-5");
-  lines.push("components:");
-  if (recs.length === 0) {
-    lines.push("  [] # 추천 결과가 없습니다 — 설명을 더 구체적으로.");
-  }
-  for (const r of recs) {
-    lines.push(`  - ref: ${r.id}@${r.version}   # ${r.type} · ${r.name}`);
-  }
-  return `${lines.join("\n")}\n`;
 }
 
 function esc(s: string): string {

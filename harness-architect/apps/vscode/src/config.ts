@@ -43,10 +43,13 @@ function userValue<T>(inspect: ReturnType<vscode.WorkspaceConfiguration["inspect
 /**
  * 서버 실행 사양을 결정한다. 우선순위:
  *   1) 사용자가 명시한 `harness.serverCommand`
- *   2) 확장에 동봉된 자립 바이너리(server/bin) — 파이썬 없는 사용자
+ *   2) (배포/설치 모드) 확장에 동봉된 자립 바이너리(server/bin) — 파이썬 없는 사용자
  *   3) venv 기본값(모노레포 개발자)
+ *
+ * devMode(F5 확장 개발 호스트)에서는 동봉 바이너리를 건너뛰고 venv 를 우선한다 —
+ * 파이썬 패키지의 변경이 재빌드 없이 바로 반영되도록(동결 바이너리는 옛 코드).
  */
-export function readConfig(extensionPath?: string): HarnessConfig {
+export function readConfig(extensionPath?: string, devMode = false): HarnessConfig {
   const cfg = vscode.workspace.getConfiguration("harness");
   const userCommand = userValue<string>(cfg.inspect("serverCommand"));
   const userCatalog = userValue<string>(cfg.inspect("catalogDir"));
@@ -57,7 +60,7 @@ export function readConfig(extensionPath?: string): HarnessConfig {
   let catalogDir: string;
   let source: HarnessConfig["source"];
 
-  const bundled = extensionPath ? bundledServer(extensionPath) : undefined;
+  const bundled = !devMode && extensionPath ? bundledServer(extensionPath) : undefined;
 
   if (userCommand) {
     command = expand(userCommand);
