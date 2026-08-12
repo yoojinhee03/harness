@@ -1,18 +1,18 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, scopePref, subscribeHarnessEvents, type Team } from "../api/client";
-import { Badge, Button, Card, codeBlock, EmptyState, Input, Modal, PageHeader } from "../lib/ui";
+import { Badge, Button, Card, codeBlock, EmptyState, Input, Modal, PageHeader, SkeletonCards } from "../lib/ui";
 import { useToast } from "../lib/toast";
 
 /**
  * 하네스 화면 — 내 personal + 내 팀들의 하네스(스코프 격리). 실시간 동기화(SSE).
  * 인증은 앱 진입 게이트에서 보장되므로 여기선 로그인 UI 가 없다.
  */
-export default function ScreenSync() {
+export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const me = useQuery({ queryKey: ["me"], queryFn: api.me });
-  const { data: list = [], isError } = useQuery({ queryKey: ["harnesses"], queryFn: api.listHarnesses });
+  const { data: list = [], isError, isLoading } = useQuery({ queryKey: ["harnesses"], queryFn: api.listHarnesses });
   const [scope, setScope] = useState(() => scopePref.get());
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [doc, setDoc] = useState<string | null>(null);
@@ -109,8 +109,14 @@ export default function ScreenSync() {
         </Card>
       )}
 
-      {list.length === 0 ? (
-        <EmptyState title="저장된 하네스가 없습니다" hint="생성 흐름의 harness.yaml 단계에서 저장하면 여기에 나타납니다." />
+      {isLoading ? (
+        <SkeletonCards count={3} cols="grid-cols-1" />
+      ) : list.length === 0 ? (
+        <EmptyState
+          title="아직 하네스가 없어요"
+          hint="프로젝트를 설명하면 구성요소를 추천받아 harness.yaml 을 만들 수 있어요. 저장하면 여기와 VSCode 확장에 실시간으로 나타납니다."
+          action={<Button onClick={onCreate}>첫 하네스 만들기 →</Button>}
+        />
       ) : (
         <div className="space-y-2.5">
           {list.map((h) => {

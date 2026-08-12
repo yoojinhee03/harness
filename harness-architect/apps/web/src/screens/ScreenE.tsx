@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, type CatalogItem, type ComponentType } from "../api/client";
-import { Badge, Button, Card, Chip, codeBlock, EmptyState, Input, PageHeader, TYPE_COLOR, TYPE_LABEL } from "../lib/ui";
+import { Badge, Button, Card, Chip, codeBlock, EmptyState, Input, PageHeader, SkeletonCards, TYPE_COLOR, TYPE_LABEL } from "../lib/ui";
 
 const TYPES: ComponentType[] = ["mcp", "skill", "context", "hook"];
 
@@ -56,7 +56,7 @@ export default function ScreenE({ onColdStart }: { onColdStart: () => void }) {
         </div>
 
         {isPending ? (
-          <p className="text-sm text-muted">불러오는 중…</p>
+          <SkeletonCards count={6} />
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">
             {filtered.map((i) => (

@@ -1,10 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, auth, scopePref, type HarnessInput, type Recommendation } from "./api/client";
 import { AppShell, type View } from "./components/AppShell";
 import { CommandPalette } from "./components/CommandPalette";
 import { LoginScreen } from "./components/LoginScreen";
+import { clearDraft, loadDraft, saveDraft } from "./lib/draft";
 import { saveHarness } from "./lib/store";
+
+interface Draft {
+  step: Step;
+  description: string;
+  requirements: string[];
+  recommendations: Recommendation[];
+  groups: Record<string, string[]>;
+  selection: Selection;
+  metadataId: string;
+}
 import ScreenA from "./screens/ScreenA";
 import ScreenB from "./screens/ScreenB";
 import ScreenC from "./screens/ScreenC";
@@ -25,8 +36,9 @@ const STEPS: { key: Step; label: string }[] = [
 
 export default function App() {
   const [authed, setAuthed] = useState(() => auth.token().length > 0);
+  const draft0 = useRef(loadDraft<Draft>()).current; // 새로고침 후 드래프트 복원(1회)
   const [view, setView] = useState<View>("create");
-  const [step, setStep] = useState<Step>("A");
+  const [step, setStep] = useState<Step>(draft0?.step ?? "A");
   const [cmdOpen, setCmdOpen] = useState(false);
 
   // 로그인 후 계정 정보(사이드바 표시). 토큰이 만료/무효면 401 → 자동 로그아웃.
@@ -44,12 +56,17 @@ export default function App() {
     setView("create");
   }
 
-  const [description, setDescription] = useState("");
-  const [requirements, setRequirements] = useState<string[]>([]);
-  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
-  const [groups, setGroups] = useState<Record<string, string[]>>({});
-  const [selection, setSelection] = useState<Selection>({});
-  const [metadataId, setMetadataId] = useState("untitled-harness");
+  const [description, setDescription] = useState(draft0?.description ?? "");
+  const [requirements, setRequirements] = useState<string[]>(draft0?.requirements ?? []);
+  const [recommendations, setRecommendations] = useState<Recommendation[]>(draft0?.recommendations ?? []);
+  const [groups, setGroups] = useState<Record<string, string[]>>(draft0?.groups ?? {});
+  const [selection, setSelection] = useState<Selection>(draft0?.selection ?? {});
+  const [metadataId, setMetadataId] = useState(draft0?.metadataId ?? "untitled-harness");
+
+  // 드래프트 영속 — 탭 이동·새로고침에도 마법사 상태 보존.
+  useEffect(() => {
+    saveDraft({ step, description, requirements, recommendations, groups, selection, metadataId });
+  }, [step, description, requirements, recommendations, groups, selection, metadataId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -93,10 +110,12 @@ export default function App() {
   }
 
   function newHarness() {
+    clearDraft();
     setSelection({});
     setDescription("");
     setRequirements([]);
     setRecommendations([]);
+    setGroups({});
     setMetadataId("untitled-harness");
     setStep("A");
     setView("create");
@@ -151,7 +170,7 @@ export default function App() {
         )}
 
         {view === "catalog" && <ScreenE onColdStart={newHarness} />}
-        {view === "harnesses" && <ScreenSync />}
+        {view === "harnesses" && <ScreenSync onCreate={newHarness} />}
         {view === "settings" && <ScreenSettings />}
       </AppShell>
 

@@ -1,5 +1,4 @@
 import { useMutation } from "@tanstack/react-query";
-import { useState } from "react";
 import { api, type RecommendResult } from "../api/client";
 import { Button, Card, PageHeader, Spinner, Textarea } from "../lib/ui";
 
@@ -18,13 +17,9 @@ export default function ScreenA({
   setDescription: (v: string) => void;
   onResult: (r: RecommendResult) => void;
 }) {
-  const [local, setLocal] = useState(description);
   const mutation = useMutation({
-    mutationFn: () => api.recommend(local, 8),
-    onSuccess: (r) => {
-      setDescription(local);
-      onResult(r);
-    },
+    mutationFn: () => api.recommend(description, 8),
+    onSuccess: (r) => onResult(r),
   });
 
   return (
@@ -37,14 +32,14 @@ export default function ScreenA({
         <Textarea
           className="h-40"
           placeholder="예: PR을 자동으로 리뷰하는 봇을 만들고 싶어요…"
-          value={local}
-          onChange={(e) => setLocal(e.target.value)}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
         />
         <div className="mt-3 flex flex-wrap gap-2">
           {EXAMPLES.map((ex) => (
             <button
               key={ex}
-              onClick={() => setLocal(ex)}
+              onClick={() => setDescription(ex)}
               className="rounded-full border border-line bg-surface-2 px-3 py-1 text-left text-xs text-muted transition-colors hover:text-fg"
             >
               {ex.slice(0, 28)}…
@@ -55,7 +50,7 @@ export default function ScreenA({
           <p className="mt-3 text-sm text-err">추천 요청 실패 — 백엔드(:8000)가 떠 있는지 확인하세요.</p>
         )}
         <div className="mt-5 flex justify-end">
-          <Button onClick={() => mutation.mutate()} disabled={!local.trim() || mutation.isPending}>
+          <Button onClick={() => mutation.mutate()} disabled={!description.trim() || mutation.isPending}>
             {mutation.isPending ? (
               <>
                 <Spinner /> 요구사항 추출 중…

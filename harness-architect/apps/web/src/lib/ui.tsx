@@ -128,11 +128,32 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   );
 }
 
-export function EmptyState({ title, hint }: { title: string; hint?: ReactNode }) {
+export function EmptyState({ title, hint, action }: { title: string; hint?: ReactNode; action?: ReactNode }) {
   return (
-    <div className="rounded-xl border border-dashed border-line px-6 py-10 text-center">
-      <p className="text-sm text-fg">{title}</p>
-      {hint && <p className="mt-1 text-xs text-muted">{hint}</p>}
+    <div className="rounded-xl border border-dashed border-line px-6 py-12 text-center">
+      <p className="text-sm font-medium text-fg">{title}</p>
+      {hint && <p className="mx-auto mt-1 max-w-sm text-xs text-muted">{hint}</p>}
+      {action && <div className="mt-4 flex justify-center">{action}</div>}
+    </div>
+  );
+}
+
+export function Skeleton({ className = "" }: { className?: string }) {
+  return <div className={cx("animate-pulse rounded-lg bg-surface-2", className)} />;
+}
+
+/** 카드형 스켈레톤 그리드(카탈로그·하네스 로딩). */
+export function SkeletonCards({ count = 6, cols = "sm:grid-cols-2" }: { count?: number; cols?: string }) {
+  return (
+    <div className={cx("grid gap-3", cols)}>
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="rounded-xl border border-line bg-surface p-4">
+          <Skeleton className="h-4 w-1/2" />
+          <Skeleton className="mt-2.5 h-3 w-full" />
+          <Skeleton className="mt-1.5 h-3 w-4/5" />
+          <Skeleton className="mt-3 h-5 w-24" />
+        </div>
+      ))}
     </div>
   );
 }
