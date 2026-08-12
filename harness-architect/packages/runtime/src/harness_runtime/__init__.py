@@ -6,6 +6,7 @@ ResolvedHarness → 요청 빌더(system/tools/mcp 조립) + 훅 엔진(이벤�
 
 from __future__ import annotations
 
+from .adopt import AdoptResult, adopt, adopt_dir
 from .builder import BuiltRequest, build_request
 from .emit import ClaudeCodeEmitter, CursorEmitter, Emitter, FileTree, available_targets, emit
 from .eval import CheckResult, EvalCase, EvalCaseResult, EvalExpect, EvalReport, check_expectations, run_eval
@@ -15,6 +16,7 @@ from .runner import AnthropicRunner, RunResult
 from .sandbox import Executor, InProcessExecutor, TimeoutBoundExecutor, default_executors
 
 __all__ = [
+    "AdoptResult",
     "AnthropicRunner",
     "BuiltRequest",
     "CheckResult",
@@ -33,6 +35,8 @@ __all__ = [
     "OpenHarnessRunner",
     "RunResult",
     "TimeoutBoundExecutor",
+    "adopt",
+    "adopt_dir",
     "available_targets",
     "build_request",
     "check_expectations",

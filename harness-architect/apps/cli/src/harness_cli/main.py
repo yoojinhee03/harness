@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 from harness_catalog import build_registry
 from harness_resolver import HarnessConfig, InMemoryRegistry, Registry, ResolveResult, resolve
-from harness_runtime import EvalCase, available_targets, emit, run_eval
+from harness_runtime import EvalCase, adopt_dir, available_targets, emit, run_eval
 
 
 def _load_config(path: str) -> HarnessConfig:
@@ -115,6 +115,15 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_adopt(args: argparse.Namespace) -> int:
+    result = adopt_dir(args.source, _registry(args.catalog), harness_id=args.id)
+    doc = result.config.model_dump(exclude_none=True, exclude_defaults=True, by_alias=True)
+    print(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False).rstrip())
+    for note in result.notes:
+        print(f"# {note}", file=sys.stderr)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="harness", description="harness.yaml 을 resolve/eject 한다.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -137,6 +146,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.add_argument("--cases", required=True, help="eval 케이스 YAML 경로(cases: [...])")
     p_eval.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
     p_eval.set_defaults(func=cmd_eval)
+
+    p_adopt = sub.add_parser("adopt", help="기존 네이티브 설정(.claude/.cursor)을 harness.yaml IR 로 역흡수한다.")
+    p_adopt.add_argument("source", help="네이티브 설정이 있는 디렉터리")
+    p_adopt.add_argument("--id", default="adopted", help="생성할 harness metadata.id")
+    p_adopt.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
+    p_adopt.set_defaults(func=cmd_adopt)
 
     return parser
 
