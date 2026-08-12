@@ -10,3 +10,5 @@
 - 챗 참가자 `@harness` — Copilot Chat 패널에서 프로젝트를 설명하면 카탈로그 근거로 추천.
   그라운딩은 MCP 서버(recommend), 벤치마크 이유 표현은 사용자의 Copilot 모델(request.model),
   정확한 ref 목록 + "harness.yaml 스타터 생성" 버튼 + 후속 프롬프트 제안.
+- '내 하네스(동기화)' 뷰 — 웹과 같은 백엔드(`harness.apiUrl`)에 harness.yaml 을 저장/열기하고
+  SSE 로 웹·다른 에디터의 변경을 실시간 수신(양방향 동기화). editor/title 저장 버튼.

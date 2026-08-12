@@ -15,6 +15,7 @@
 | **Harness: eject** | 검증된 하네스를 `claude-code`·`cursor` 포맷으로 컴파일. 워크스페이스에 쓰기 또는 미리보기 |
 | **카탈로그 사이드바** | 액티비티바의 Harness Architect 아이콘 → 컴포넌트를 type 별로 탐색, 클릭 시 `id@version` 복사 |
 | **챗 참가자 `@harness`** | Copilot Chat 패널에서 `@harness <설명>` → 카탈로그 근거 추천을 대화로 |
+| **내 하네스(동기화)** | 웹과 같은 백엔드에 harness.yaml 저장/열기 · SSE 로 웹↔확장 실시간 양방향 동기화 |
 
 `*.harness.yaml` / `harness.yaml` 파일 상단엔 **resolve · eject 코드렌즈**가 뜬다.
 
@@ -31,6 +32,14 @@ Copilot Chat 패널(Agent/Ask)에서:
 reason 폴백) → ③ **정확한 ref 목록**(권위 있는 그라운딩) + **"harness.yaml 스타터 생성" 버튼**.
 후속 프롬프트 제안("MCP만", "알림 방식 바꾸기")으로 멀티턴 정제. Copilot(또는 다른 LM 제공자)이
 설치돼 있어야 모델 표현이 동작한다.
+
+### 내 하네스 — 웹과 실시간 동기화
+
+'내 하네스(동기화)' 뷰는 **웹 앱과 같은 FastAPI 백엔드**(`harness.apiUrl`, 기본 `http://localhost:8000`)를
+공유 허브로 씁니다. `harness.yaml` 을 연 뒤 편집기 상단 **`$(cloud-upload)` 저장** 버튼 → 백엔드에 저장되면
+**웹의 "동기화" 화면에도 즉시** 나타나고, 반대로 웹/다른 에디터에서 저장한 것이 이 뷰에 **SSE 로 실시간** 뜹니다.
+트리 항목 클릭 = 열기, `$(trash)` = 삭제. 이 기능만 백엔드(HTTP)가 떠 있어야 하며, 로컬 recommend/resolve/
+eject 는 MCP 서버로 그대로 동작합니다.
 
 ## 백엔드 서버 — 두 가지 모드
 

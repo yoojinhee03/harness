@@ -87,6 +87,17 @@ export interface EjectResult {
   files: Record<string, string> | null;
 }
 
+export interface HarnessSummary {
+  id: string;
+  name: string;
+  description: string;
+  updated_at: string;
+}
+
+export interface HarnessDoc extends HarnessSummary {
+  yaml: string;
+}
+
 export interface SelectionInput {
   ref: string;
   config?: Record<string, unknown>;
@@ -140,4 +151,22 @@ export const api = {
     send<KeyStatus>("PUT", "/settings/keys", body),
   deleteKey: (provider: string) => send<KeyStatus>("DELETE", `/settings/keys/${provider}`),
   verifyKeys: () => send<Record<string, string>>("POST", "/settings/keys/verify"),
+
+  // ── 공유 하네스 저장소 (VSCode 확장과 동일 백엔드 — 양방향 동기화) ──
+  listHarnesses: () =>
+    fetch(`${BASE}/harnesses`).then((r) => r.json() as Promise<HarnessSummary[]>),
+  getHarness: (id: string) =>
+    fetch(`${BASE}/harnesses/${encodeURIComponent(id)}`).then((r) => r.json() as Promise<HarnessDoc>),
+  putHarness: (id: string, body: { name: string; description: string; yaml: string }) =>
+    send<HarnessDoc>("PUT", `/harnesses/${encodeURIComponent(id)}`, body),
+  deleteHarness: (id: string) => send<{ ok: boolean }>("DELETE", `/harnesses/${encodeURIComponent(id)}`),
 };
+
+/** 저장소 변경(upsert/delete)을 SSE 로 실시간 구독. 언구독 함수를 반환. 브라우저가 자동 재연결. */
+export function subscribeHarnessEvents(onEvent: (type: string) => void): () => void {
+  const es = new EventSource(`${BASE}/harnesses/events`);
+  for (const t of ["ready", "upsert", "delete"]) {
+    es.addEventListener(t, () => onEvent(t));
+  }
+  return () => es.close();
+}

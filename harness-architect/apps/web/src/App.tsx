@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { HarnessInput, Recommendation } from "./api/client";
+import { api, type HarnessInput, type Recommendation } from "./api/client";
 import { saveHarness, type SavedHarness } from "./lib/store";
 import ScreenA from "./screens/ScreenA";
 import ScreenB from "./screens/ScreenB";
@@ -8,9 +8,10 @@ import ScreenD from "./screens/ScreenD";
 import ScreenE from "./screens/ScreenE";
 import ScreenF from "./screens/ScreenF";
 import ScreenSettings from "./screens/ScreenSettings";
+import ScreenSync from "./screens/ScreenSync";
 
 export type Step = "A" | "B" | "C" | "D";
-export type View = "create" | "catalog" | "dashboard" | "settings";
+export type View = "create" | "catalog" | "dashboard" | "sync" | "settings";
 
 const STEPS: { key: Step; label: string }[] = [
   { key: "A", label: "설명" },
@@ -23,6 +24,7 @@ const NAV: { key: View; label: string }[] = [
   { key: "create", label: "생성" },
   { key: "catalog", label: "카탈로그" },
   { key: "dashboard", label: "대시보드" },
+  { key: "sync", label: "동기화" },
   { key: "settings", label: "설정" },
 ];
 
@@ -59,6 +61,10 @@ export default function App() {
       components: Object.values(selection),
       permissions: harnessInput.permissions ?? {},
     });
+    // 공유 백엔드에도 저장 → VSCode 확장·다른 웹에 실시간 동기화(백엔드 꺼져 있으면 조용히 무시).
+    api
+      .putHarness(metadataId, { name: harnessInput.metadata?.name || metadataId, description: description.slice(0, 120), yaml })
+      .catch(() => undefined);
   }
 
   function reopen(h: SavedHarness) {
@@ -133,6 +139,7 @@ export default function App() {
 
       {view === "catalog" && <ScreenE onColdStart={newHarness} />}
       {view === "dashboard" && <ScreenF onNew={newHarness} onReopen={reopen} />}
+      {view === "sync" && <ScreenSync />}
       {view === "settings" && <ScreenSettings />}
 
       {view === "create" && step === "A" && (
