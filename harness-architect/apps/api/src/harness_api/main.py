@@ -18,8 +18,9 @@ from contextlib import asynccontextmanager
 from typing import Any, cast
 
 import yaml
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from harness_catalog import Recommender, build_registry, resolve_catalog_dir
 from harness_resolver import HarnessConfig, InMemoryRegistry, ResolveResult, resolve
 from harness_runtime import AnthropicRunner, available_targets, build_request, emit
@@ -29,6 +30,13 @@ from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
 
 from .accounts import AccountStore
+from .observability import (
+    ObservabilityMiddleware,
+    configure_logging,
+    db_ready,
+    init_sentry,
+    metrics_response,
+)
 from .schemas import (
     CatalogItem,
     GenerateResponse,
@@ -60,6 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 저장소 DB(SQL) + 계정(사용자·팀) + SSE 브로드캐스터. DATABASE_URL 없으면 SQLite(store 폴더).
     from .db import make_engine, resolve_database_url
 
+    init_sentry()  # SENTRY_DSN 있으면 에러 트래킹
     engine = make_engine(resolve_database_url(resolve_store_dir()))
     app.state.engine = engine
     app.state.store = HarnessStore(engine)
@@ -81,6 +90,10 @@ limiter = Limiter(key_func=get_remote_address, enabled=os.environ.get("HARNESS_R
 app.state.limiter = limiter
 # slowapi 핸들러 시그니처(RateLimitExceeded)와 Starlette 기대(Exception)의 타입 불일치 — 런타임 정상.
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+
+# 관측성 — 구조적 로깅 + 요청 ID·메트릭 미들웨어(순수 ASGI, SSE 안전).
+configure_logging()
+app.add_middleware(ObservabilityMiddleware)
 
 # CORS — 기본 거부(빈 allowlist). 웹은 리버스 프록시로 동일 오리진, 확장은 Node fetch(브라우저 CORS
 # 무관)라 기본은 필요 없다. 크로스 오리진으로 API 를 직접 노출할 때만 HARNESS_CORS_ORIGINS(쉼표 구분).
@@ -105,8 +118,22 @@ def _recommender(request: Request) -> Recommender:
 
 @app.get("/health")
 def health(request: Request) -> dict[str, Any]:
+    """라이브니스 — 프로세스가 떠 있는지."""
     reg = _registry(request)
     return {"status": "ok", "catalog_size": len(reg.all())}
+
+
+@app.get("/ready")
+def ready(request: Request) -> Response:
+    """레디니스 — 트래픽 받을 준비(DB 연결). 실패 시 503(로드밸런서가 제외)."""
+    ok = db_ready(request.app.state.engine)
+    return JSONResponse({"ready": ok}, status_code=200 if ok else 503)
+
+
+@app.get("/metrics")
+def metrics() -> Response:
+    """Prometheus 스크레이프 — 요청 수/지연."""
+    return metrics_response()
 
 
 # ─────────── 설정: LLM 키 상태 (배포 env 전용 · 읽기전용) ───────────

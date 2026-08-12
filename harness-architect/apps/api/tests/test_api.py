@@ -23,6 +23,15 @@ def test_health(client):
     assert r.json()["catalog_size"] == 13  # 시드 10 + 프롬프트 조각 3
 
 
+def test_observability_ready_metrics_request_id(client):
+    """관측성 — 준비도(DB)·Prometheus 메트릭·요청 ID 헤더."""
+    h = client.get("/health")
+    assert any(k.lower() == "x-request-id" for k in h.headers)  # 요청 ID 전파
+    assert client.get("/ready").json()["ready"] is True  # DB 연결 OK
+    m = client.get("/metrics")
+    assert m.status_code == 200 and "harness_http_requests_total" in m.text
+
+
 def test_catalog_list_and_filter(client):
     assert len(client.get("/catalog").json()) == 13
     mcp = client.get("/catalog", params={"type": "mcp"}).json()
