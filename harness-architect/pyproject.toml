@@ -20,6 +20,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "httpx>=0.27",
+    "alembic>=1.13",
 ]
 
 [tool.ruff]
@@ -27,6 +28,8 @@ dev = [
 line-length = 120
 target-version = "py312"
 src = ["packages", "apps"]
+# Alembic 자동생성 마이그레이션은 린트 제외(생성물).
+extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

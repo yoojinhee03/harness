@@ -24,6 +24,13 @@ jobs:
       - name: Test (pytest)
         working-directory: harness-architect
         run: uv run pytest -q
+      - name: Migrations up-to-date (alembic)
+        working-directory: harness-architect
+        env:
+          DATABASE_URL: sqlite:///ci-migrations.db
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check # 모델↔마이그레이션 드리프트 시 실패(마이그레이션 누락 방지)
       - name: Audit (pip-audit)
         working-directory: harness-architect
         run: uv run --with pip-audit pip-audit || true # 리포트 전용(초기 non-blocking)

@@ -18,3 +18,6 @@ apps/web/.vite/
 
 # OS/editor
 .DS_Store
+
+# alembic/로컬 sqlite
+*.db
