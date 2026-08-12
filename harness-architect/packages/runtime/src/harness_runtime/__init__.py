@@ -10,6 +10,7 @@ from .builder import BuiltRequest, build_request
 from .emit import ClaudeCodeEmitter, CursorEmitter, Emitter, FileTree, available_targets, emit
 from .eval import CheckResult, EvalCase, EvalCaseResult, EvalExpect, EvalReport, check_expectations, run_eval
 from .hooks import HookEngine, HookOutcome
+from .openharness_runner import OpenHarnessRunner
 from .runner import AnthropicRunner, RunResult
 from .sandbox import Executor, InProcessExecutor, TimeoutBoundExecutor, default_executors
 
@@ -29,6 +30,7 @@ __all__ = [
     "HookEngine",
     "HookOutcome",
     "InProcessExecutor",
+    "OpenHarnessRunner",
     "RunResult",
     "TimeoutBoundExecutor",
     "available_targets",
