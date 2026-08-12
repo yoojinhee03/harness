@@ -18,12 +18,20 @@ const TITLE: Record<View, { title: string; sub: string }> = {
   settings: { title: "설정", sub: "API 키 · 품질 모드" },
 };
 
+interface WsTeam {
+  id: string;
+  name: string;
+}
+
 export function AppShell({
   view,
   setView,
   onCmdK,
   account,
   onLogout,
+  workspace,
+  setWorkspace,
+  teams = [],
   headerRight,
   children,
 }: {
@@ -32,12 +40,21 @@ export function AppShell({
   onCmdK: () => void;
   account?: string;
   onLogout?: () => void;
+  workspace?: string;
+  setWorkspace?: (s: string) => void;
+  teams?: WsTeam[];
   headerRight?: ReactNode;
   children: ReactNode;
 }) {
   const [theme, toggleTheme] = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [wsOpen, setWsOpen] = useState(false);
   const t = TITLE[view];
+
+  const wsLabel =
+    !workspace || workspace === "personal"
+      ? "개인"
+      : (teams.find((x) => `team:${x.id}` === workspace)?.name ?? workspace.slice(5));
 
   return (
     <div className="flex h-full">
@@ -49,6 +66,40 @@ export function AppShell({
           </div>
           <span className="text-sm font-semibold tracking-tight">Harness</span>
         </div>
+
+        {/* 워크스페이스 스위처 — 개인/팀 전역 컨텍스트 */}
+        {setWorkspace && (
+          <div className="relative px-3 pb-2">
+            <button
+              onClick={() => setWsOpen((o) => !o)}
+              className="flex w-full items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-sm transition-colors hover:border-muted/40"
+            >
+              <span className="grid h-5 w-5 shrink-0 place-items-center rounded bg-accent/20 text-[10px] font-semibold text-accent">
+                {wsLabel.slice(0, 1).toUpperCase()}
+              </span>
+              <span className="truncate text-fg">{wsLabel}</span>
+              <IconChevronDown />
+            </button>
+            {wsOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setWsOpen(false)} />
+                <div className="absolute left-3 right-3 z-50 mt-1 rounded-lg border border-line bg-surface p-1 shadow-panel">
+                  <div className="px-2.5 py-1 text-[10px] uppercase tracking-wide text-muted">워크스페이스</div>
+                  <MenuItem onClick={() => { setWorkspace("personal"); setWsOpen(false); }}>
+                    <span className={workspace === "personal" || !workspace ? "text-fg" : ""}>개인</span>
+                  </MenuItem>
+                  {teams.map((tm) => (
+                    <MenuItem key={tm.id} onClick={() => { setWorkspace(`team:${tm.id}`); setWsOpen(false); }}>
+                      👥 {tm.name}
+                    </MenuItem>
+                  ))}
+                  <div className="my-1 border-t border-line" />
+                  <MenuItem onClick={() => { setView("harnesses"); setWsOpen(false); }}>팀 관리 →</MenuItem>
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         <button
           onClick={onCmdK}
@@ -137,6 +188,7 @@ function IconSearch() { return <svg {...S} width={13} height={13}><circle cx="11
 function IconSun() { return <svg {...S}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19" /></svg>; }
 function IconMoon() { return <svg {...S}><path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z" /></svg>; }
 function IconChevron() { return <svg {...S} width={14} height={14} className="ml-auto text-muted"><path d="M6 15l6-6 6 6" /></svg>; }
+function IconChevronDown() { return <svg {...S} width={14} height={14} className="ml-auto text-muted"><path d="M6 9l6 6 6-6" /></svg>; }
 
 function MenuItem({ children, onClick, danger }: { children: ReactNode; onClick: () => void; danger?: boolean }) {
   return (

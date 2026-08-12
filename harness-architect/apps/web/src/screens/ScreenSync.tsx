@@ -1,23 +1,21 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, scopePref, subscribeHarnessEvents, type Team } from "../api/client";
+import { api, subscribeHarnessEvents, type Team } from "../api/client";
 import { diffLines } from "../lib/diff";
-import { Badge, Button, Card, codeBlock, EmptyState, Input, Modal, PageHeader, SkeletonCards } from "../lib/ui";
 import { useToast } from "../lib/toast";
+import { Badge, Button, Card, codeBlock, EmptyState, Input, Modal, PageHeader, SkeletonCards } from "../lib/ui";
 
 /**
- * 하네스 화면 — 내 personal + 내 팀들의 하네스(스코프 격리). 실시간 동기화(SSE).
- * 인증은 앱 진입 게이트에서 보장되므로 여기선 로그인 UI 가 없다.
+ * 하네스 화면 — 현재 워크스페이스(개인/팀)의 하네스. 워크스페이스 전환은 사이드바 스위처가,
+ * 여기선 그 스코프의 하네스 목록·버전·팀 관리를 다룬다. 인증은 앱 게이트에서 보장.
  */
-export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
+export default function ScreenSync({ onCreate, workspace }: { onCreate: () => void; workspace: string }) {
   const qc = useQueryClient();
   const toast = useToast();
   const me = useQuery({ queryKey: ["me"], queryFn: api.me });
   const { data: list = [], isError, isLoading } = useQuery({ queryKey: ["harnesses"], queryFn: api.listHarnesses });
-  const [scope, setScope] = useState(() => scopePref.get());
   const [openKey, setOpenKey] = useState<string | null>(null);
 
-  // 다이얼로그 상태(네이티브 prompt/confirm 대체)
   const [teamName, setTeamName] = useState<string | null>(null);
   const [inviteFor, setInviteFor] = useState<Team | null>(null);
   const [inviteHandle, setInviteHandle] = useState("");
@@ -25,23 +23,22 @@ export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
 
   useEffect(() => subscribeHarnessEvents(() => qc.invalidateQueries({ queryKey: ["harnesses"] })), [qc]);
 
-  function pickScope(s: string) {
-    setScope(s);
-    scopePref.set(s);
-  }
   const teams: Team[] = me.data?.teams ?? [];
+  const isTeamWs = workspace.startsWith("team:");
+  const wsLabel = isTeamWs ? (teams.find((t) => `team:${t.id}` === workspace)?.name ?? workspace.slice(5)) : "개인";
+  const shown = list.filter((h) => (isTeamWs ? h.scope === workspace : h.scope.startsWith("personal:")));
 
   function toggleOpen(key: string) {
     setOpenKey((k) => (k === key ? null : key));
   }
   async function confirmDelete() {
     if (!delFor) return;
-    const target = delFor;
+    const t = delFor;
     setDelFor(null);
     try {
-      await api.deleteHarness(target.id, target.scope);
+      await api.deleteHarness(t.id, t.scope);
       qc.invalidateQueries({ queryKey: ["harnesses"] });
-      toast(`삭제됨: ${target.name}`);
+      toast(`삭제됨: ${t.name}`);
     } catch (e) {
       toast(e instanceof Error ? e.message : "삭제 실패", "error");
     }
@@ -75,25 +72,19 @@ export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <PageHeader title="하네스" subtitle="내 하네스 · 팀 공유 · 실시간 동기화(SSE) · VSCode 확장과 동일" />
-
-      {/* 저장 스코프 스위처 */}
-      <Card className="mb-3">
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-muted">저장 스코프</span>
-          <ScopeChip active={scope === "personal"} onClick={() => pickScope("personal")}>
-            개인
-          </ScopeChip>
-          {teams.map((t) => (
-            <ScopeChip key={t.id} active={scope === `team:${t.id}`} onClick={() => pickScope(`team:${t.id}`)}>
-              👥 {t.name}
-            </ScopeChip>
-          ))}
-          <button className="ml-1 text-xs text-muted hover:text-fg" onClick={() => setTeamName("")}>
+      <PageHeader
+        title="하네스"
+        subtitle={
+          <>
+            <b className="text-fg">{wsLabel}</b> 워크스페이스 · 실시간 동기화(SSE) · VSCode 확장과 동일. 새 저장은 여기로.
+          </>
+        }
+        actions={
+          <Button variant="subtle" onClick={() => setTeamName("")}>
             + 새 팀
-          </button>
-        </div>
-      </Card>
+          </Button>
+        }
+      />
 
       {isError && (
         <Card className="mb-3 border-warn/40">
@@ -103,16 +94,15 @@ export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
 
       {isLoading ? (
         <SkeletonCards count={3} cols="grid-cols-1" />
-      ) : list.length === 0 ? (
+      ) : shown.length === 0 ? (
         <EmptyState
-          title="아직 하네스가 없어요"
-          hint="프로젝트를 설명하면 구성요소를 추천받아 harness.yaml 을 만들 수 있어요. 저장하면 여기와 VSCode 확장에 실시간으로 나타납니다."
+          title={isTeamWs ? `${wsLabel} 팀에 아직 하네스가 없어요` : "아직 하네스가 없어요"}
+          hint="프로젝트를 설명해 harness.yaml 을 만들고 저장하면 이 워크스페이스와 VSCode 확장에 실시간으로 나타납니다."
           action={<Button onClick={onCreate}>첫 하네스 만들기 →</Button>}
         />
       ) : (
         <div className="space-y-2.5">
-          {list.map((h) => {
-            const isTeam = h.scope.startsWith("team:");
+          {shown.map((h) => {
             const key = `${h.scope}/${h.id}`;
             return (
               <Card key={key}>
@@ -120,9 +110,6 @@ export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-fg">{h.name || h.id}</span>
-                      <Badge className={isTeam ? "bg-violet-500/15 text-violet-400" : "bg-surface-2 text-muted"}>
-                        {isTeam ? `👥 ${h.scope.slice(5)}` : "개인"}
-                      </Badge>
                       {h.version > 1 && <Badge className="bg-surface-2 text-muted">v{h.version}</Badge>}
                     </div>
                     <div className="mt-1 text-xs text-muted">
@@ -170,42 +157,22 @@ export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
         </div>
       )}
 
-      {/* ── 다이얼로그 ── */}
+      {/* 다이얼로그 */}
       {teamName !== null && (
         <Modal title="새 팀 만들기" onClose={() => setTeamName(null)}>
-          <Input
-            autoFocus
-            placeholder="팀 이름"
-            value={teamName}
-            onChange={(e) => setTeamName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && createTeam()}
-          />
+          <Input autoFocus placeholder="팀 이름" value={teamName} onChange={(e) => setTeamName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createTeam()} />
           <div className="mt-3 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setTeamName(null)}>
-              취소
-            </Button>
-            <Button onClick={createTeam} disabled={!teamName.trim()}>
-              만들기
-            </Button>
+            <Button variant="ghost" onClick={() => setTeamName(null)}>취소</Button>
+            <Button onClick={createTeam} disabled={!teamName.trim()}>만들기</Button>
           </div>
         </Modal>
       )}
       {inviteFor && (
         <Modal title={`${inviteFor.name} — 멤버 초대`} onClose={() => setInviteFor(null)}>
-          <Input
-            autoFocus
-            placeholder="추가할 멤버 handle"
-            value={inviteHandle}
-            onChange={(e) => setInviteHandle(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && invite()}
-          />
+          <Input autoFocus placeholder="추가할 멤버 handle" value={inviteHandle} onChange={(e) => setInviteHandle(e.target.value)} onKeyDown={(e) => e.key === "Enter" && invite()} />
           <div className="mt-3 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setInviteFor(null)}>
-              취소
-            </Button>
-            <Button onClick={invite} disabled={!inviteHandle.trim()}>
-              초대
-            </Button>
+            <Button variant="ghost" onClick={() => setInviteFor(null)}>취소</Button>
+            <Button onClick={invite} disabled={!inviteHandle.trim()}>초대</Button>
           </div>
         </Modal>
       )}
@@ -215,12 +182,8 @@ export default function ScreenSync({ onCreate }: { onCreate: () => void }) {
             <b className="text-fg">{delFor.name}</b> 를 삭제할까요? ({delFor.scope})
           </p>
           <div className="mt-4 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setDelFor(null)}>
-              취소
-            </Button>
-            <Button variant="danger" onClick={confirmDelete}>
-              삭제
-            </Button>
+            <Button variant="ghost" onClick={() => setDelFor(null)}>취소</Button>
+            <Button variant="danger" onClick={confirmDelete}>삭제</Button>
           </div>
         </Modal>
       )}
@@ -233,7 +196,7 @@ function HistoryPanel({ id, scope }: { id: string; scope: string }) {
     queryKey: ["versions", scope, id],
     queryFn: () => api.harnessVersions(id, scope),
   });
-  const [sel, setSel] = useState<number | null>(null); // 비교할 이전 버전(null=최신 원문)
+  const [sel, setSel] = useState<number | null>(null);
 
   if (isLoading || versions.length === 0) return <pre className={`mt-3 ${codeBlock}`}> </pre>;
   const latest = versions[0];
@@ -282,18 +245,5 @@ function DiffView({ oldText, newText }: { oldText: string; newText: string }) {
         </div>
       ))}
     </pre>
-  );
-}
-
-function ScopeChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-        active ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted hover:text-fg"
-      }`}
-    >
-      {children}
-    </button>
   );
 }

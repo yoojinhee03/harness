@@ -40,6 +40,11 @@ export default function App() {
   const [view, setView] = useState<View>("create");
   const [step, setStep] = useState<Step>(draft0?.step ?? "A");
   const [cmdOpen, setCmdOpen] = useState(false);
+  const [workspace, setWorkspaceState] = useState(() => scopePref.get()); // 전역 워크스페이스(개인/팀)
+  const setWorkspace = (s: string) => {
+    scopePref.set(s);
+    setWorkspaceState(s);
+  };
 
   // 로그인 후 계정 정보(사이드바 표시). 토큰이 만료/무효면 401 → 자동 로그아웃.
   const meQ = useQuery({ queryKey: ["me"], queryFn: api.me, enabled: authed, retry: false });
@@ -101,7 +106,7 @@ export default function App() {
       permissions: harnessInput.permissions ?? {},
     });
     api
-      .putHarness(metadataId, scopePref.get(), {
+      .putHarness(metadataId, workspace, {
         name: harnessInput.metadata?.name || metadataId,
         description: description.slice(0, 120),
         yaml,
@@ -136,6 +141,9 @@ export default function App() {
         onCmdK={() => setCmdOpen(true)}
         account={meQ.data?.handle}
         onLogout={logout}
+        workspace={workspace}
+        setWorkspace={setWorkspace}
+        teams={meQ.data?.teams ?? []}
         headerRight={view === "create" ? <StepNav step={step} setStep={setStep} maxStep={maxStep} /> : undefined}
       >
         {view === "create" && step === "A" && (
@@ -170,7 +178,7 @@ export default function App() {
         )}
 
         {view === "catalog" && <ScreenE onColdStart={newHarness} />}
-        {view === "harnesses" && <ScreenSync onCreate={newHarness} />}
+        {view === "harnesses" && <ScreenSync onCreate={newHarness} workspace={workspace} />}
         {view === "settings" && <ScreenSettings onLogout={logout} />}
       </AppShell>
 
