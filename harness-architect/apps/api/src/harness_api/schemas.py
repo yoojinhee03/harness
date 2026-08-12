@@ -101,11 +101,30 @@ class GenerateResponse(BaseModel):
 
 
 class HarnessSaveBody(BaseModel):
-    """공유 하네스 저장소 upsert 본문 — 웹·VSCode 확장이 같은 백엔드로 저장/동기화."""
+    """공유 하네스 저장소 upsert 본문 — 웹·VSCode 확장이 같은 백엔드로 저장/동기화.
+    스코프(personal|team:<id>)는 쿼리 파라미터로 받는다."""
 
     name: str = ""
     description: str = ""
     yaml: str = Field(min_length=1)
+
+
+class RegisterBody(BaseModel):
+    """사용자 등록 — handle 로 계정 생성, 토큰 발급(멀티테넌시 신원)."""
+
+    handle: str = Field(min_length=1, max_length=64)
+
+
+class TeamCreateBody(BaseModel):
+    """자가서브 팀 생성 — 생성자가 owner·첫 멤버."""
+
+    name: str = Field(min_length=1, max_length=64)
+
+
+class MemberBody(BaseModel):
+    """팀 멤버 초대 — handle 로 지정."""
+
+    handle: str = Field(min_length=1)
 
 
 class RunRequest(ResolveRequest):

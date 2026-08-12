@@ -18,23 +18,27 @@ from contextlib import asynccontextmanager
 from typing import Any, cast
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from harness_catalog import Recommender, build_registry, resolve_catalog_dir
 from harness_resolver import HarnessConfig, InMemoryRegistry, ResolveResult, resolve
 from harness_runtime import AnthropicRunner, available_targets, build_request, emit
 from sse_starlette.sse import EventSourceResponse
 
+from .accounts import AccountStore
 from .schemas import (
     CatalogItem,
     GenerateResponse,
     HarnessSaveBody,
     KeyUpdate,
+    MemberBody,
     RecommendRequest,
+    RegisterBody,
     ResolveRequest,
     RunRequest,
+    TeamCreateBody,
 )
-from .store import Broadcaster, HarnessStore, event_stream, resolve_store_dir
+from .store import Broadcaster, HarnessStore, event_stream, resolve_store_dir, safe_id
 
 log = logging.getLogger("harness_api")
 
@@ -52,11 +56,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.registry = registry
     app.state.keys = {}  # 런타임 API 키(메모리만 — 디스크 저장 안 함)
     app.state.recommender = Recommender(registry)
-    # 공유 하네스 저장소 + SSE 브로드캐스터 — 웹·확장이 같은 백엔드로 동기화.
+    # 공유 하네스 저장소(스코프 격리) + 계정(사용자·팀) + SSE 브로드캐스터.
     store_dir = resolve_store_dir()
-    app.state.store = HarnessStore(store_dir)
+    app.state.store = HarnessStore(store_dir / "harnesses")
+    app.state.accounts = AccountStore(store_dir / "accounts")
     app.state.broadcaster = Broadcaster()
-    log.info("하네스 저장소: %s", store_dir)
+    log.info("하네스 저장소: %s (스코프 격리 · 계정 인증)", store_dir)
     yield
 
 
@@ -282,7 +287,7 @@ def eject_endpoint(
     return {"ok": True, "target": target, "files": emit(result.resolved, target)}
 
 
-# ─────────────── 공유 하네스 저장소 (웹 ↔ VSCode 확장 양방향 동기화) ───────────────
+# ─────────────── 멀티테넌시: 인증(Bearer) + 팀(자가서브) + 스코프 격리 저장소 ───────────────
 
 
 def _store(request: Request) -> HarnessStore:
@@ -293,42 +298,146 @@ def _broadcaster(request: Request) -> Broadcaster:
     return cast(Broadcaster, request.app.state.broadcaster)
 
 
+def _accounts(request: Request) -> AccountStore:
+    return cast(AccountStore, request.app.state.accounts)
+
+
+async def current_user(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    token: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """Bearer 토큰으로 사용자 신원 확인. SSE(EventSource)는 헤더를 못 실어 ?token= 도 허용."""
+    raw = ""
+    if authorization and authorization.lower().startswith("bearer "):
+        raw = authorization[7:].strip()
+    elif token:
+        raw = token
+    user = _accounts(request).user_by_token(raw)
+    if user is None:
+        raise HTTPException(status_code=401, detail="인증 필요 — Bearer 토큰(/auth/register 로 발급)")
+    return user
+
+
+def _resolve_scope(request: Request, user: dict[str, Any], scope: str) -> str:
+    """쿼리 scope('personal'|'team:<tid>')를 스코프 키로. 팀은 멤버십을 검사(격리)."""
+    if scope in ("", "personal"):
+        return f"personal:{user['id']}"
+    if scope.startswith("team:"):
+        tid = scope[len("team:") :]
+        if not _accounts(request).is_member(tid, user["id"]):
+            raise HTTPException(status_code=403, detail="이 팀의 멤버가 아닙니다")
+        return f"team:{tid}"
+    raise HTTPException(status_code=400, detail=f"잘못된 scope: {scope} (personal|team:<id>)")
+
+
+# ── 인증 · 팀 ──
+
+
+@app.post("/auth/register")
+def register(request: Request, body: RegisterBody) -> dict[str, Any]:
+    """handle 로 계정 생성 + 토큰 발급(원문은 이 응답에서만 노출)."""
+    try:
+        return _accounts(request).register(body.handle)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/me")
+def whoami(request: Request, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    return {**user, "teams": _accounts(request).teams_of(user["id"])}
+
+
+@app.post("/teams")
+def create_team(
+    request: Request, body: TeamCreateBody, user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    return _accounts(request).create_team(body.name, user["id"])
+
+
+@app.get("/teams")
+def list_teams(request: Request, user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+    return _accounts(request).teams_of(user["id"])
+
+
+@app.post("/teams/{tid}/members")
+def add_team_member(
+    request: Request, tid: str, body: MemberBody, user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    try:
+        return _accounts(request).add_member(tid, user["id"], body.handle)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ── 스코프 격리 하네스 저장소 (웹 ↔ VSCode 확장 양방향 동기화) ──
+
+
 @app.get("/harnesses")
-def list_harnesses(request: Request) -> list[dict[str, Any]]:
-    """저장된 하네스 요약 목록(최신순). yaml 본문은 상세에서."""
-    return _store(request).list()
+def list_harnesses(request: Request, user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+    """내 가시 스코프(personal + 내 팀들)의 하네스 요약 목록(최신순)."""
+    scopes = sorted(_accounts(request).visible_scope_keys(user["id"]))
+    return _store(request).list_scopes(scopes)
 
 
 # ⚠ 라우트 순서: 고정 경로(/harnesses/events)를 {hid} 보다 먼저 선언해야 매칭이 가로채이지 않는다.
 @app.get("/harnesses/events")
-async def harness_events(request: Request) -> EventSourceResponse:
-    """SSE — 저장소 변경(upsert/delete)을 실시간 푸시. 연결 시 현재 목록을 ready 로 먼저 보낸다."""
-    return EventSourceResponse(event_stream(_store(request), _broadcaster(request)))
+async def harness_events(
+    request: Request, user: dict[str, Any] = Depends(current_user)
+) -> EventSourceResponse:
+    """SSE — 내 가시 스코프의 변경만 실시간 푸시. 연결 시 현재 목록을 ready 로 먼저 보낸다."""
+    scopes = _accounts(request).visible_scope_keys(user["id"])
+    return EventSourceResponse(event_stream(_store(request), _broadcaster(request), scopes))
 
 
 @app.get("/harnesses/{hid}")
-def get_harness(request: Request, hid: str) -> dict[str, Any]:
-    doc = _store(request).get(hid)
+def get_harness(
+    request: Request,
+    hid: str,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    sk = _resolve_scope(request, user, scope)
+    doc = _store(request).get(sk, hid)
     if doc is None:
-        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음")
+        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음(scope={scope})")
     return doc
 
 
 @app.put("/harnesses/{hid}")
-async def put_harness(request: Request, hid: str, body: HarnessSaveBody) -> dict[str, Any]:
-    """하네스 저장(upsert). 저장 후 SSE 로 upsert 이벤트를 브로드캐스트 → 다른 클라이언트가 즉시 반영."""
+async def put_harness(
+    request: Request,
+    hid: str,
+    body: HarnessSaveBody,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """하네스 저장(upsert). 스코프(personal|team:<id>) 안에 저장하고 그 스코프 구독자에게 SSE 푸시."""
+    sk = _resolve_scope(request, user, scope)
     store = _store(request)
-    doc = store.put(hid, body.name, body.description, body.yaml)
-    await _broadcaster(request).publish({"type": "upsert", "id": doc["id"], "harness": store.summary(doc)})
+    doc = store.put(sk, hid, user["id"], body.name, body.description, body.yaml)
+    await _broadcaster(request).publish(
+        {"type": "upsert", "id": doc["id"], "scope": sk, "harness": store.summary(doc)}
+    )
     return doc
 
 
 @app.delete("/harnesses/{hid}")
-async def delete_harness(request: Request, hid: str) -> dict[str, Any]:
-    if not _store(request).delete(hid):
-        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음")
-    await _broadcaster(request).publish({"type": "delete", "id": hid})
-    return {"ok": True, "id": hid}
+async def delete_harness(
+    request: Request,
+    hid: str,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    sk = _resolve_scope(request, user, scope)
+    if not _store(request).delete(sk, hid):
+        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음(scope={scope})")
+    await _broadcaster(request).publish({"type": "delete", "id": safe_id(hid), "scope": sk})
+    return {"ok": True, "id": safe_id(hid), "scope": sk}
 
 
 def to_harness_yaml(config: HarnessConfig) -> str:

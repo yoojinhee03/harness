@@ -1,7 +1,7 @@
-"""공유 하네스 저장소 + SSE 테스트 — 웹↔확장 양방향 동기화의 백엔드 계약.
+"""멀티테넌시 저장소 테스트 — 인증(Bearer)·사용자 격리·팀 공유·SSE 스코프.
 
-저장소 디렉터리는 tmp 로 격리한다(HARNESS_STORE_DIR). SSE 는 upsert/delete 가 실제로
-스트림에 실리는지, put 이 응답 + 브로드캐스트를 함께 하는지 확인한다.
+저장소 디렉터리는 tmp 로 격리(HARNESS_STORE_DIR). 핵심 계약: 인증 없으면 접근 불가,
+남의 personal 은 못 보고, 팀 스코프는 멤버만, SSE 는 가시 스코프 이벤트만 흘린다.
 """
 
 from __future__ import annotations
@@ -11,97 +11,142 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+HARNESS_YAML = "metadata:\n  id: pr-bot\nmodel:\n  name: claude-sonnet-5\ncomponents: []\n"
+
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_STORE_DIR", str(tmp_path / "store"))
-    # 저장소 dir 을 env 로 고정한 뒤 앱을 가져와 lifespan 을 태운다.
     from harness_api.main import app
 
     with TestClient(app) as c:
         yield c
 
 
-HARNESS_YAML = "metadata:\n  id: pr-bot\nmodel:\n  name: claude-sonnet-5\ncomponents: []\n"
+def auth(client, handle: str) -> dict[str, str]:
+    """등록 → Bearer 헤더."""
+    r = client.post("/auth/register", json={"handle": handle})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
-def test_crud_roundtrip(client):
-    assert client.get("/harnesses").json() == []
-
-    r = client.put("/harnesses/pr-bot", json={"name": "PR 봇", "description": "리뷰", "yaml": HARNESS_YAML})
-    assert r.status_code == 200
-    doc = r.json()
-    assert doc["id"] == "pr-bot" and doc["yaml"] == HARNESS_YAML and doc["updated_at"]
-
-    lst = client.get("/harnesses").json()
-    assert len(lst) == 1 and lst[0]["id"] == "pr-bot" and "yaml" not in lst[0]  # 목록은 요약만
-
-    got = client.get("/harnesses/pr-bot").json()
-    assert got["yaml"] == HARNESS_YAML and got["name"] == "PR 봇"
-
-    assert client.get("/harnesses/nope").status_code == 404
-
-    assert client.delete("/harnesses/pr-bot").json()["ok"] is True
-    assert client.get("/harnesses").json() == []
-    assert client.delete("/harnesses/pr-bot").status_code == 404
+# ── 인증 ──
 
 
-def test_id_slugified_over_http(client):
-    r = client.put("/harnesses/My Bot!", json={"yaml": HARNESS_YAML})
-    assert r.json()["id"] == "my-bot"  # 공백·특수문자 정규화
-    assert client.get("/harnesses/my-bot").status_code == 200
+def test_requires_auth(client):
+    assert client.get("/harnesses").status_code == 401
+    assert client.get("/me").status_code == 401
+
+
+def test_register_duplicate_409(client):
+    auth(client, "alice")
+    assert client.post("/auth/register", json={"handle": "alice"}).status_code == 409
+
+
+def test_me_lists_teams(client):
+    a = auth(client, "alice")
+    me = client.get("/me", headers=a).json()
+    assert me["id"] == "alice" and me["teams"] == []
+
+
+# ── 사용자 격리 ──
+
+
+def test_personal_isolation(client):
+    a, b = auth(client, "alice"), auth(client, "bob")
+    client.put("/harnesses/secret", json={"name": "S", "yaml": HARNESS_YAML}, headers=a)
+
+    assert [h["id"] for h in client.get("/harnesses", headers=a).json()] == ["secret"]
+    assert client.get("/harnesses", headers=b).json() == []  # bob 은 alice 것을 못 봄
+    assert client.get("/harnesses/secret", headers=b).status_code == 404  # 직접 접근도 격리
+    got = client.get("/harnesses/secret", headers=a).json()
+    assert got["owner_id"] == "alice" and got["scope"] == "personal:alice"
+
+
+# ── 팀 공유(메모리 공유) ──
+
+
+def test_team_sharing(client):
+    a, b = auth(client, "alice"), auth(client, "bob")
+    tid = client.post("/teams", json={"name": "squad"}, headers=a).json()["id"]
+    client.post(f"/teams/{tid}/members", json={"handle": "bob"}, headers=a)
+
+    client.put(
+        "/harnesses/shared", json={"name": "공유", "yaml": HARNESS_YAML},
+        params={"scope": f"team:{tid}"}, headers=a,
+    )
+    # bob(팀원)은 팀 하네스를 봄
+    ids = [h["id"] for h in client.get("/harnesses", headers=b).json()]
+    assert "shared" in ids
+    got = client.get("/harnesses/shared", params={"scope": f"team:{tid}"}, headers=b).json()
+    assert got["yaml"] == HARNESS_YAML and got["scope"] == f"team:{tid}"
+
+
+def test_non_member_forbidden(client):
+    a, c = auth(client, "alice"), auth(client, "carol")
+    tid = client.post("/teams", json={"name": "squad"}, headers=a).json()["id"]
+    r = client.put(
+        "/harnesses/x", json={"yaml": HARNESS_YAML}, params={"scope": f"team:{tid}"}, headers=c
+    )
+    assert r.status_code == 403  # carol 은 멤버가 아님
+    assert client.get("/harnesses", headers=c).json() == []  # 팀 하네스가 목록에도 안 뜸
+
+
+def test_add_member_requires_membership(client):
+    a, b = auth(client, "alice"), auth(client, "bob")
+    auth(client, "carol")
+    tid = client.post("/teams", json={"name": "sq"}, headers=a).json()["id"]
+    # bob(비멤버)이 carol 을 초대 → 403
+    assert client.post(f"/teams/{tid}/members", json={"handle": "carol"}, headers=b).status_code == 403
+
+
+def test_persistence_across_restart(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_STORE_DIR", str(tmp_path / "store"))
+    from harness_api.main import app
+
+    with TestClient(app) as c:
+        h = auth(c, "alice")
+        c.put("/harnesses/keep", json={"yaml": HARNESS_YAML}, headers=h)
+    with TestClient(app) as c2:  # lifespan 재실행 — 디스크에서 재로드(토큰도 유지)
+        assert client_get_ids(c2, h) == ["keep"]
+
+
+def client_get_ids(c, headers):
+    return [x["id"] for x in c.get("/harnesses", headers=headers).json()]
+
+
+# ── SSE 스코프 격리 (제너레이터 직접 구동) ──
+
+
+def test_event_stream_only_visible_scopes(tmp_path):
+    import asyncio
+
+    from harness_api.store import Broadcaster, HarnessStore, event_stream
+
+    async def run() -> None:
+        store = HarnessStore(tmp_path / "h")
+        store.put("personal:alice", "x", "alice", "X", "", HARNESS_YAML)
+        bc = Broadcaster()
+        gen = event_stream(store, bc, {"personal:alice"})
+
+        ready = await gen.__anext__()
+        assert [h["id"] for h in json.loads(ready["data"])["harnesses"]] == ["x"]
+
+        await bc.publish({"type": "upsert", "id": "y", "scope": "personal:bob", "harness": {"id": "y"}})
+        await bc.publish({"type": "upsert", "id": "z", "scope": "personal:alice", "harness": {"id": "z"}})
+        ev = await asyncio.wait_for(gen.__anext__(), timeout=1)
+        # bob 스코프 이벤트는 건너뛰고, alice 스코프 이벤트만 도착
+        assert ev["event"] == "upsert" and json.loads(ev["data"])["id"] == "z"
+
+        await gen.aclose()
+
+    asyncio.run(run())
 
 
 def test_safe_id_blocks_traversal_and_empty():
-    """경로 탈출·빈 입력 방어(파일명 안전 슬러그) — URL 정규화와 무관하게 함수 자체를 검증."""
     from harness_api.store import safe_id
 
     sid = safe_id("../../etc/passwd")
     assert "/" not in sid and not sid.startswith((".", "-"))
     assert safe_id("   ") == "harness"
     assert safe_id("My Bot!") == "my-bot"
-
-
-def test_persistence_across_app_restart(tmp_path, monkeypatch):
-    monkeypatch.setenv("HARNESS_STORE_DIR", str(tmp_path / "store"))
-    from harness_api.main import app
-
-    with TestClient(app) as c:
-        c.put("/harnesses/keep", json={"yaml": HARNESS_YAML})
-    # 새 TestClient(=lifespan 재실행)로도 디스크에서 다시 로드돼야 한다.
-    with TestClient(app) as c2:
-        assert [h["id"] for h in c2.get("/harnesses").json()] == ["keep"]
-
-
-def test_event_stream_yields_ready_then_pushed_events(tmp_path):
-    """SSE 제너레이터 직접 구동 — 연결 시 ready(현재 목록), 이후 publish 된 이벤트를 흘린다.
-
-    (sync TestClient 로 SSE 스트림을 연 채 다른 요청을 하면 교착하므로 제너레이터를 직접 테스트.)
-    """
-    import asyncio
-
-    from harness_api.store import Broadcaster, HarnessStore, event_stream
-
-    async def run() -> None:
-        store = HarnessStore(tmp_path / "store")
-        store.put("existing", "E", "", HARNESS_YAML)
-        bc = Broadcaster()
-        gen = event_stream(store, bc)
-
-        ready = await gen.__anext__()
-        assert ready["event"] == "ready"
-        payload = json.loads(ready["data"])
-        assert [h["id"] for h in payload["harnesses"]] == ["existing"]
-
-        await bc.publish({"type": "upsert", "id": "live", "harness": {"id": "live", "name": "L"}})
-        ev = await asyncio.wait_for(gen.__anext__(), timeout=1)
-        assert ev["event"] == "upsert" and json.loads(ev["data"])["harness"]["name"] == "L"
-
-        await bc.publish({"type": "delete", "id": "live"})
-        ev2 = await asyncio.wait_for(gen.__anext__(), timeout=1)
-        assert ev2["event"] == "delete" and json.loads(ev2["data"])["id"] == "live"
-
-        await gen.aclose()
-        assert bc.subscriber_count == 0  # aclose → finally → unsubscribe
-
-    asyncio.run(run())

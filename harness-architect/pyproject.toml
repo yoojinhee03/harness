@@ -31,6 +31,10 @@ src = ["packages", "apps"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI 관용구 — 의존성 주입은 인자 기본값의 호출이라 B008 대상이나, 프레임워크 계약이다.
+extend-immutable-calls = ["fastapi.Depends"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

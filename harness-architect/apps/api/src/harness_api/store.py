@@ -1,8 +1,9 @@
-"""공유 하네스 저장소 + SSE 브로드캐스터.
+"""공유 하네스 저장소(스코프 격리) + SSE 브로드캐스터.
 
-웹과 VSCode 확장이 **같은 백엔드**를 허브로 harness.yaml 을 저장/동기화한다. 저장소는
-디렉터리에 하네스당 JSON 한 파일(영속). 변경(upsert/delete)은 브로드캐스터로 SSE 구독자에게
-실시간 푸시한다. 단일 uvicorn 프로세스라 인메모리 pub/sub 로 충분하다.
+하네스는 **스코프**로 격리된다: `personal:<user_id>` 또는 `team:<team_id>`. 스코프마다 별도
+디렉터리라 남의 스코프는 구조적으로 못 읽는다. 변경(upsert/delete)은 스코프 태그를 달아
+브로드캐스트하고, SSE 구독자는 자기 가시 스코프 이벤트만 받는다. 단일 uvicorn 프로세스라
+인메모리 pub/sub 로 충분(스케일아웃 시 Redis 등으로 교체 — 경계 유지).
 """
 
 from __future__ import annotations
@@ -11,15 +12,15 @@ import asyncio
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 _SLUG_RE = re.compile(r"[^a-z0-9._-]+")
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def safe_id(raw: str) -> str:
@@ -35,49 +36,68 @@ def resolve_store_dir() -> Path:
     return base
 
 
-class HarnessStore:
-    """하네스당 JSON 파일 저장소. 목록은 요약만, 상세는 yaml 포함."""
+def _scope_dir_name(scope_key: str) -> str:
+    """스코프 키(`personal:uid`/`team:tid`)를 디렉터리 이름으로. uid/tid 는 이미 safe_id."""
+    return scope_key.replace(":", "__")
 
-    _SUMMARY = ("id", "name", "description", "updated_at")
+
+class HarnessStore:
+    """스코프별 디렉터리에 하네스당 JSON 한 파일. 목록은 요약만, 상세는 yaml 포함."""
+
+    _SUMMARY = ("id", "scope", "owner_id", "name", "description", "updated_at")
 
     def __init__(self, directory: Path) -> None:
         self.dir = directory
         self.dir.mkdir(parents=True, exist_ok=True)
 
-    def _path(self, hid: str) -> Path:
-        return self.dir / f"{safe_id(hid)}.json"
+    def _scope_path(self, scope_key: str) -> Path:
+        return self.dir / _scope_dir_name(scope_key)
 
-    def list(self) -> list[dict[str, Any]]:
+    def _path(self, scope_key: str, hid: str) -> Path:
+        return self._scope_path(scope_key) / f"{safe_id(hid)}.json"
+
+    def list_scopes(self, scope_keys: list[str]) -> list[dict[str, Any]]:
+        """주어진 스코프들에서 볼 수 있는 하네스 요약(최신순)."""
         items: list[dict[str, Any]] = []
-        for p in self.dir.glob("*.json"):
-            try:
-                d = json.loads(p.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+        for sk in scope_keys:
+            d = self._scope_path(sk)
+            if not d.is_dir():
                 continue
-            items.append({k: d.get(k) for k in self._SUMMARY})
+            for p in d.glob("*.json"):
+                try:
+                    doc = json.loads(p.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                items.append({k: doc.get(k) for k in self._SUMMARY})
         items.sort(key=lambda d: d.get("updated_at") or "", reverse=True)
         return items
 
-    def get(self, hid: str) -> dict[str, Any] | None:
-        p = self._path(hid)
+    def get(self, scope_key: str, hid: str) -> dict[str, Any] | None:
+        p = self._path(scope_key, hid)
         if not p.exists():
             return None
-        return json.loads(p.read_text(encoding="utf-8"))
+        return cast(dict[str, Any], json.loads(p.read_text(encoding="utf-8")))
 
-    def put(self, hid: str, name: str, description: str, yaml_text: str) -> dict[str, Any]:
+    def put(
+        self, scope_key: str, hid: str, owner_id: str, name: str, description: str, yaml_text: str
+    ) -> dict[str, Any]:
         sid = safe_id(hid)
         doc = {
             "id": sid,
+            "scope": scope_key,
+            "owner_id": owner_id,
             "name": name or sid,
             "description": description,
             "yaml": yaml_text,
             "updated_at": now_iso(),
         }
-        self._path(sid).write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+        path = self._path(scope_key, sid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
         return doc
 
-    def delete(self, hid: str) -> bool:
-        p = self._path(hid)
+    def delete(self, scope_key: str, hid: str) -> bool:
+        p = self._path(scope_key, hid)
         if p.exists():
             p.unlink()
             return True
@@ -88,7 +108,7 @@ class HarnessStore:
 
 
 class Broadcaster:
-    """인메모리 SSE pub/sub — 구독자별 asyncio.Queue 로 이벤트를 흘린다."""
+    """인메모리 SSE pub/sub — 구독자별 asyncio.Queue 로 이벤트를 흘린다(스코프 필터는 구독 측)."""
 
     def __init__(self) -> None:
         self._subs: set[asyncio.Queue[dict[str, Any]]] = set()
@@ -110,17 +130,21 @@ class Broadcaster:
         return len(self._subs)
 
 
-async def event_stream(store: HarnessStore, broadcaster: Broadcaster) -> Any:
-    """SSE 이벤트 제너레이터 — 연결 시 현재 목록(ready), 이후 upsert/delete 를 흘린다.
+async def event_stream(
+    store: HarnessStore, broadcaster: Broadcaster, visible_scopes: set[str]
+) -> Any:
+    """SSE 제너레이터 — 연결 시 가시 스코프의 현재 목록(ready), 이후 가시 스코프 이벤트만 흘린다.
 
-    엔드포인트와 분리해 단위 테스트 가능하게 둔다(sync TestClient 로는 SSE 스트림을 열어 둔 채
-    다른 요청을 하면 교착하므로).
+    (sync TestClient 로 SSE 스트림을 연 채 다른 요청을 하면 교착하므로 제너레이터를 직접 테스트.)
     """
     q = broadcaster.subscribe()
     try:
-        yield {"event": "ready", "data": json.dumps({"harnesses": store.list()}, ensure_ascii=False)}
+        snapshot = store.list_scopes(sorted(visible_scopes))
+        yield {"event": "ready", "data": json.dumps({"harnesses": snapshot}, ensure_ascii=False)}
         while True:
             event = await q.get()
+            if event.get("scope") not in visible_scopes:
+                continue  # 다른 사용자/팀 스코프 이벤트는 격리
             yield {"event": event["type"], "data": json.dumps(event, ensure_ascii=False)}
     finally:
         broadcaster.unsubscribe(q)
