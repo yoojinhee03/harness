@@ -11,9 +11,15 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "sse-starlette>=2.0",
     "slowapi>=0.1.9",
+    "sqlalchemy>=2.0",
     "pyyaml>=6.0",
     "pydantic>=2.7",
 ]
+
+[project.optional-dependencies]
+# 프로덕션 인프라(선택) — Postgres 드라이버 + Redis(SSE 스케일아웃). 개발/테스트는 SQLite·인메모리.
+postgres = ["psycopg[binary]>=3.2"]
+redis = ["redis>=5.0"]
 
 [build-system]
 requires = ["hatchling"]

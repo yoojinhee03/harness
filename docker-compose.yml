@@ -23,6 +23,11 @@ services:
       CATALOG_DIR: /catalog
       # 공유 하네스 저장소 위치(웹↔확장 동기화). 아래 볼륨으로 호스트에 영속·공유.
       HARNESS_STORE_DIR: /store
+      # 저장소 DB — 비우면 /store 밑 SQLite(단일 인스턴스). 스케일아웃/프로덕션은 Postgres URL 지정
+      # (예: postgresql+psycopg://harness:harness@db:5432/harness — pgvector 프로파일과 함께).
+      DATABASE_URL: ${DATABASE_URL:-}
+      # SSE 스케일아웃 — 비우면 인메모리(단일 프로세스). 워커·레플리카를 늘리면 Redis 지정(redis://redis:6379).
+      REDIS_URL: ${REDIS_URL:-}
       # 없으면 빈 값 → 자동으로 로컬 폴백. 있으면 품질 모드 자동 활성.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
@@ -48,6 +53,18 @@ services:
     depends_on:
       api:
         condition: service_healthy   # nginx 가 api DNS 를 못 찾고 죽지 않도록 대기.
+
+  # Redis — SSE 스케일아웃(다중 워커/레플리카)용. 기본 미기동. `--profile scale` + REDIS_URL 로 활성.
+  redis:
+    image: redis:7-alpine
+    profiles: ["scale"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   # pgvector — MVP 는 인메모리라 기본 미기동. `--profile pgvector` 로만 올린다.
   db:

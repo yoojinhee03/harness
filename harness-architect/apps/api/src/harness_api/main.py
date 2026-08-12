@@ -40,7 +40,7 @@ from .schemas import (
     RunRequest,
     TeamCreateBody,
 )
-from .store import Broadcaster, HarnessStore, event_stream, resolve_store_dir, safe_id
+from .store import HarnessStore, SSEBroadcaster, event_stream, make_broadcaster, resolve_store_dir, safe_id
 
 log = logging.getLogger("harness_api")
 
@@ -57,12 +57,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         registry = InMemoryRegistry([])
     app.state.registry = registry
     app.state.recommender = Recommender(registry)  # 키는 배포 env 로 startup 에 결정(런타임 변조 없음)
-    # 공유 하네스 저장소(스코프 격리) + 계정(사용자·팀) + SSE 브로드캐스터.
-    store_dir = resolve_store_dir()
-    app.state.store = HarnessStore(store_dir / "harnesses")
-    app.state.accounts = AccountStore(store_dir / "accounts")
-    app.state.broadcaster = Broadcaster()
-    log.info("하네스 저장소: %s (스코프 격리 · 계정 인증)", store_dir)
+    # 저장소 DB(SQL) + 계정(사용자·팀) + SSE 브로드캐스터. DATABASE_URL 없으면 SQLite(store 폴더).
+    from .db import make_engine, resolve_database_url
+
+    engine = make_engine(resolve_database_url(resolve_store_dir()))
+    app.state.engine = engine
+    app.state.store = HarnessStore(engine)
+    app.state.accounts = AccountStore(engine)
+    app.state.broadcaster = make_broadcaster()  # REDIS_URL 있으면 Redis(스케일아웃)
+    log.info("저장소 DB: %s · 스코프 격리 · 계정 인증", engine.url)
     yield
 
 
@@ -266,8 +269,8 @@ def _store(request: Request) -> HarnessStore:
     return cast(HarnessStore, request.app.state.store)
 
 
-def _broadcaster(request: Request) -> Broadcaster:
-    return cast(Broadcaster, request.app.state.broadcaster)
+def _broadcaster(request: Request) -> SSEBroadcaster:
+    return cast(SSEBroadcaster, request.app.state.broadcaster)
 
 
 def _accounts(request: Request) -> AccountStore:

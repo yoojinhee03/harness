@@ -140,10 +140,11 @@ def client_get_ids(c, headers):
 def test_event_stream_only_visible_scopes(tmp_path):
     import asyncio
 
+    from harness_api.db import make_engine
     from harness_api.store import Broadcaster, HarnessStore, event_stream
 
     async def run() -> None:
-        store = HarnessStore(tmp_path / "h")
+        store = HarnessStore(make_engine(f"sqlite:///{tmp_path / 't.db'}"))
         store.put("personal:alice", "x", "alice", "X", "", HARNESS_YAML)
         bc = Broadcaster()
         gen = event_stream(store, bc, {"personal:alice"})
