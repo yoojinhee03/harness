@@ -26,6 +26,7 @@ from .hooks import HookEngine, HookOutcome
 from .openharness_runner import OpenHarnessRunner
 from .runner import AnthropicRunner, RunResult
 from .sandbox import Executor, InProcessExecutor, TimeoutBoundExecutor, default_executors
+from .tracing import harness_span
 
 __all__ = [
     "AblationResult",
@@ -58,6 +59,7 @@ __all__ = [
     "default_executors",
     "drop_component",
     "emit",
+    "harness_span",
     "run_ablation",
     "run_eval",
 ]
