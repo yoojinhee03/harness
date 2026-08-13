@@ -109,10 +109,16 @@ class HarnessSaveBody(BaseModel):
     yaml: str = Field(min_length=1)
 
 
-class RegisterBody(BaseModel):
-    """사용자 등록 — handle 로 계정 생성, 토큰 발급(멀티테넌시 신원)."""
+class TokenCreateBody(BaseModel):
+    """PAT 발급 — VSCode·기계 연결용 개인 액세스 토큰. 이름으로 식별(원문은 1회 노출)."""
 
-    handle: str = Field(min_length=1, max_length=64)
+    name: str = Field(default="", max_length=128)
+
+
+class DevLoginBody(BaseModel):
+    """개발용 로그인(HARNESS_DEV_AUTH=on) — 실제 OAuth 앱 없이 이메일로 세션 발급."""
+
+    email: str = Field(min_length=3, max_length=320)
 
 
 class TeamCreateBody(BaseModel):
@@ -122,9 +128,9 @@ class TeamCreateBody(BaseModel):
 
 
 class MemberBody(BaseModel):
-    """팀 멤버 초대 — handle + 역할(owner/editor/viewer, 기본 editor)."""
+    """팀 멤버 초대 — email + 역할(owner/editor/viewer, 기본 editor)."""
 
-    handle: str = Field(min_length=1)
+    email: str = Field(min_length=3)
     role: str = "editor"
 
 

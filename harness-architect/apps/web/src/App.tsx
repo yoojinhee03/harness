@@ -46,6 +46,18 @@ export default function App() {
     setWorkspaceState(s);
   };
 
+  // OAuth 콜백 착지 — 백엔드가 ?session=<토큰> 으로 리다이렉트. 저장 후 URL 정리하고 진입.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const session = params.get("session");
+    if (session) {
+      auth.setToken(session);
+      window.history.replaceState({}, "", window.location.pathname);
+      setAuthed(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 로그인 후 계정 정보(사이드바 표시). 토큰이 만료/무효면 401 → 자동 로그아웃.
   const queryClient = useQueryClient();
   const meQ = useQuery({ queryKey: ["me"], queryFn: api.me, enabled: authed, retry: false });
@@ -59,6 +71,7 @@ export default function App() {
   // 로그아웃 = 이 브라우저의 이전 사용자 흔적을 전부 제거(계정 간 데이터 누출 방지):
   // react-query 캐시(하네스·me·versions)·생성 드래프트·인메모리 상태·워크스페이스.
   function logout() {
+    api.logout().catch(() => undefined); // 서버 세션 토큰 폐기(best-effort). 토큰 지우기 전에 호출.
     queryClient.clear();
     clearDraft();
     localStorage.removeItem("harness.saved"); // 구 대시보드 잔재
@@ -147,7 +160,7 @@ export default function App() {
         view={view}
         setView={setView}
         onCmdK={() => setCmdOpen(true)}
-        account={meQ.data?.handle}
+        account={meQ.data?.name || meQ.data?.email}
         onLogout={logout}
         workspace={workspace}
         setWorkspace={setWorkspace}

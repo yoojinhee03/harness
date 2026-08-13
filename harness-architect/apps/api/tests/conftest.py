@@ -7,3 +7,4 @@ main 모듈 import 전에 env 를 세팅해야 하므로 conftest(수집 시 먼
 import os
 
 os.environ.setdefault("HARNESS_RATELIMIT", "off")
+os.environ.setdefault("HARNESS_DEV_AUTH", "on")  # 테스트 로그인은 dev-login(이메일)으로

@@ -97,7 +97,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("harness.deleteFromStore", (h) => deleteFromStore(storeClient, h)),
     vscode.commands.registerCommand("harness.refreshStore", () => store.refresh()),
     vscode.commands.registerCommand("harness.login", async () => {
-      if (await login(storeClient)) {
+      if (await login()) {
         reconnectStore();
       }
     }),
@@ -135,8 +135,8 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!pick) {
           return;
         }
-        const handle = await vscode.window.showInputBox({ title: "추가할 멤버 handle", ignoreFocusOut: true });
-        if (!handle) {
+        const email = await vscode.window.showInputBox({ title: "추가할 멤버 이메일", ignoreFocusOut: true });
+        if (!email) {
           return;
         }
         const rolePick = await vscode.window.showQuickPick(
@@ -150,8 +150,8 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!rolePick) {
           return;
         }
-        const t = await storeClient.addMember(pick.id, handle, rolePick.value);
-        vscode.window.showInformationMessage(`'${handle}' (${rolePick.value}) 추가됨 — ${t.name} 멤버 ${t.members.length}명`);
+        const t = await storeClient.addMember(pick.id, email, rolePick.value);
+        vscode.window.showInformationMessage(`'${email}' (${rolePick.value}) 추가됨 — ${t.name} 멤버 ${t.members.length}명`);
       } catch (e) {
         vscode.window.showErrorMessage(`멤버 추가 실패: ${e instanceof Error ? e.message : String(e)}`);
       }

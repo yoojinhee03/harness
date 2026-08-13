@@ -16,17 +16,18 @@ export interface HarnessDoc extends HarnessSummary {
   yaml: string;
 }
 
+export interface TeamMember {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+}
+
 export interface Team {
   id: string;
   name: string;
   owner_id: string;
-  members: string[];
-}
-
-export interface Account {
-  id: string;
-  handle: string;
-  token: string;
+  members: TeamMember[];
 }
 
 export class HarnessStoreClient {
@@ -69,11 +70,6 @@ export class HarnessStoreClient {
     return (await r.json()) as T;
   }
 
-  // 인증
-  register(handle: string): Promise<Account> {
-    return this.req<Account>("POST", "/auth/register", { handle });
-  }
-
   // 하네스 (스코프)
   list(): Promise<HarnessSummary[]> {
     return this.req<HarnessSummary[]>("GET", "/harnesses");
@@ -104,8 +100,8 @@ export class HarnessStoreClient {
     return this.req<Team>("POST", "/teams", { name });
   }
 
-  addMember(tid: string, handle: string, role = "editor"): Promise<Team> {
-    return this.req<Team>("POST", `/teams/${encodeURIComponent(tid)}/members`, { handle, role });
+  addMember(tid: string, email: string, role = "editor"): Promise<Team> {
+    return this.req<Team>("POST", `/teams/${encodeURIComponent(tid)}/members`, { email, role });
   }
 }
 

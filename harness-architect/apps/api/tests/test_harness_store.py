@@ -23,11 +23,16 @@ def client(tmp_path, monkeypatch):
         yield c
 
 
-def auth(client, handle: str) -> dict[str, str]:
-    """등록 → Bearer 헤더."""
-    r = client.post("/auth/register", json={"handle": handle})
+def auth(client, email: str) -> dict[str, str]:
+    """dev-login(이메일) → Bearer 세션 헤더."""
+    r = client.post("/auth/dev-login", json={"email": email})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
+def uid(client, headers: dict[str, str]) -> str:
+    """헤더의 사용자 id(uuid) — 스코프·owner 검증용."""
+    return client.get("/me", headers=headers).json()["id"]
 
 
 # ── 인증 ──
@@ -38,19 +43,22 @@ def test_requires_auth(client):
     assert client.get("/me").status_code == 401
 
 
-def test_register_duplicate_409(client):
-    auth(client, "alice")
-    assert client.post("/auth/register", json={"handle": "alice"}).status_code == 409
+def test_dev_login_idempotent(client):
+    """같은 이메일로 재로그인해도 같은 사용자(OAuth upsert 성격)."""
+    a1 = auth(client, "alice@x.io")
+    a2 = auth(client, "alice@x.io")
+    assert uid(client, a1) == uid(client, a2)  # 동일 신원
+    assert a1 != a2  # 세션 토큰은 매번 새로 발급
 
 
 def test_me_lists_teams(client):
-    a = auth(client, "alice")
+    a = auth(client, "alice@x.io")
     me = client.get("/me", headers=a).json()
-    assert me["id"] == "alice" and me["teams"] == []
+    assert me["email"] == "alice@x.io" and me["teams"] == []
 
 
 def test_versions_history(client):
-    a = auth(client, "alice")
+    a = auth(client, "alice@x.io")
     client.put("/harnesses/h", json={"yaml": "v1\n"}, headers=a)
     client.put("/harnesses/h", json={"yaml": "v2\n"}, headers=a)
     doc = client.get("/harnesses/h", headers=a).json()
@@ -62,7 +70,7 @@ def test_versions_history(client):
 
 
 def test_optimistic_locking(client):
-    a = auth(client, "alice")
+    a = auth(client, "alice@x.io")
     client.put("/harnesses/h", json={"yaml": "v1\n"}, headers=a)  # v1
     r2 = client.put("/harnesses/h", json={"yaml": "v2\n"}, headers={**a, "If-Match": "1"})
     assert r2.status_code == 200 and r2.json()["version"] == 2
@@ -72,7 +80,7 @@ def test_optimistic_locking(client):
 
 
 def test_pagination(client):
-    a = auth(client, "alice")
+    a = auth(client, "alice@x.io")
     for i in range(3):
         client.put(f"/harnesses/h{i}", json={"yaml": f"y{i}\n"}, headers=a)
     assert len(client.get("/harnesses", headers=a).json()) == 3
@@ -80,34 +88,51 @@ def test_pagination(client):
     assert len(client.get("/harnesses", params={"limit": 2, "offset": 2}, headers=a).json()) == 1
 
 
-def test_token_rotate_invalidates_old(client):
-    a = auth(client, "alice")
-    new = client.post("/auth/token/rotate", headers=a).json()["token"]
-    assert client.get("/me", headers=a).status_code == 401  # 기존 토큰 무효
-    assert client.get("/me", headers={"Authorization": f"Bearer {new}"}).json()["id"] == "alice"
+def test_pat_lifecycle(client):
+    """설정에서 발급한 PAT 로 접근 → 폐기하면 무효. 세션 로그아웃은 PAT 를 안 건드림."""
+    a = auth(client, "alice@x.io")
+    pat = client.post("/auth/tokens", json={"name": "vscode"}, headers=a).json()
+    ph = {"Authorization": f"Bearer {pat['token']}"}
+    assert client.get("/me", headers=ph).json()["email"] == "alice@x.io"  # PAT 로 인증됨
+    assert [t["name"] for t in client.get("/auth/tokens", headers=a).json()] == ["vscode"]
+
+    # 세션 로그아웃 → 세션만 무효, PAT 는 유지
+    assert client.post("/auth/logout", headers=a).json()["ok"] is True
+    assert client.get("/me", headers=a).status_code == 401
+    assert client.get("/me", headers=ph).status_code == 200
+
+    # PAT 폐기 → 무효
+    assert client.delete(f"/auth/tokens/{pat['id']}", headers=ph).status_code == 200
+    assert client.get("/me", headers=ph).status_code == 401
+
+
+def test_dev_login_disabled_returns_404(client, monkeypatch):
+    monkeypatch.setenv("HARNESS_DEV_AUTH", "off")
+    assert client.post("/auth/dev-login", json={"email": "x@y.io"}).status_code == 404
 
 
 # ── 사용자 격리 ──
 
 
 def test_personal_isolation(client):
-    a, b = auth(client, "alice"), auth(client, "bob")
+    a, b = auth(client, "alice@x.io"), auth(client, "bob@x.io")
+    ua = uid(client, a)
     client.put("/harnesses/secret", json={"name": "S", "yaml": HARNESS_YAML}, headers=a)
 
     assert [h["id"] for h in client.get("/harnesses", headers=a).json()] == ["secret"]
     assert client.get("/harnesses", headers=b).json() == []  # bob 은 alice 것을 못 봄
     assert client.get("/harnesses/secret", headers=b).status_code == 404  # 직접 접근도 격리
     got = client.get("/harnesses/secret", headers=a).json()
-    assert got["owner_id"] == "alice" and got["scope"] == "personal:alice"
+    assert got["owner_id"] == ua and got["scope"] == f"personal:{ua}"
 
 
 # ── 팀 공유(메모리 공유) ──
 
 
 def test_team_sharing(client):
-    a, b = auth(client, "alice"), auth(client, "bob")
+    a, b = auth(client, "alice@x.io"), auth(client, "bob@x.io")
     tid = client.post("/teams", json={"name": "squad"}, headers=a).json()["id"]
-    client.post(f"/teams/{tid}/members", json={"handle": "bob"}, headers=a)
+    client.post(f"/teams/{tid}/members", json={"email": "bob@x.io"}, headers=a)
 
     client.put(
         "/harnesses/shared", json={"name": "공유", "yaml": HARNESS_YAML},
@@ -121,7 +146,7 @@ def test_team_sharing(client):
 
 
 def test_non_member_forbidden(client):
-    a, c = auth(client, "alice"), auth(client, "carol")
+    a, c = auth(client, "alice@x.io"), auth(client, "carol@x.io")
     tid = client.post("/teams", json={"name": "squad"}, headers=a).json()["id"]
     r = client.put(
         "/harnesses/x", json={"yaml": HARNESS_YAML}, params={"scope": f"team:{tid}"}, headers=c
@@ -131,17 +156,17 @@ def test_non_member_forbidden(client):
 
 
 def test_add_member_requires_membership(client):
-    a, b = auth(client, "alice"), auth(client, "bob")
-    auth(client, "carol")
+    a, b = auth(client, "alice@x.io"), auth(client, "bob@x.io")
+    auth(client, "carol@x.io")
     tid = client.post("/teams", json={"name": "sq"}, headers=a).json()["id"]
     # bob(비멤버)이 carol 을 초대 → 403
-    assert client.post(f"/teams/{tid}/members", json={"handle": "carol"}, headers=b).status_code == 403
+    assert client.post(f"/teams/{tid}/members", json={"email": "carol@x.io"}, headers=b).status_code == 403
 
 
 def test_rbac_viewer_read_only(client):
-    a, b = auth(client, "alice"), auth(client, "bob")
+    a, b = auth(client, "alice@x.io"), auth(client, "bob@x.io")
     tid = client.post("/teams", json={"name": "sq"}, headers=a).json()["id"]
-    client.post(f"/teams/{tid}/members", json={"handle": "bob", "role": "viewer"}, headers=a)
+    client.post(f"/teams/{tid}/members", json={"email": "bob@x.io", "role": "viewer"}, headers=a)
     client.put("/harnesses/t", json={"yaml": "y\n"}, params={"scope": f"team:{tid}"}, headers=a)
 
     # viewer: 읽기 O, 쓰기 403
@@ -151,7 +176,7 @@ def test_rbac_viewer_read_only(client):
     ).status_code == 403
 
     # editor 로 승격 → 쓰기 O
-    client.post(f"/teams/{tid}/members", json={"handle": "bob", "role": "editor"}, headers=a)
+    client.post(f"/teams/{tid}/members", json={"email": "bob@x.io", "role": "editor"}, headers=a)
     assert client.put(
         "/harnesses/t2", json={"yaml": "z\n"}, params={"scope": f"team:{tid}"}, headers=b
     ).status_code == 200
@@ -162,7 +187,7 @@ def test_persistence_across_restart(tmp_path, monkeypatch):
     from harness_api.main import app
 
     with TestClient(app) as c:
-        h = auth(c, "alice")
+        h = auth(c, "alice@x.io")
         c.put("/harnesses/keep", json={"yaml": HARNESS_YAML}, headers=h)
     with TestClient(app) as c2:  # lifespan 재실행 — 디스크에서 재로드(토큰도 유지)
         assert client_get_ids(c2, h) == ["keep"]
@@ -199,18 +224,6 @@ def test_event_stream_only_visible_scopes(tmp_path):
         await gen.aclose()
 
     asyncio.run(run())
-
-
-def test_register_rate_limited(client):
-    """register 레이트리밋(20/hour) — 한정적으로 켜서 초과 시 429 확인."""
-    import harness_api.main as m
-
-    m.limiter.enabled = True
-    try:
-        codes = [client.post("/auth/register", json={"handle": f"u{i}"}).status_code for i in range(22)]
-        assert codes.count(200) <= 20 and 429 in codes
-    finally:
-        m.limiter.enabled = False
 
 
 def test_safe_id_blocks_traversal_and_empty():

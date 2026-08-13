@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { setApiToken } from "./config";
-import type { HarnessStoreClient, HarnessSummary } from "./harnessStore";
+import { getApiUrl, setApiToken } from "./config";
+import { HarnessStoreClient, type HarnessSummary } from "./harnessStore";
 
 /** "내 하네스" 사이드바 — 내 가시 스코프(personal + 팀)의 하네스. SSE 이벤트마다 refresh(). */
 export class StoreProvider implements vscode.TreeDataProvider<HarnessSummary> {
@@ -56,46 +56,27 @@ export class StoreProvider implements vscode.TreeDataProvider<HarnessSummary> {
   }
 }
 
-/** 계정 로그인/가입 — 새 계정 생성(handle) 또는 기존 토큰 붙여넣기. 토큰을 전역 설정에 저장. */
-export async function login(client: HarnessStoreClient): Promise<boolean> {
-  const choice = await vscode.window.showQuickPick(
-    [
-      { label: "$(person-add) 새 계정 만들기", value: "register" as const },
-      { label: "$(key) 기존 토큰 붙여넣기", value: "paste" as const },
-    ],
-    { title: "Harness 공유 저장소 로그인" },
-  );
-  if (!choice) {
-    return false;
-  }
-  if (choice.value === "register") {
-    const handle = await vscode.window.showInputBox({
-      title: "새 계정 — handle(사용자 이름)",
-      placeHolder: "예: alice",
-      ignoreFocusOut: true,
-    });
-    if (!handle) {
-      return false;
-    }
-    try {
-      const acct = await client.register(handle);
-      await setApiToken(acct.token);
-      vscode.window.showInformationMessage(`가입됨: ${acct.handle} — 토큰이 설정에 저장되었습니다.`);
-      return true;
-    } catch (e) {
-      vscode.window.showErrorMessage(`가입 실패: ${e instanceof Error ? e.message : String(e)}`);
-      return false;
-    }
-  }
+/** 로그인 — 웹(설정 → API 토큰)에서 발급한 토큰을 붙여넣어 저장한다. 계정 로그인은 웹에서 OAuth 로. */
+export async function login(): Promise<boolean> {
   const token = await vscode.window.showInputBox({
-    title: "기존 토큰 붙여넣기",
+    title: "Harness 로그인 — API 토큰 붙여넣기",
+    prompt: "웹에서 로그인 후 설정 → API 토큰 → '새 토큰 발급'으로 받은 토큰을 붙여넣으세요.",
+    placeHolder: "발급받은 API 토큰",
     password: true,
     ignoreFocusOut: true,
   });
   if (!token) {
     return false;
   }
-  await setApiToken(token.trim());
+  const trimmed = token.trim();
+  // 저장 전에 토큰 유효성 확인(잘못 붙여넣으면 즉시 알림).
+  try {
+    await new HarnessStoreClient(getApiUrl(), trimmed).list();
+  } catch (e) {
+    vscode.window.showErrorMessage(`토큰 확인 실패: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
+  }
+  await setApiToken(trimmed);
   vscode.window.showInformationMessage("토큰이 설정에 저장되었습니다.");
   return true;
 }

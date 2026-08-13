@@ -107,24 +107,38 @@ export interface HarnessVersion {
   yaml: string;
 }
 
-export interface Account {
+export interface TeamMember {
   id: string;
-  handle: string;
-  token: string;
+  email: string;
+  name: string;
+  role: string; // owner | editor | viewer
 }
 
 export interface Team {
   id: string;
   name: string;
   owner_id: string;
-  members: string[];
-  roles?: Record<string, string>; // uid → owner|editor|viewer
+  members: TeamMember[];
 }
 
 export interface Me {
   id: string;
-  handle: string;
+  email: string;
+  name: string;
+  avatar_url: string;
   teams: Team[];
+}
+
+export interface AuthConfig {
+  providers: string[]; // 예: ["github"]
+  dev_auth: boolean;
+}
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
 }
 
 // ── 로컬 자격/선호(브라우저) ──
@@ -198,14 +212,23 @@ export const api = {
   getKeys: () => send<KeyStatus>("GET", "/settings/keys"),
   verifyKeys: () => send<Record<string, string>>("POST", "/settings/keys/verify"),
 
-  // ── 인증 · 팀 (멀티테넌시) ──
-  register: (handle: string) => send<Account>("POST", "/auth/register", { handle }),
-  rotateToken: () => send<{ token: string }>("POST", "/auth/token/rotate"),
+  // ── 인증 (OAuth 로그인 + PAT 발급) ──
+  authConfig: () => fetch(`${BASE}/auth/config`).then((r) => r.json() as Promise<AuthConfig>),
+  // OAuth 시작 — 브라우저를 이 URL 로 이동시키면 공급자 로그인 후 ?session= 으로 돌아온다.
+  oauthStartUrl: (provider: string) => `${BASE}/auth/oauth/${encodeURIComponent(provider)}/start`,
+  devLogin: (email: string) => post<{ token: string; user: Me }>("/auth/dev-login", { email }),
+  logout: () => send<{ ok: boolean }>("POST", "/auth/logout"),
   me: () => send<Me>("GET", "/me"),
+  // PAT — VSCode·기계 연결용 개인 토큰(설정 화면).
+  listTokens: () => send<ApiToken[]>("GET", "/auth/tokens"),
+  createToken: (name: string) => send<{ id: string; token: string; name: string }>("POST", "/auth/tokens", { name }),
+  revokeToken: (id: string) => send<{ ok: boolean }>("DELETE", `/auth/tokens/${encodeURIComponent(id)}`),
+
+  // ── 팀 (멀티테넌시) ──
   listTeams: () => send<Team[]>("GET", "/teams"),
   createTeam: (name: string) => send<Team>("POST", "/teams", { name }),
-  addMember: (tid: string, handle: string, role = "editor") =>
-    send<Team>("POST", `/teams/${encodeURIComponent(tid)}/members`, { handle, role }),
+  addMember: (tid: string, email: string, role = "editor") =>
+    send<Team>("POST", `/teams/${encodeURIComponent(tid)}/members`, { email, role }),
 
   // ── 공유 하네스 저장소 (VSCode 확장과 동일 백엔드 — 스코프 격리 · 양방향 동기화) ──
   listHarnesses: () => send<HarnessSummary[]>("GET", "/harnesses"),

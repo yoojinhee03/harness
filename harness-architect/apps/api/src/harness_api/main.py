@@ -14,14 +14,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, cast
+from urllib.parse import urlencode
 
+import httpx
 import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from harness_catalog import LiveRecommender, Recommender, build_registry, federate, resolve_catalog_dir
 from harness_resolver import HarnessConfig, InMemoryRegistry, ResolveResult, resolve
 from harness_runtime import AnthropicRunner, available_targets, build_request, emit
@@ -40,14 +44,15 @@ from .observability import (
 )
 from .schemas import (
     CatalogItem,
+    DevLoginBody,
     GenerateResponse,
     HarnessSaveBody,
     MemberBody,
     RecommendRequest,
-    RegisterBody,
     ResolveRequest,
     RunRequest,
     TeamCreateBody,
+    TokenCreateBody,
 )
 from .store import (
     HarnessStore,
@@ -95,7 +100,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.store = HarnessStore(engine)
     app.state.accounts = AccountStore(engine)
     app.state.broadcaster = make_broadcaster()  # REDIS_URL 있으면 Redis(스케일아웃)
-    log.info("저장소 DB: %s · 스코프 격리 · 계정 인증", engine.url)
+    # OAuth CSRF state 임시 저장(state -> 생성 시각). 단일 인스턴스 개발용 — 멀티 인스턴스는 Redis/DB 로.
+    app.state.oauth_states = {}
+    log.info("저장소 DB: %s · 스코프 격리 · OAuth 인증", engine.url)
     yield
 
 
@@ -326,21 +333,181 @@ def _accounts(request: Request) -> AccountStore:
     return cast(AccountStore, request.app.state.accounts)
 
 
+def _bearer(authorization: str | None, token: str | None) -> str:
+    """Authorization: Bearer <t> 또는 ?token=<t> 에서 원문 토큰을 뽑는다(SSE 는 헤더 불가라 쿼리 허용)."""
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return (token or "").strip()
+
+
 async def current_user(
     request: Request,
     authorization: str | None = Header(default=None),
     token: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    """Bearer 토큰으로 사용자 신원 확인. SSE(EventSource)는 헤더를 못 실어 ?token= 도 허용."""
-    raw = ""
-    if authorization and authorization.lower().startswith("bearer "):
-        raw = authorization[7:].strip()
-    elif token:
-        raw = token
-    user = _accounts(request).user_by_token(raw)
+    """Bearer 토큰(세션 또는 PAT)으로 사용자 신원 확인. SSE(EventSource)는 ?token= 도 허용."""
+    user = _accounts(request).user_by_token(_bearer(authorization, token))
     if user is None:
-        raise HTTPException(status_code=401, detail="인증 필요 — Bearer 토큰(/auth/register 로 발급)")
+        raise HTTPException(status_code=401, detail="인증 필요 — 로그인하세요")
     return user
+
+
+# ─────────────── OAuth 로그인 (사람=이메일 신원) ───────────────
+# 사람은 OAuth 로 로그인해 웹 세션 토큰을 받고, 기계(VSCode)는 설정에서 PAT 를 발급받아 붙인다.
+# 공급자 앱 자격증명은 배포 env 로만 주입한다.
+
+_GITHUB_AUTHORIZE = "https://github.com/login/oauth/authorize"
+_GITHUB_TOKEN = "https://github.com/login/oauth/access_token"
+_GITHUB_USER = "https://api.github.com/user"
+_GITHUB_EMAILS = "https://api.github.com/user/emails"
+_SESSION_TTL_DAYS = 30
+
+
+def _dev_auth() -> bool:
+    return os.environ.get("HARNESS_DEV_AUTH", "") == "on"
+
+
+def _github_client() -> tuple[str, str]:
+    return os.environ.get("GITHUB_OAUTH_CLIENT_ID", ""), os.environ.get("GITHUB_OAUTH_CLIENT_SECRET", "")
+
+
+def _redirect_base() -> str:
+    # GitHub 앱에 등록하는 콜백의 베이스. 개발은 웹 오리진(:5173)의 /api 프록시를 거쳐 백엔드로.
+    return os.environ.get("OAUTH_REDIRECT_BASE", "http://localhost:5173/api").rstrip("/")
+
+
+def _web_base() -> str:
+    return os.environ.get("WEB_BASE_URL", "http://localhost:5173").rstrip("/")
+
+
+@app.get("/auth/config")
+def auth_config() -> dict[str, Any]:
+    """로그인 화면이 어떤 방법을 띄울지 — 구성된 OAuth 공급자 + 개발 로그인 가용 여부."""
+    providers = ["github"] if _github_client()[0] else []
+    return {"providers": providers, "dev_auth": _dev_auth()}
+
+
+@app.get("/auth/oauth/{provider}/start")
+def oauth_start(request: Request, provider: str) -> Response:
+    """공급자 인증 페이지로 리다이렉트(state 로 CSRF 방지)."""
+    if provider != "github":
+        raise HTTPException(status_code=404, detail=f"지원하지 않는 공급자: {provider}")
+    client_id, _ = _github_client()
+    if not client_id:
+        raise HTTPException(status_code=400, detail="GitHub OAuth 미구성 — GITHUB_OAUTH_CLIENT_ID 필요")
+    state = secrets.token_urlsafe(24)
+    request.app.state.oauth_states[state] = time.time()
+    params = urlencode(
+        {
+            "client_id": client_id,
+            "redirect_uri": f"{_redirect_base()}/auth/oauth/github/callback",
+            "scope": "read:user user:email",
+            "state": state,
+            "allow_signup": "true",
+        }
+    )
+    return RedirectResponse(f"{_GITHUB_AUTHORIZE}?{params}")
+
+
+def _pop_state(request: Request, state: str) -> bool:
+    states: dict[str, float] = request.app.state.oauth_states
+    ts = states.pop(state, None)
+    # 만료(10분) 청소 + 유효성
+    for k, v in list(states.items()):
+        if time.time() - v > 600:
+            states.pop(k, None)
+    return ts is not None and time.time() - ts <= 600
+
+
+@app.get("/auth/oauth/{provider}/callback")
+def oauth_callback(
+    request: Request, provider: str, code: str = Query(...), state: str = Query(...)
+) -> Response:
+    """공급자 콜백 — code 교환 → 프로필 조회 → 유저 upsert → 세션 발급 → 웹으로 리다이렉트."""
+    if provider != "github" or not _pop_state(request, state):
+        return RedirectResponse(f"{_web_base()}/?auth_error=invalid_state")
+    client_id, client_secret = _github_client()
+    try:
+        with httpx.Client(timeout=10.0) as c:
+            tok = c.post(
+                _GITHUB_TOKEN,
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": code,
+                    "redirect_uri": f"{_redirect_base()}/auth/oauth/github/callback",
+                },
+            ).json()
+            access = tok.get("access_token")
+            if not access:
+                return RedirectResponse(f"{_web_base()}/?auth_error=token_exchange")
+            gh_headers = {"Authorization": f"token {access}", "Accept": "application/vnd.github+json"}
+            gh = c.get(_GITHUB_USER, headers=gh_headers).json()
+            email = gh.get("email")
+            if not email:  # 공개 이메일이 없으면 primary·verified 이메일을 별도 조회
+                emails = c.get(_GITHUB_EMAILS, headers=gh_headers).json()
+                email = next(
+                    (e["email"] for e in emails if e.get("primary") and e.get("verified")),
+                    next((e["email"] for e in emails if e.get("verified")), None),
+                )
+            if not email:
+                return RedirectResponse(f"{_web_base()}/?auth_error=no_email")
+    except httpx.HTTPError:
+        return RedirectResponse(f"{_web_base()}/?auth_error=provider_unreachable")
+
+    user = _accounts(request).upsert_oauth_user(
+        "github", str(gh.get("id")), email, gh.get("name") or gh.get("login") or "", gh.get("avatar_url") or ""
+    )
+    session = _accounts(request).create_token(user["id"], "session", name="web", ttl_days=_SESSION_TTL_DAYS)
+    return RedirectResponse(f"{_web_base()}/?session={session['token']}")
+
+
+@app.post("/auth/dev-login")
+def dev_login(request: Request, body: DevLoginBody) -> dict[str, Any]:
+    """개발 전용 로그인(HARNESS_DEV_AUTH=on) — 실제 OAuth 앱 없이 이메일로 세션 발급."""
+    if not _dev_auth():
+        raise HTTPException(status_code=404, detail="dev-login 비활성 (HARNESS_DEV_AUTH=on 필요)")
+    email = body.email.strip().lower()
+    user = _accounts(request).upsert_oauth_user("dev", email, email, email.split("@")[0], "")
+    session = _accounts(request).create_token(user["id"], "session", name="dev", ttl_days=_SESSION_TTL_DAYS)
+    return {"token": session["token"], "user": user}
+
+
+@app.post("/auth/logout")
+def logout(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    _user: dict[str, Any] = Depends(current_user),
+) -> dict[str, bool]:
+    """현재 세션 토큰만 폐기(PAT·다른 기기 세션은 유지)."""
+    return {"ok": _accounts(request).revoke_by_token(_bearer(authorization, None))}
+
+
+# ── PAT(개인 액세스 토큰) — VSCode·기계 연결용, 설정 화면에서 관리 ──
+
+
+@app.get("/auth/tokens")
+def list_tokens(request: Request, user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+    return _accounts(request).list_tokens(user["id"], kind="pat")
+
+
+@app.post("/auth/tokens")
+def create_pat(
+    request: Request, body: TokenCreateBody, user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    """PAT 발급 — 원문은 이 응답에서만 노출. 이후 목록엔 이름·발급일만 보인다."""
+    name = body.name.strip() or "VSCode"
+    return _accounts(request).create_token(user["id"], "pat", name=name)
+
+
+@app.delete("/auth/tokens/{tid}")
+def revoke_pat(
+    request: Request, tid: str, user: dict[str, Any] = Depends(current_user)
+) -> dict[str, bool]:
+    if not _accounts(request).revoke_token(user["id"], tid):
+        raise HTTPException(status_code=404, detail="토큰 없음")
+    return {"ok": True}
 
 
 def _resolve_scope(request: Request, user: dict[str, Any], scope: str, write: bool = False) -> str:
@@ -361,28 +528,12 @@ def _resolve_scope(request: Request, user: dict[str, Any], scope: str, write: bo
     raise HTTPException(status_code=400, detail=f"잘못된 scope: {scope} (personal|team:<id>)")
 
 
-# ── 인증 · 팀 ──
-
-
-@app.post("/auth/register")
-@limiter.limit("20/hour")
-def register(request: Request, body: RegisterBody) -> dict[str, Any]:
-    """handle 로 계정 생성 + 토큰 발급(원문은 이 응답에서만 노출)."""
-    try:
-        return _accounts(request).register(body.handle)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+# ── 팀 ──
 
 
 @app.get("/me")
 def whoami(request: Request, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     return {**user, "teams": _accounts(request).teams_of(user["id"])}
-
-
-@app.post("/auth/token/rotate")
-def rotate_token(request: Request, user: dict[str, Any] = Depends(current_user)) -> dict[str, str]:
-    """현재 사용자의 토큰 재발급(기존 무효화). 새 토큰 원문을 1회 반환."""
-    return {"token": _accounts(request).rotate_token(user["id"])}
 
 
 @app.post("/teams")
@@ -402,7 +553,7 @@ def add_team_member(
     request: Request, tid: str, body: MemberBody, user: dict[str, Any] = Depends(current_user)
 ) -> dict[str, Any]:
     try:
-        return _accounts(request).add_member(tid, user["id"], body.handle, body.role)
+        return _accounts(request).add_member(tid, user["id"], body.email, body.role)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:

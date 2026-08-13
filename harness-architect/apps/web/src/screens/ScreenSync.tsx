@@ -18,7 +18,7 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
 
   const [teamName, setTeamName] = useState<string | null>(null);
   const [inviteFor, setInviteFor] = useState<Team | null>(null);
-  const [inviteHandle, setInviteHandle] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("editor");
   const [delFor, setDelFor] = useState<{ id: string; scope: string; name: string } | null>(null);
 
@@ -57,17 +57,17 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
     }
   }
   async function invite() {
-    if (!inviteFor || !inviteHandle.trim()) return;
+    if (!inviteFor || !inviteEmail.trim()) return;
     const team = inviteFor;
-    const handle = inviteHandle.trim();
+    const email = inviteEmail.trim();
     const role = inviteRole;
     setInviteFor(null);
-    setInviteHandle("");
+    setInviteEmail("");
     setInviteRole("editor");
     try {
-      const t = await api.addMember(team.id, handle, role);
+      const t = await api.addMember(team.id, email, role);
       qc.invalidateQueries({ queryKey: ["me"] });
-      toast(`'${handle}' (${role}) 추가됨 — ${t.name} 멤버 ${t.members.length}명`);
+      toast(`'${email}' (${role}) 추가됨 — ${t.name} 멤버 ${t.members.length}명`);
     } catch (e) {
       toast(e instanceof Error ? e.message : "멤버 추가 실패", "error");
     }
@@ -157,10 +157,10 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
                   </Button>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {t.members.map((uid) => (
-                    <span key={uid} className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-xs">
-                      <span className="text-fg/90">{uid}</span>
-                      <RoleBadge role={t.roles?.[uid] ?? "editor"} />
+                  {t.members.map((m) => (
+                    <span key={m.id} className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-xs">
+                      <span className="text-fg/90" title={m.email}>{m.name || m.email}</span>
+                      <RoleBadge role={m.role} />
                     </span>
                   ))}
                 </div>
@@ -182,7 +182,7 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
       )}
       {inviteFor && (
         <Modal title={`${inviteFor.name} — 멤버 초대`} onClose={() => setInviteFor(null)}>
-          <Input autoFocus placeholder="추가할 멤버 handle" value={inviteHandle} onChange={(e) => setInviteHandle(e.target.value)} onKeyDown={(e) => e.key === "Enter" && invite()} />
+          <Input autoFocus type="email" placeholder="추가할 멤버 이메일" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && invite()} />
           <div className="mt-2.5">
             <label className="text-xs text-muted">역할</label>
             <div className="mt-1 flex gap-1.5">
@@ -201,7 +201,7 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
           </div>
           <div className="mt-3 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setInviteFor(null)}>취소</Button>
-            <Button onClick={invite} disabled={!inviteHandle.trim()}>초대</Button>
+            <Button onClick={invite} disabled={!inviteEmail.trim()}>초대</Button>
           </div>
         </Modal>
       )}

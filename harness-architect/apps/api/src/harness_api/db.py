@@ -9,18 +9,48 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from sqlalchemy import Column, Integer, MetaData, String, Table, Text, create_engine
+from sqlalchemy import (
+    Column,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    create_engine,
+)
 from sqlalchemy.engine import Engine
 
 metadata = MetaData()
 
+# 사용자 = OAuth 신원(이메일). 토큰은 더 이상 users 에 안 둔다(api_tokens 로 분리).
+# provider+provider_sub 로 공급자 계정을 유일 식별, email 은 표시·초대·복구용(유일).
 users = Table(
     "users",
     metadata,
-    Column("id", String(128), primary_key=True),
-    Column("handle", String(128), nullable=False),
+    Column("id", String(64), primary_key=True),  # uuid hex
+    Column("email", String(320), nullable=False, unique=True, index=True),
+    Column("name", String(128), nullable=False, default=""),
+    Column("avatar_url", String(512), nullable=False, default=""),
+    Column("provider", String(32), nullable=False),  # github | dev
+    Column("provider_sub", String(128), nullable=False),  # 공급자 측 사용자 id
+    Column("created_at", String(40), nullable=False),
+    UniqueConstraint("provider", "provider_sub", name="uq_users_provider_sub"),
+)
+
+# 토큰 = 자격증명. 웹 세션(kind=session)과 VSCode/기계용 PAT(kind=pat)를 한 사용자에 여러 개.
+# 발급/폐기가 서로 독립 — 설정에서 PAT 를 만들어도 웹 세션이 안 끊긴다(기존 단일토큰 모델의 결함 해소).
+api_tokens = Table(
+    "api_tokens",
+    metadata,
+    Column("id", String(64), primary_key=True),  # uuid hex
+    Column("user_id", String(64), nullable=False, index=True),
+    Column("kind", String(16), nullable=False),  # session | pat
+    Column("name", String(128), nullable=False, default=""),
     Column("token_sha", String(64), nullable=False, index=True),
     Column("created_at", String(40), nullable=False),
+    Column("last_used_at", String(40), nullable=True),
+    Column("expires_at", String(40), nullable=True),
 )
 
 teams = Table(
