@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -21,7 +22,7 @@ import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from harness_catalog import Recommender, build_registry, resolve_catalog_dir
+from harness_catalog import LiveRecommender, Recommender, build_registry, federate, resolve_catalog_dir
 from harness_resolver import HarnessConfig, InMemoryRegistry, ResolveResult, resolve
 from harness_runtime import AnthropicRunner, available_targets, build_request, emit
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -64,15 +65,27 @@ log = logging.getLogger("harness_api")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 카탈로그를 한 번 로드해 레지스트리·추천기를 준비한다. 없으면 빈 상태로 기동.
-    try:
-        catalog_dir = resolve_catalog_dir()
-        registry = build_registry(catalog_dir)
-        log.info("카탈로그 로드: %s개 (%s)", len(registry.all()), catalog_dir)
-    except FileNotFoundError as exc:
-        log.warning("카탈로그를 찾지 못함 — 빈 레지스트리로 기동: %s", exc)
-        registry = InMemoryRegistry([])
+    # 라이브 레지스트리(HARNESS_LIVE_REGISTRY=on)는 startup 에 네트워크 워밍이 있어 블로킹 I/O 다
+    # → 이벤트 루프를 막지 않도록 스레드에서 조립한다(추천기 임베딩 인덱싱도 함께).
+    def _build_catalog() -> tuple[Any, LiveRecommender]:
+        try:
+            catalog_dir = resolve_catalog_dir()
+            local = build_registry(catalog_dir)
+            log.info("카탈로그 로드: %s개 (%s)", len(local.all()), catalog_dir)
+        except FileNotFoundError as exc:
+            log.warning("카탈로그를 찾지 못함 — 빈 레지스트리로 기동: %s", exc)
+            local = InMemoryRegistry([])
+        reg = federate(local)  # off 면 로컬 그대로. on 이면 공식 MCP 레지스트리를 라이브로 합침.
+        if reg is not local:
+            log.info("라이브 레지스트리 연동: 총 %s개(로컬+공식 MCP 레지스트리)", len(reg.all()))
+        # LiveRecommender: 라이브 내용이 바뀌면 재인덱싱. get() 을 startup 에 미리 태워 워밍.
+        rec = LiveRecommender(reg)
+        rec.get()
+        return reg, rec
+
+    registry, recommender = await asyncio.to_thread(_build_catalog)
     app.state.registry = registry
-    app.state.recommender = Recommender(registry)  # 키는 배포 env 로 startup 에 결정(런타임 변조 없음)
+    app.state.recommender = recommender
     # 저장소 DB(SQL) + 계정(사용자·팀) + SSE 브로드캐스터. DATABASE_URL 없으면 SQLite(store 폴더).
     from .db import make_engine, resolve_database_url
 
@@ -121,7 +134,8 @@ def _registry(request: Request) -> InMemoryRegistry:
 
 
 def _recommender(request: Request) -> Recommender:
-    return cast(Recommender, request.app.state.recommender)
+    # LiveRecommender.get() — 라이브 내용이 바뀌었으면 재인덱싱(동기 엔드포인트는 스레드풀 실행이라 안전).
+    return cast(LiveRecommender, request.app.state.recommender).get()
 
 
 @app.get("/health")

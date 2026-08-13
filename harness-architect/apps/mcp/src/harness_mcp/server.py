@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from harness_catalog import Recommender, build_registry, resolve_catalog_dir
+from harness_catalog import LiveRecommender, Recommender, build_registry, federate, resolve_catalog_dir
 from harness_resolver import HarnessConfig, InMemoryRegistry, Registry, resolve
 from harness_runtime import available_targets, emit
 from mcp.server.mcpserver import MCPServer
@@ -32,8 +32,9 @@ log = logging.getLogger("harness_mcp")
 mcp = MCPServer(name="harness", version="0.1.0")
 
 # 레지스트리·추천기는 임베딩 인덱스 비용이 있어 프로세스당 한 번만 만든다(지연 초기화).
+# 라이브 연동 시 LiveRecommender 가 레지스트리 generation 변화만큼만 재인덱싱한다.
 _registry: Registry | None = None
-_recommender: Recommender | None = None
+_recommender: LiveRecommender | None = None
 
 
 def get_registry() -> Registry:
@@ -41,19 +42,23 @@ def get_registry() -> Registry:
     if _registry is None:
         try:
             catalog_dir = resolve_catalog_dir()
-            _registry = build_registry(catalog_dir)
-            log.info("카탈로그 로드: %d개 (%s)", len(_registry.all()), catalog_dir)
+            local = build_registry(catalog_dir)
+            log.info("카탈로그 로드: %d개 (%s)", len(local.all()), catalog_dir)
         except FileNotFoundError as exc:
             log.warning("카탈로그를 찾지 못함 — 빈 레지스트리로 기동: %s", exc)
-            _registry = InMemoryRegistry([])
+            local = InMemoryRegistry([])
+        # HARNESS_LIVE_REGISTRY=on 이면 공식 MCP 레지스트리를 라이브로 합친다(off 면 로컬 그대로).
+        _registry = federate(local)
+        if _registry is not local:
+            log.info("라이브 레지스트리 연동: 총 %d개(로컬+공식 MCP 레지스트리)", len(_registry.all()))
     return _registry
 
 
 def get_recommender() -> Recommender:
     global _recommender
     if _recommender is None:
-        _recommender = Recommender(get_registry())
-    return _recommender
+        _recommender = LiveRecommender(get_registry())
+    return _recommender.get()  # 라이브 내용이 바뀌었으면 재인덱싱, 아니면 캐시 재사용
 
 
 def _load_config(harness_yaml: str) -> HarnessConfig:
