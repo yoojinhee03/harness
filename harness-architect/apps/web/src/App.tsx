@@ -1,11 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, auth, scopePref, type HarnessInput, type Recommendation } from "./api/client";
 import { AppShell, type View } from "./components/AppShell";
 import { CommandPalette } from "./components/CommandPalette";
 import { LoginScreen } from "./components/LoginScreen";
 import { clearDraft, loadDraft, saveDraft } from "./lib/draft";
-import { saveHarness } from "./lib/store";
 
 interface Draft {
   step: Step;
@@ -47,15 +46,30 @@ export default function App() {
   };
 
   // 로그인 후 계정 정보(사이드바 표시). 토큰이 만료/무효면 401 → 자동 로그아웃.
+  const queryClient = useQueryClient();
   const meQ = useQuery({ queryKey: ["me"], queryFn: api.me, enabled: authed, retry: false });
   useEffect(() => {
     if (meQ.isError) {
-      auth.clear();
-      setAuthed(false);
+      logout();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meQ.isError]);
 
+  // 로그아웃 = 이 브라우저의 이전 사용자 흔적을 전부 제거(계정 간 데이터 누출 방지):
+  // react-query 캐시(하네스·me·versions)·생성 드래프트·인메모리 상태·워크스페이스.
   function logout() {
+    queryClient.clear();
+    clearDraft();
+    localStorage.removeItem("harness.saved"); // 구 대시보드 잔재
+    scopePref.set("personal");
+    setWorkspaceState("personal");
+    setSelection({});
+    setDescription("");
+    setRequirements([]);
+    setRecommendations([]);
+    setGroups({});
+    setMetadataId("untitled-harness");
+    setStep("A");
     auth.clear();
     setAuthed(false);
     setView("create");
@@ -97,14 +111,7 @@ export default function App() {
   }, [selection, metadataId, description]);
 
   function handleSaved(yaml: string) {
-    saveHarness({
-      id: metadataId,
-      name: harnessInput.metadata?.name || metadataId,
-      createdAt: Date.now(),
-      yaml,
-      components: Object.values(selection),
-      permissions: harnessInput.permissions ?? {},
-    });
+    // 저장은 백엔드가 단일 원본(스코프 격리). 예전 localStorage 저장은 전역이라 계정 간 누출 위험 → 제거.
     api
       .putHarness(metadataId, workspace, {
         name: harnessInput.metadata?.name || metadataId,
