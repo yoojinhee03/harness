@@ -1,26 +1,39 @@
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { api, type CatalogItem, type ComponentType } from "../api/client";
 import { Badge, Button, Card, Chip, codeBlock, EmptyState, Input, PageHeader, SkeletonCards, TYPE_COLOR, TYPE_LABEL } from "../lib/ui";
 
 const TYPES: ComponentType[] = ["mcp", "skill", "context", "hook"];
+const PAGE = 24;
 
 export default function ScreenE({ onColdStart }: { onColdStart: () => void }) {
-  const { data: items = [], isPending } = useQuery({ queryKey: ["catalog"], queryFn: api.catalog });
   const [q, setQ] = useState("");
+  const [dq, setDq] = useState(""); // 디바운스된 검색어(서버 검색)
   const [type, setType] = useState<ComponentType | null>(null);
   const [cap, setCap] = useState<string | null>(null);
+  const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<CatalogItem | null>(null);
 
-  const filtered = items.filter((i) => {
-    if (type && i.type !== type) return false;
-    if (cap && !i.capability_tags.includes(cap) && !i.provides.includes(cap)) return false;
-    if (q) {
-      const hay = `${i.id} ${i.name} ${i.summary} ${i.capability_tags.join(" ")}`.toLowerCase();
-      if (!hay.includes(q.toLowerCase())) return false;
-    }
-    return true;
+  // 검색어 디바운스(300ms) — 매 타이핑마다 요청하지 않도록.
+  useEffect(() => {
+    const t = setTimeout(() => setDq(q), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+  // 필터·검색이 바뀌면 첫 페이지로.
+  useEffect(() => {
+    setOffset(0);
+  }, [dq, type, cap]);
+
+  // 서버 페이지네이션 — 필터·검색·정렬·슬라이스는 서버가. 페이지 전환 시 이전 데이터 유지(부드럽게).
+  const { data, isPending } = useQuery({
+    queryKey: ["catalog", { type, cap, dq, offset }],
+    queryFn: () => api.catalogPage({ type, capability: cap, q: dq, limit: PAGE, offset }),
+    placeholderData: keepPreviousData,
   });
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const from = total === 0 ? 0 : offset + 1;
+  const to = offset + items.length;
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
@@ -58,38 +71,56 @@ export default function ScreenE({ onColdStart }: { onColdStart: () => void }) {
         {isPending ? (
           <SkeletonCards count={6} />
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {filtered.map((i) => (
-              <button
-                key={i.id}
-                onClick={() => setSelected(i)}
-                className={`rounded-xl border p-4 text-left transition-colors ${
-                  selected?.id === i.id ? "border-accent ring-1 ring-accent/40" : "border-line hover:border-muted/40"
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-medium text-fg">{i.name}</span>
-                  <Chip className={TYPE_COLOR[i.type]}>{TYPE_LABEL[i.type]}</Chip>
+          <>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {items.map((i) => (
+                <button
+                  key={i.id}
+                  onClick={() => setSelected(i)}
+                  className={`rounded-xl border p-4 text-left transition-colors ${
+                    selected?.id === i.id ? "border-accent ring-1 ring-accent/40" : "border-line hover:border-muted/40"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-fg">{i.name}</span>
+                    <Chip className={TYPE_COLOR[i.type]}>{TYPE_LABEL[i.type]}</Chip>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">{i.summary}</p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {i.capability_tags.map((c) => (
+                      <button
+                        key={c}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCap(c);
+                        }}
+                        className="rounded-full bg-surface-2 px-2 py-0.5 text-xs text-muted transition-colors hover:text-fg"
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                </button>
+              ))}
+              {items.length === 0 && <EmptyState title="결과 없음" />}
+            </div>
+
+            {total > 0 && (
+              <div className="mt-4 flex items-center justify-between text-xs text-muted">
+                <span>
+                  {from}–{to} / 총 {total.toLocaleString()}개
+                </span>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="subtle" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>
+                    이전
+                  </Button>
+                  <Button size="sm" variant="subtle" disabled={to >= total} onClick={() => setOffset(offset + PAGE)}>
+                    다음
+                  </Button>
                 </div>
-                <p className="mt-1 text-xs text-muted">{i.summary}</p>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {i.capability_tags.map((c) => (
-                    <button
-                      key={c}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setCap(c);
-                      }}
-                      className="rounded-full bg-surface-2 px-2 py-0.5 text-xs text-muted transition-colors hover:text-fg"
-                    >
-                      {c}
-                    </button>
-                  ))}
-                </div>
-              </button>
-            ))}
-            {filtered.length === 0 && <EmptyState title="결과 없음" />}
-          </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 

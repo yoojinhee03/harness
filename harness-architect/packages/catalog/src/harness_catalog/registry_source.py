@@ -194,6 +194,7 @@ class MCPRegistrySource(_TTLSource):
     """공식 MCP 레지스트리 라이브 소스 — `/v0/servers` 커서 페이지네이션."""
 
     _label = "MCP 레지스트리"
+    origin = "registry"  # DB 적재 시 origin 태그(catalog_store.sync_catalog)
 
     def __init__(
         self,
@@ -309,6 +310,7 @@ class MarketplaceSource(_TTLSource):
     """
 
     _label = "플러그인 마켓플레이스"
+    origin = "marketplace"  # DB 적재 시 origin 태그(catalog_store.sync_catalog)
 
     def __init__(
         self,
@@ -356,6 +358,11 @@ class FederatedRegistry:
     def __init__(self, local: Registry, sources: list[LiveSource] | None = None) -> None:
         self._local = local
         self._sources: list[LiveSource] = sources or []
+
+    @property
+    def local(self) -> Registry:
+        """로컬(손큐레이션) 레지스트리 — 라이브 페치 없이 접근(헬스체크 등 값싼 경로용)."""
+        return self._local
 
     def _live(self) -> list[Component]:
         out: list[Component] = []

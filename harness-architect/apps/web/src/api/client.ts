@@ -199,6 +199,19 @@ export interface KeyStatus {
 export const api = {
   health: () => fetch(`${BASE}/health`).then((r) => r.json()),
   catalog: () => fetch(`${BASE}/catalog`).then((r) => r.json() as Promise<CatalogItem[]>),
+  // 페이지네이션 — type·capability·q 필터/검색 + limit/offset. 총계는 X-Total-Count 헤더.
+  catalogPage: (params: { type?: string | null; capability?: string | null; q?: string; limit?: number; offset?: number } = {}) => {
+    const sp = new URLSearchParams();
+    if (params.type) sp.set("type", params.type);
+    if (params.capability) sp.set("capability", params.capability);
+    if (params.q) sp.set("q", params.q);
+    if (params.limit != null) sp.set("limit", String(params.limit));
+    if (params.offset != null) sp.set("offset", String(params.offset));
+    return fetch(`${BASE}/catalog?${sp.toString()}`).then(async (r) => ({
+      items: (await r.json()) as CatalogItem[],
+      total: Number(r.headers.get("X-Total-Count") ?? 0),
+    }));
+  },
   catalogItem: (id: string) =>
     fetch(`${BASE}/catalog/${id}`).then((r) => r.json() as Promise<Record<string, unknown>>),
   recommend: (description: string, top_k = 6) =>

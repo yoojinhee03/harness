@@ -92,6 +92,21 @@ harness_versions = Table(
     Column("updated_at", String(40), nullable=False),
 )
 
+# 카탈로그 컴포넌트 — 스케줄 harvest(MCP 레지스트리·마켓플레이스)가 origin 별로 적재하고,
+# 서빙은 여기서 읽는다(네트워크 무의존·즉시·레플리카 공유·재시작 생존). data 는 Component 직렬화(JSON).
+# 복합 PK(origin, id): 같은 id 가 서로 다른 origin 에서 와도 충돌 없이 각자 보관(읽을 때 dedup).
+catalog_components = Table(
+    "catalog_components",
+    metadata,
+    Column("origin", String(32), primary_key=True),  # registry | marketplace | local
+    Column("id", String(256), primary_key=True),  # 컴포넌트 id(레지스트리 역DNS·마켓플레이스 이름 등)
+    Column("type", String(16), nullable=False, index=True),  # skill | mcp | context | hook
+    Column("name", String(256), nullable=False, default=""),
+    Column("version", String(64), nullable=False, default=""),
+    Column("data", Text, nullable=False),  # Component.model_dump_json() — 나머지 필드 전부
+    Column("updated_at", String(40), nullable=False, index=True),
+)
+
 
 def resolve_database_url(store_dir: Path) -> str:
     """`DATABASE_URL`(프로덕션 Postgres) 또는 기본 SQLite(store 폴더 밑)."""

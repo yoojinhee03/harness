@@ -26,7 +26,14 @@ import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-from harness_catalog import LiveRecommender, Recommender, build_registry, federate, resolve_catalog_dir
+from harness_catalog import (
+    FederatedRegistry,
+    LiveRecommender,
+    Recommender,
+    build_registry,
+    load_settings,
+    resolve_catalog_dir,
+)
 from harness_resolver import HarnessConfig, InMemoryRegistry, ResolveResult, resolve
 from harness_runtime import AnthropicRunner, available_targets, build_request, emit
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -35,6 +42,7 @@ from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
 
 from .accounts import AccountStore
+from .catalog_store import CatalogStore, DbCatalogSource, seconds_since, sync_catalog
 from .observability import (
     ObservabilityMiddleware,
     configure_logging,
@@ -69,29 +77,7 @@ log = logging.getLogger("harness_api")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # 카탈로그를 한 번 로드해 레지스트리·추천기를 준비한다. 없으면 빈 상태로 기동.
-    # 라이브 레지스트리(HARNESS_LIVE_REGISTRY=on)는 startup 에 네트워크 워밍이 있어 블로킹 I/O 다
-    # → 이벤트 루프를 막지 않도록 스레드에서 조립한다(추천기 임베딩 인덱싱도 함께).
-    def _build_catalog() -> tuple[Any, LiveRecommender]:
-        try:
-            catalog_dir = resolve_catalog_dir()
-            local = build_registry(catalog_dir)
-            log.info("카탈로그 로드: %s개 (%s)", len(local.all()), catalog_dir)
-        except FileNotFoundError as exc:
-            log.warning("카탈로그를 찾지 못함 — 빈 레지스트리로 기동: %s", exc)
-            local = InMemoryRegistry([])
-        reg = federate(local)  # off 면 로컬 그대로. on 이면 공식 MCP 레지스트리를 라이브로 합침.
-        if reg is not local:
-            log.info("라이브 레지스트리 연동: 총 %s개(로컬+공식 MCP 레지스트리)", len(reg.all()))
-        # LiveRecommender: 라이브 내용이 바뀌면 재인덱싱. get() 을 startup 에 미리 태워 워밍.
-        rec = LiveRecommender(reg)
-        rec.get()
-        return reg, rec
-
-    registry, recommender = await asyncio.to_thread(_build_catalog)
-    app.state.registry = registry
-    app.state.recommender = recommender
-    # 저장소 DB(SQL) + 계정(사용자·팀) + SSE 브로드캐스터. DATABASE_URL 없으면 SQLite(store 폴더).
+    # 저장소 DB(SQL) + 계정 + SSE 브로드캐스터. DATABASE_URL 없으면 SQLite(store 폴더).
     from .db import make_engine, resolve_database_url
 
     init_sentry()  # SENTRY_DSN 있으면 에러 트래킹
@@ -103,7 +89,45 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # OAuth CSRF state 임시 저장(state -> 생성 시각). 단일 인스턴스 개발용 — 멀티 인스턴스는 Redis/DB 로.
     app.state.oauth_states = {}
     log.info("저장소 DB: %s · 스코프 격리 · OAuth 인증", engine.url)
+
+    # 카탈로그 — 서빙은 **DB 만** 읽어 즉시 응답한다(네트워크 무의존). 느린 harvest(레지스트리·
+    # 마켓플레이스)는 백그라운드 주기 스케줄러가 DB 에 적재한다. 서빙과 harvest 를 DB 로 분리.
+    cfg = load_settings()
+    try:
+        local = build_registry(resolve_catalog_dir())
+        log.info("로컬 카탈로그 시드: %s개", len(local.all()))
+    except FileNotFoundError as exc:
+        log.warning("카탈로그를 찾지 못함 — 빈 레지스트리로 기동: %s", exc)
+        local = InMemoryRegistry([])
+    catalog_store = CatalogStore(engine)
+    app.state.catalog_store = catalog_store
+    harvest_on = cfg.use_live_registry or cfg.use_marketplace
+    # off 면 로컬 시드만(결정적·오프라인). on 이면 로컬 + DB(harvest 결과)를 합쳐 서빙.
+    registry = FederatedRegistry(local, [DbCatalogSource(catalog_store)]) if harvest_on else local
+    app.state.registry = registry
+    app.state.recommender = LiveRecommender(registry)
+
+    async def _sync_loop() -> None:
+        # 주기적으로 harvest→DB. 첫 기동에 DB 가 비었으면 즉시 1회. 최근 sync 가 있으면 건너뛴다
+        # (다중 레플리카 중복 완화 — 값싼 last_synced 확인). 서빙은 이 루프와 무관하게 항상 DB 를 읽는다.
+        while True:
+            try:
+                last = await asyncio.to_thread(catalog_store.last_synced)
+                if seconds_since(last) >= cfg.catalog_sync_interval:
+                    res = await asyncio.to_thread(sync_catalog, engine, cfg)
+                    log.info("카탈로그 sync 완료: %s (총 %s개)", res, await asyncio.to_thread(catalog_store.count))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 실패해도 루프 유지(다음 주기 재시도)
+                log.warning("카탈로그 sync 오류(다음 주기 재시도): %s", exc)
+            await asyncio.sleep(min(cfg.catalog_sync_interval, 300))
+
+    app.state.sync_task = asyncio.create_task(_sync_loop()) if harvest_on else None
     yield
+    # 종료 — 진행 중인 sync 스케줄러 취소.
+    task = getattr(app.state, "sync_task", None)
+    if task is not None and not task.done():
+        task.cancel()
 
 
 app = FastAPI(
@@ -133,6 +157,7 @@ if _cors_origins:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Total-Count"],  # 페이지네이션 총계 헤더를 크로스오리진에서도 읽게
     )
 
 
@@ -147,9 +172,10 @@ def _recommender(request: Request) -> Recommender:
 
 @app.get("/health")
 def health(request: Request) -> dict[str, Any]:
-    """라이브니스 — 프로세스가 떠 있는지."""
-    reg = _registry(request)
-    return {"status": "ok", "catalog_size": len(reg.all())}
+    """라이브니스 — 프로세스가 떠 있는지. 라이브 페치를 유발하지 않도록 로컬 카탈로그 크기만 본다."""
+    reg = request.app.state.registry
+    base = getattr(reg, "local", reg)  # FederatedRegistry 면 로컬만(네트워크 X)
+    return {"status": "ok", "catalog_size": len(base.all())}
 
 
 @app.get("/ready")
@@ -230,15 +256,37 @@ def verify_keys() -> dict[str, str]:
 @app.get("/catalog", response_model=list[CatalogItem])
 def catalog(
     request: Request,
+    response: Response,
     type: str | None = Query(default=None, description="skill|mcp|context|hook"),
-    capability: str | None = Query(default=None, description="provides 로 필터"),
+    capability: str | None = Query(default=None, description="provides/capability_tags 로 필터"),
+    q: str | None = Query(default=None, description="id·name·summary·태그 부분일치 검색"),
+    limit: int | None = Query(default=None, ge=1, le=200, description="페이지 크기(미지정=전체)"),
+    offset: int = Query(default=0, ge=0, description="페이지 시작 오프셋"),
 ) -> list[CatalogItem]:
+    """카탈로그 목록 — type·capability·q 로 필터/검색하고 limit·offset 으로 페이지네이션.
+
+    총 개수(필터 적용 후)는 `X-Total-Count` 헤더로 준다(본문은 현재 페이지만). 카탈로그가
+    수천 개로 커져도 서버에서 잘라 보내므로 페이로드·렌더가 가볍다. 필터·검색·정렬은 서버가 하므로
+    검색이 현재 페이지가 아니라 전체에 걸린다.
+    """
     comps = _registry(request).all()
     if type:
         comps = [c for c in comps if c.type == type]
     if capability:
         comps = [c for c in comps if capability in c.provides or capability in c.capability_tags]
-    return [CatalogItem.from_component(c) for c in comps]
+    if q:
+        ql = q.lower()
+        comps = [
+            c
+            for c in comps
+            if ql in f"{c.id} {c.name} {c.summary} {' '.join(c.capability_tags)}".lower()
+        ]
+    total = len(comps)
+    # 안정적 페이지 경계 — 타입·이름·id 순 정렬 후 슬라이스.
+    comps.sort(key=lambda c: (c.type, c.name.lower(), c.id))
+    page = comps[offset : offset + limit] if limit is not None else comps[offset:]
+    response.headers["X-Total-Count"] = str(total)
+    return [CatalogItem.from_component(c) for c in page]
 
 
 @app.get("/catalog/{component_id}")

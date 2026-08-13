@@ -31,6 +31,13 @@ services:
       # 없으면 빈 값 → 자동으로 로컬 폴백. 있으면 품질 모드 자동 활성.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      # 카탈로그 harvest — 공식 MCP 레지스트리 + 플러그인 마켓플레이스를 백그라운드 스케줄러가 DB 에
+      # 적재하고 서빙은 DB 만 읽는다(.env 로 제어, 기본 off=로컬 13개). 서빙 경로엔 네트워크 없음.
+      HARNESS_LIVE_REGISTRY: ${HARNESS_LIVE_REGISTRY:-off}
+      HARNESS_MARKETPLACE: ${HARNESS_MARKETPLACE:-off}
+      HARNESS_REGISTRY_MAX_PAGES: ${HARNESS_REGISTRY_MAX_PAGES:-50}
+      HARNESS_REGISTRY_ENRICH_MAX: ${HARNESS_REGISTRY_ENRICH_MAX:-150}
+      HARNESS_CATALOG_SYNC_INTERVAL: ${HARNESS_CATALOG_SYNC_INTERVAL:-21600}
       # 로그인(OAuth) — 사람은 GitHub OAuth, 기계(VSCode)는 설정에서 발급한 PAT.
       # 아래가 모두 비면 로그인 방법이 없어 안내 화면만 뜬다(.env 에 채우거나 dev-auth 를 켠다).
       GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}

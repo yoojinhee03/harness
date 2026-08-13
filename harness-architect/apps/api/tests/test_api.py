@@ -41,6 +41,29 @@ def test_catalog_list_and_filter(client):
     assert [c["id"] for c in hosting] == ["github-mcp"]
 
 
+def test_catalog_pagination(client):
+    # 총계는 X-Total-Count 헤더로, 본문은 현재 페이지만.
+    r = client.get("/catalog", params={"limit": 5, "offset": 0})
+    assert r.headers["X-Total-Count"] == "13"
+    page1 = r.json()
+    assert len(page1) == 5
+    page2 = client.get("/catalog", params={"limit": 5, "offset": 5}).json()
+    assert len(page2) == 5
+    # 페이지 경계 안정(정렬) — 겹침 없음.
+    assert {c["id"] for c in page1}.isdisjoint({c["id"] for c in page2})
+    # 마지막 페이지는 남은 것만.
+    tail = client.get("/catalog", params={"limit": 5, "offset": 10}).json()
+    assert len(tail) == 3
+
+
+def test_catalog_search_q(client):
+    r = client.get("/catalog", params={"q": "slack"})
+    hits = r.json()
+    assert [c["id"] for c in hits] == ["slack-mcp"]  # id 부분일치
+    # 검색 결과 총계가 헤더에 반영(limit 없음 → 본문=전체).
+    assert int(r.headers["X-Total-Count"]) == len(hits)
+
+
 def test_catalog_detail_404(client):
     assert client.get("/catalog/nope").status_code == 404
 
