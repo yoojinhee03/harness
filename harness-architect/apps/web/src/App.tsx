@@ -20,6 +20,7 @@ import ScreenB from "./screens/ScreenB";
 import ScreenC from "./screens/ScreenC";
 import ScreenD from "./screens/ScreenD";
 import ScreenE from "./screens/ScreenE";
+import ScreenGuide from "./screens/ScreenGuide";
 import ScreenSettings from "./screens/ScreenSettings";
 import ScreenSync from "./screens/ScreenSync";
 
@@ -187,6 +188,7 @@ export default function App() {
         {view === "catalog" && <ScreenE onColdStart={newHarness} />}
         {view === "harnesses" && <ScreenSync onCreate={newHarness} workspace={workspace} />}
         {view === "settings" && <ScreenSettings onLogout={logout} />}
+        {view === "guide" && <ScreenGuide setView={setView} onNewHarness={newHarness} />}
       </AppShell>
 
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} setView={setView} onNewHarness={newHarness} />

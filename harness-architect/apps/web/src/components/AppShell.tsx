@@ -2,13 +2,14 @@ import { useState, type ReactNode } from "react";
 import { useTheme } from "../lib/theme";
 import { IconButton, Kbd } from "../lib/ui";
 
-export type View = "create" | "catalog" | "harnesses" | "settings";
+export type View = "create" | "catalog" | "harnesses" | "settings" | "guide";
 
 const NAV: { key: View; label: string; icon: ReactNode }[] = [
   { key: "create", label: "생성", icon: <IconSparkle /> },
   { key: "catalog", label: "카탈로그", icon: <IconGrid /> },
   { key: "harnesses", label: "하네스", icon: <IconLayers /> },
   { key: "settings", label: "설정", icon: <IconGear /> },
+  { key: "guide", label: "사용가이드", icon: <IconBook /> },
 ];
 
 const TITLE: Record<View, { title: string; sub: string }> = {
@@ -16,6 +17,7 @@ const TITLE: Record<View, { title: string; sub: string }> = {
   catalog: { title: "카탈로그", sub: "추천 대상 구성요소" },
   harnesses: { title: "하네스", sub: "내 하네스 · 팀 공유 (실시간 동기화)" },
   settings: { title: "설정", sub: "API 키 · 품질 모드" },
+  guide: { title: "사용가이드", sub: "처음 사용자를 위한 화면별 안내" },
 };
 
 interface WsTeam {
@@ -184,6 +186,7 @@ function IconSparkle() { return <svg {...S}><path d="M12 3l1.9 5.1L19 10l-5.1 1.
 function IconGrid() { return <svg {...S}><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>; }
 function IconLayers() { return <svg {...S}><path d="M12 3l9 5-9 5-9-5 9-5z" /><path d="M3 13l9 5 9-5" /></svg>; }
 function IconGear() { return <svg {...S}><circle cx="12" cy="12" r="3" /><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 2h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12a7 7 0 00.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 22h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0019 12z" /></svg>; }
+function IconBook() { return <svg {...S}><path d="M4 5a2 2 0 012-2h6v16H6a2 2 0 00-2 2V5z" /><path d="M20 5a2 2 0 00-2-2h-6v16h6a2 2 0 012 2V5z" /></svg>; }
 function IconSearch() { return <svg {...S} width={13} height={13}><circle cx="11" cy="11" r="7" /><path d="M21 21l-4-4" /></svg>; }
 function IconSun() { return <svg {...S}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19" /></svg>; }
 function IconMoon() { return <svg {...S}><path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z" /></svg>; }

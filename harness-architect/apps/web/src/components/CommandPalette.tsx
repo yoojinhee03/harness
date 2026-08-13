@@ -40,6 +40,7 @@ export function CommandPalette({
       { id: "go-catalog", label: "이동: 카탈로그", hint: "이동", run: () => { setView("catalog"); onClose(); } },
       { id: "go-harnesses", label: "이동: 하네스", hint: "이동", run: () => { setView("harnesses"); onClose(); } },
       { id: "go-settings", label: "이동: 설정", hint: "이동", run: () => { setView("settings"); onClose(); } },
+      { id: "go-guide", label: "이동: 사용가이드", hint: "이동", run: () => { setView("guide"); onClose(); } },
       { id: "theme", label: "테마 전환 (다크/라이트)", hint: "설정", run: () => { toggleTheme(); onClose(); } },
     ],
     [setView, onNewHarness, onClose, toggleTheme],
