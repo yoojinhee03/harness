@@ -42,6 +42,25 @@ LOCAL_PLUGIN = {
     "version": "1.0.0",
     "source": "./plugins/clangd-lsp",
 }
+# 실행 마커 없음 + 능력이 knowledge facet(convention.coding) 뿐 → context.
+CONTEXT_KNOWLEDGE_PLUGIN = {
+    "name": "team-style-guide",
+    "description": "Team coding convention and style guide as always-on background",
+    "category": "convention",
+    "source": "./plugins/team-style-guide",
+}
+# 실행 마커 없음 + 능력이 prompt facet(prompt.format) 뿐 → context.
+CONTEXT_PROMPT_PLUGIN = {
+    "name": "output-format-rules",
+    "description": "Structured output format guidance injected as a prompt directive",
+    "source": "./plugins/output-format-rules",
+}
+# 실행 마커 없지만 능력이 task facet(analyze.data) → context 아님(기본 skill).
+TASK_PLUGIN = {
+    "name": "data-analyzer",
+    "description": "Analyze data and produce statistics",
+    "source": "./plugins/data-analyzer",
+}
 
 
 # ── plugin → Component 매핑 ──
@@ -76,6 +95,22 @@ def test_local_source_string_and_display_name():
 
 def test_nameless_plugin_skipped():
     assert plugin_to_component({"description": "이름 없음"}) is None
+
+
+def test_context_plugin_from_knowledge_facet():
+    c = plugin_to_component(CONTEXT_KNOWLEDGE_PLUGIN)
+    assert c is not None and c.type == "context"  # convention.coding(knowledge) 뿐 → context
+    assert "convention.coding" in c.provides
+
+
+def test_context_plugin_from_prompt_facet():
+    c = plugin_to_component(CONTEXT_PROMPT_PLUGIN)
+    assert c is not None and c.type == "context"  # prompt.format(prompt) 뿐 → context
+
+
+def test_task_facet_plugin_stays_skill():
+    c = plugin_to_component(TASK_PLUGIN)
+    assert c is not None and c.type == "skill"  # analyze.data(task) → context 아님, 기본 skill
 
 
 # ── MarketplaceSource ──

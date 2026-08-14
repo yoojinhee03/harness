@@ -32,7 +32,7 @@ from harness_resolver.models import ComponentType
 from .enrichment import CapabilityEnricher
 from .harvest import ServerDescriptor, harvest_component
 from .settings import Settings, load_settings
-from .vocabulary import extract_capabilities_heuristic
+from .vocabulary import CAPABILITY_VOCAB, extract_capabilities_heuristic
 
 log = logging.getLogger("harness_catalog.registry_source")
 
@@ -298,6 +298,14 @@ class MCPRegistrySource(_TTLSource):
 # ── 플러그인 마켓플레이스(non-mcp 타입 소스) ──
 _MCP_DESC_HINTS = ("mcp server", "mcp access", "bundles the official")
 _HOOK_DESC_HINTS = ("hook", " monitor", "guardrail")
+# context 감지 — 배경지식(knowledge)·프롬프트 조각(prompt) facet. 실행 마커가 없고 추출된 능력이
+# 이 facet 들뿐이면 규칙·컨벤션·프롬프트 프리앰블 번들로 보고 context 로 분류한다.
+_CONTEXT_FACETS = frozenset({"knowledge", "prompt"})
+
+
+def _cap_facets(caps: list[str]) -> set[str]:
+    """능력 id 목록 → facet 집합(어휘 미등록 능력은 무시)."""
+    return {CAPABILITY_VOCAB[c][0] for c in caps if c in CAPABILITY_VOCAB}
 
 
 def _source_url(source: Any) -> str | None:
@@ -310,8 +318,8 @@ def _source_url(source: Any) -> str | None:
     return None
 
 
-def _plugin_type(plugin: dict[str, Any]) -> ComponentType:
-    """플러그인이 선언한 배열·설명으로 카탈로그 타입을 추론(subagent 는 skill 로 흡수)."""
+def _plugin_type(plugin: dict[str, Any], caps: list[str]) -> ComponentType:
+    """플러그인이 선언한 배열·설명·능력 facet 으로 카탈로그 타입을 추론(subagent 는 skill 로 흡수)."""
     if isinstance(plugin.get("mcpServers"), dict):
         return "mcp"
     if plugin.get("hooks"):
@@ -323,6 +331,11 @@ def _plugin_type(plugin: dict[str, Any]) -> ComponentType:
         return "mcp"
     if any(h in desc for h in _HOOK_DESC_HINTS):
         return "hook"
+    # 실행 마커가 없을 때: 가장 강한 능력 신호(top cap)의 facet 이 배경지식/프롬프트면 context —
+    # 규칙·컨벤션·프롬프트 조각 번들. top 만 보므로 짧은 키워드의 약한 부수 매치 노이즈에 강하다.
+    top_facet = _cap_facets(caps[:1])
+    if top_facet and top_facet <= _CONTEXT_FACETS:
+        return "context"
     return "skill"  # 기본 — 대다수 플러그인은 스킬 번들
 
 
@@ -340,7 +353,7 @@ def plugin_to_component(plugin: dict[str, Any]) -> Component | None:
     caps = extract_capabilities_heuristic(" ".join([str(name), description, *kw]))
     return Component(
         id=str(name),
-        type=_plugin_type(plugin),
+        type=_plugin_type(plugin, caps),
         name=str(plugin.get("displayName") or name),
         version=str(plugin.get("version") or "0.1.0"),
         summary=description[:120],
