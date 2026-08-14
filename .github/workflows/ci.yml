@@ -78,22 +78,26 @@ jobs:
       - name: Build API image
         run: docker build -t harness-api:ci harness-architect
       - name: Trivy scan (API image)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.33.1
+        continue-on-error: true # 리포트 전용: 스캔/설치 실패(레이트리밋 등)가 잡 전체를 막지 않도록
         with:
           image-ref: harness-api:ci
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "0" # 리포트 전용(초기 non-blocking; 안정화 후 1 로 게이트)
       - name: Compose smoke + e2e (SQLite / in-memory)
+        env:
+          HARNESS_DEV_AUTH: "on" # 실제 OAuth 앱 없이 이메일 dev-login 활성(compose 가 api 컨테이너로 전달)
         run: |
           set -euo pipefail
           docker compose up --build -d api
           for i in $(seq 1 30); do curl -sf http://localhost:8000/health && break || sleep 2; done
           curl -sf http://localhost:8000/health
-          # 인증·격리 관통: 등록 → 토큰으로 목록(빈 배열) 확인
-          TOKEN=$(curl -s -X POST http://localhost:8000/auth/register \
-            -H 'content-type: application/json' -d '{"handle":"ci"}' \
+          # 인증·격리 관통: dev-login 으로 세션 토큰 발급 → 토큰으로 목록(빈 배열) 확인
+          TOKEN=$(curl -s -X POST http://localhost:8000/auth/dev-login \
+            -H 'content-type: application/json' -d '{"email":"ci@example.com"}' \
             | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+          test -n "$TOKEN"
           test "$(curl -s http://localhost:8000/harnesses -H "Authorization: Bearer $TOKEN")" = "[]"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/harnesses)" = "401"
           docker compose down

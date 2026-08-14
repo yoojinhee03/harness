@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 푸시 전 CI 프리플라이트 실행. 실패하면 푸시를 막는다.
+# 활성화: git config core.hooksPath .githooks  (레포당 1회, scripts/setup-hooks.sh 가 대신 실행)
+# 우회:   git push --no-verify
+exec "$(git rev-parse --show-toplevel)/scripts/preflight.sh"

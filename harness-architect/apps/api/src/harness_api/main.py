@@ -923,7 +923,13 @@ async def test_component_endpoint(
         updated = store.set_status(sk, cid, "ready")
         new_status = updated["status"] if updated else "ready"
         await _broadcaster(request).publish(
-            {"type": "upsert", "kind": "component", "id": doc["id"], "scope": sk, "component": store.summary(updated or doc)}
+            {
+                "type": "upsert",
+                "kind": "component",
+                "id": doc["id"],
+                "scope": sk,
+                "component": store.summary(updated or doc),
+            }
         )
     return {"result": result, "status": new_status}
 
