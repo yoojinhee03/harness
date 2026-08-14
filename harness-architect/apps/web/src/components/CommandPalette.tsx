@@ -38,6 +38,7 @@ export function CommandPalette({
       { id: "new", label: "새 하네스 만들기", hint: "생성", run: () => { onNewHarness(); onClose(); } },
       { id: "go-create", label: "이동: 생성", hint: "이동", run: () => { setView("create"); onClose(); } },
       { id: "go-catalog", label: "이동: 카탈로그", hint: "이동", run: () => { setView("catalog"); onClose(); } },
+      { id: "go-studio", label: "이동: 스튜디오", hint: "이동", run: () => { setView("studio"); onClose(); } },
       { id: "go-harnesses", label: "이동: 하네스", hint: "이동", run: () => { setView("harnesses"); onClose(); } },
       { id: "go-settings", label: "이동: 설정", hint: "이동", run: () => { setView("settings"); onClose(); } },
       { id: "go-guide", label: "이동: 사용가이드", hint: "이동", run: () => { setView("guide"); onClose(); } },

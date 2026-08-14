@@ -25,9 +25,12 @@ class CatalogItem(BaseModel):
     context_tokens: int
     added_tools: int
     auth_required: bool
+    # ── 프로비넌스(신뢰 등급) ──
+    trust: str = "community"  # curated(손큐레이션) | official(공식 소스) | community(미검증 외부)
+    source: str | None = None  # 출처 URL/경로(있으면) — 프로비넌스 표시용.
 
     @classmethod
-    def from_component(cls, c: Component) -> CatalogItem:
+    def from_component(cls, c: Component, *, trust: str = "community") -> CatalogItem:
         return cls(
             id=c.id,
             type=c.type,
@@ -43,6 +46,8 @@ class CatalogItem(BaseModel):
             context_tokens=c.cost.context_tokens,
             added_tools=c.cost.added_tools,
             auth_required=bool(c.auth and c.auth.required),
+            trust=trust,
+            source=c.source,
         )
 
 
@@ -107,6 +112,30 @@ class HarnessSaveBody(BaseModel):
     name: str = ""
     description: str = ""
     yaml: str = Field(min_length=1)
+
+
+class ComponentAuthorBody(BaseModel):
+    """자연어 → context 컴포넌트 초안 생성(스튜디오 채팅). prior_id=이전 저장본 리파인."""
+
+    prompt: str = Field(min_length=1)
+    prior_id: str | None = None
+
+
+class LlmSettingsBody(BaseModel):
+    """앱 LLM/임베딩 키 저장. 키는 생략(None)=유지 · ""=삭제 · 값=교체(암호화 저장).
+    provider 는 LLM provider(anthropic|openai). 임베딩은 OpenAI 고정(embedding_key)."""
+
+    provider: str | None = None
+    llm_key: str | None = None
+    embedding_key: str | None = None
+
+
+class ComponentSaveBody(BaseModel):
+    """유저 컴포넌트 저장 upsert 본문 — data 는 Component 필드 dict. 스코프는 쿼리 파라미터."""
+
+    name: str = ""
+    description: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 class TokenCreateBody(BaseModel):

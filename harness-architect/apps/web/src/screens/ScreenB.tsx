@@ -1,6 +1,8 @@
-import type { ComponentType, Recommendation } from "../api/client";
+import { useQuery } from "@tanstack/react-query";
+import { api, type ComponentType, type Recommendation } from "../api/client";
 import type { Selection } from "../App";
-import { Badge, Button, Card, Chip, TYPE_COLOR, TYPE_LABEL } from "../lib/ui";
+import { capLabel } from "../lib/catalog";
+import { Badge, Button, Card, Chip, TrustBadge, TYPE_COLOR, TYPE_LABEL } from "../lib/ui";
 
 const BUDGET = 8000;
 const TYPE_ORDER: ComponentType[] = ["mcp", "skill", "context", "hook"];
@@ -26,6 +28,10 @@ export default function ScreenB({
   const usedTokens = selected.reduce((n, r) => n + r.context_tokens, 0);
   const usedTools = selected.reduce((n, r) => n + r.added_tools, 0);
   const overBudget = usedTokens > BUDGET;
+
+  // 내가(또는 팀이) 만든 ready 컴포넌트 — 추천과 함께 선택 가능(요청-스코프 레지스트리가 resolve).
+  const readyQ = useQuery({ queryKey: ["components", "ready"], queryFn: api.readyComponents });
+  const ready = readyQ.data ?? [];
 
   function toggle(rec: Recommendation) {
     const next = { ...selection };
@@ -54,12 +60,26 @@ export default function ScreenB({
           <div className="mt-3 flex flex-wrap gap-1.5">
             {requirements.map((cap) => (
               <Badge key={cap} className="bg-accent/15 text-accent">
-                {cap}
+                {capLabel(cap)}
               </Badge>
             ))}
             {requirements.length === 0 && <span className="text-xs text-muted">추출된 요구 능력 없음</span>}
           </div>
         </div>
+
+        {/* 내 구성요소(스튜디오에서 검증·테스트한 것) — 추천보다 먼저 노출 */}
+        {ready.length > 0 && (
+          <section className="mb-6">
+            <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-muted">
+              <Chip className="bg-violet-500/15 text-violet-400">내 구성요소</Chip>
+            </h3>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {ready.map((rec) => (
+                <RecCard key={rec.id} rec={rec} isSel={!!selection[rec.id]} conflict={conflictHint(rec)} onToggle={() => toggle(rec)} />
+              ))}
+            </div>
+          </section>
+        )}
 
         {TYPE_ORDER.filter((t) => (groups[t]?.length ?? 0) > 0).map((type) => (
           <section key={type} className="mb-6">
@@ -69,43 +89,9 @@ export default function ScreenB({
             <div className="grid gap-3 sm:grid-cols-2">
               {recommendations
                 .filter((r) => r.type === type)
-                .map((rec) => {
-                  const isSel = !!selection[rec.id];
-                  const conflict = conflictHint(rec);
-                  return (
-                    <button
-                      key={rec.id}
-                      onClick={() => toggle(rec)}
-                      className={`rounded-xl border p-4 text-left transition-colors ${
-                        isSel
-                          ? "border-accent bg-accent/5 ring-1 ring-accent/40"
-                          : "border-line bg-surface hover:border-muted/40"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="font-medium text-fg">{rec.name}</div>
-                        <div className="flex items-center gap-1">
-                          {rec.auth_required && <Badge className="bg-warn/15 text-warn">인증</Badge>}
-                          {conflict && <Badge className="bg-err/15 text-err">{conflict}</Badge>}
-                        </div>
-                      </div>
-                      <p className="mt-1 text-xs leading-relaxed text-muted">{rec.reason}</p>
-                      <div className="mt-3 flex flex-wrap gap-1">
-                        {rec.matched_capabilities.map((c) => (
-                          <Badge key={c} className="bg-ok/15 text-ok">
-                            {c}
-                          </Badge>
-                        ))}
-                        {rec.requires.map((c) => (
-                          <Badge key={c}>requires {c}</Badge>
-                        ))}
-                      </div>
-                      <div className="mt-2 text-xs text-muted/70">
-                        컨텍스트 {rec.context_tokens}토큰 · 도구 +{rec.added_tools} · score {rec.score}
-                      </div>
-                    </button>
-                  );
-                })}
+                .map((rec) => (
+                  <RecCard key={rec.id} rec={rec} isSel={!!selection[rec.id]} conflict={conflictHint(rec)} onToggle={() => toggle(rec)} />
+                ))}
             </div>
           </section>
         ))}
@@ -155,5 +141,49 @@ export default function ScreenB({
         </Card>
       </aside>
     </div>
+  );
+}
+
+function RecCard({
+  rec,
+  isSel,
+  conflict,
+  onToggle,
+}: {
+  rec: Recommendation;
+  isSel: boolean;
+  conflict: string | null;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      className={`rounded-xl border p-4 text-left transition-colors ${
+        isSel ? "border-accent bg-accent/5 ring-1 ring-accent/40" : "border-line bg-surface hover:border-muted/40"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="font-medium text-fg">{rec.name}</div>
+        <div className="flex items-center gap-1">
+          <TrustBadge trust={rec.trust} />
+          {rec.auth_required && <Badge className="bg-warn/15 text-warn">인증</Badge>}
+          {conflict && <Badge className="bg-err/15 text-err">{conflict}</Badge>}
+        </div>
+      </div>
+      <p className="mt-1 text-xs leading-relaxed text-muted">{rec.reason}</p>
+      <div className="mt-3 flex flex-wrap gap-1">
+        {rec.matched_capabilities.map((c) => (
+          <Badge key={c} className="bg-ok/15 text-ok">
+            {capLabel(c)}
+          </Badge>
+        ))}
+        {rec.requires.map((c) => (
+          <Badge key={c}>필요: {capLabel(c)}</Badge>
+        ))}
+      </div>
+      <div className="mt-2 text-xs text-muted/70">
+        컨텍스트 {rec.context_tokens}토큰 · 도구 +{rec.added_tools} · score {rec.score}
+      </div>
+    </button>
   );
 }

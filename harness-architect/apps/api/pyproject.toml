@@ -24,6 +24,8 @@ postgres = ["psycopg[binary]>=3.2"]
 redis = ["redis>=5.0"]
 # 에러 트래킹(선택) — SENTRY_DSN 설정 시 활성.
 sentry = ["sentry-sdk[fastapi]>=2.0"]
+# LLM provider SDK(선택) — 사용자별 키로 스튜디오 생성·테스트. 없으면 휴리스틱 폴백.
+llm = ["anthropic>=0.40", "openai>=1.40"]
 
 [build-system]
 requires = ["hatchling"]

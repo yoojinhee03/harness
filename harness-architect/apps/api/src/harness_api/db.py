@@ -92,6 +92,46 @@ harness_versions = Table(
     Column("updated_at", String(40), nullable=False),
 )
 
+# 유저 저작 컴포넌트 — 채팅으로 만든 카탈로그 구성요소(v1: context). 하네스와 동일하게 스코프
+# (`personal:<uid>` / `team:<tid>`)로 격리하고 버전 이력을 둔다. status 로 검증/테스트 게이트를 표현하고
+# (draft→valid→ready), ready 만 팀 공유·위저드 사용 가능. `data` 는 Component 직렬화(JSON).
+user_components = Table(
+    "user_components",
+    metadata,
+    Column("scope", String(160), primary_key=True),
+    Column("id", String(128), primary_key=True),
+    Column("owner_id", String(128), nullable=False),
+    Column("type", String(16), nullable=False, index=True),  # v1: context
+    Column("name", String(256), nullable=False),
+    Column("description", Text, nullable=False, default=""),
+    Column("data", Text, nullable=False),  # Component.model_dump_json()
+    Column("status", String(16), nullable=False, default="draft"),  # draft | valid | ready
+    Column("version", Integer, nullable=False, default=1),  # 이력/낙관적락 카운터(컴포넌트 semver 와 별개)
+    Column("updated_at", String(40), nullable=False),
+)
+
+user_component_versions = Table(
+    "user_component_versions",
+    metadata,
+    Column("scope", String(160), primary_key=True),
+    Column("id", String(128), primary_key=True),
+    Column("version", Integer, primary_key=True),
+    Column("data", Text, nullable=False),
+    Column("updated_at", String(40), nullable=False),
+)
+
+# 앱(인스턴스) 레벨 LLM 설정 — 화면에서 등록하는 LLM/임베딩 키(at-rest 암호화). 서버 env 키는 안 쓴다.
+# 단일 행(id='app'). 카탈로그 임베딩 인덱스가 전역이라 키도 인스턴스 단위(자체호스팅/단일조직 전제).
+app_settings = Table(
+    "app_settings",
+    metadata,
+    Column("id", String(16), primary_key=True),  # 항상 'app'
+    Column("provider", String(16), nullable=False, default="anthropic"),  # LLM provider: anthropic | openai
+    Column("llm_key_enc", Text, nullable=False, default=""),  # 선택 provider 의 LLM 키(Fernet 암호문)
+    Column("embedding_key_enc", Text, nullable=False, default=""),  # OpenAI 임베딩 키
+    Column("updated_at", String(40), nullable=False),
+)
+
 # 카탈로그 컴포넌트 — 스케줄 harvest(MCP 레지스트리·마켓플레이스)가 origin 별로 적재하고,
 # 서빙은 여기서 읽는다(네트워크 무의존·즉시·레플리카 공유·재시작 생존). data 는 Component 직렬화(JSON).
 # 복합 PK(origin, id): 같은 id 가 서로 다른 origin 에서 와도 충돌 없이 각자 보관(읽을 때 dedup).

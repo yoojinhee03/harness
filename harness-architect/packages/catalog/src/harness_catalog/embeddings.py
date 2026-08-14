@@ -60,36 +60,35 @@ class LocalEmbedder:
         return [v / norm for v in vec]
 
 
-class VoyageEmbedder:
-    """Voyage AI 임베딩 — 품질 모드. VOYAGE_API_KEY 필요, voyageai 설치 필요."""
+class OpenAIEmbedder:
+    """OpenAI 임베딩 — 품질 모드. OPENAI_API_KEY 필요, openai 설치 필요."""
 
-    def __init__(self, model: str = "voyage-3.5", api_key: str | None = None) -> None:
-        self.name = f"voyage:{model}"
+    def __init__(self, model: str = "text-embedding-3-small", api_key: str | None = None) -> None:
+        self.name = f"openai:{model}"
         self._model = model
         try:
-            import voyageai
+            import openai
         except ModuleNotFoundError as exc:  # pragma: no cover
-            raise RuntimeError(
-                "VoyageEmbedder 는 voyageai 가 필요합니다: uv sync --extra voyage"
-            ) from exc
-        self._client = voyageai.Client(api_key=api_key or os.environ.get("VOYAGE_API_KEY"))
+            raise RuntimeError("OpenAIEmbedder 는 openai 가 필요합니다: uv sync --extra openai") from exc
+        self._client = openai.OpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"))
 
     def embed(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover - 네트워크
-        result = self._client.embed(texts, model=self._model, input_type="document")
-        return list(result.embeddings)
+        result = self._client.embeddings.create(model=self._model, input=texts)
+        return [d.embedding for d in result.data]
 
 
 def get_embedder(settings: object | None = None) -> Embedder:
-    """설정에 따라 임베더를 고른다. Voyage 모드/키면 Voyage, 아니면 로컬 폴백.
+    """설정에 따라 임베더를 고른다: openai | local(폴백). (Voyage 는 제거됨.)
 
+    앱 레벨 키 경로는 main 에서 OpenAIEmbedder/LocalEmbedder 를 직접 구성해 주입한다.
     settings 는 `harness_catalog.settings.Settings` (순환 import 회피 위해 느슨히 받음).
     """
     from .settings import load_settings
 
     cfg = settings if settings is not None else load_settings()
-    if getattr(cfg, "use_voyage", False):
+    if getattr(cfg, "embedder_choice", "local") == "openai":
         try:
-            return VoyageEmbedder(model=getattr(cfg, "embed_model", "voyage-3.5"))
+            return OpenAIEmbedder(model=getattr(cfg, "openai_embed_model", "text-embedding-3-small"))
         except RuntimeError:  # pragma: no cover
             pass
     return LocalEmbedder()

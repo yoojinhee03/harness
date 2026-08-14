@@ -68,6 +68,60 @@ def test_catalog_detail_404(client):
     assert client.get("/catalog/nope").status_code == 404
 
 
+def test_catalog_detail_slashed_id_reaches_handler(client):
+    # 연합 레지스트리 id 는 `io.github.owner/server` 처럼 슬래시를 포함한다. 라우트가 `:path` 여야
+    # 슬래시를 세그먼트로 넘겨 핸들러까지 도달한다(아니면 화면에서 상세 404 → 크래시). 없는 id 라도
+    # 핸들러의 404(전체 id 포함)면 라우팅이 맞은 것 — Starlette 기본 'Not Found' 와 구분된다.
+    slashed = "io.github.owner/server-name"
+    r = client.get(f"/catalog/{slashed}")
+    assert r.status_code == 404
+    assert slashed in r.json()["detail"]
+
+
+def test_catalog_items_trust_curated(client):
+    # 테스트는 로컬 시드만 로드(harvest off) → 전부 손큐레이션 = curated. source 키도 노출.
+    items = client.get("/catalog").json()
+    assert items and all(it["trust"] == "curated" for it in items)
+    assert all("source" in it for it in items)
+
+
+def test_catalog_exclude_curated(client):
+    # 테스트는 시드만 로드 → curated 제외하면 외부 수확분이 없어 빈 목록.
+    r = client.get("/catalog", params={"exclude_curated": "true"})
+    assert r.json() == []
+    assert r.headers["X-Total-Count"] == "0"
+
+
+def test_catalog_detail_includes_trust(client):
+    cid = client.get("/catalog").json()[0]["id"]
+    assert client.get(f"/catalog/{cid}").json()["trust"] == "curated"
+
+
+def test_catalog_item_trust_defaults_community():
+    # 외부 수확분은 community 가 기본 — from_component 에 명시해야 등급이 바뀐다.
+    from harness_api.schemas import CatalogItem
+    from harness_resolver import Component
+
+    c = Component(id="io.github.x/y", type="mcp", name="Y", version="1.0.0")
+    assert CatalogItem.from_component(c).trust == "community"
+    assert CatalogItem.from_component(c, trust="official").trust == "official"
+
+
+def test_trust_tiers():
+    from harness_api.main import _trust
+
+    curated = {"pr-review-skill"}
+    origins = {
+        "box": "marketplace",
+        "io.github.modelcontextprotocol/servers": "registry",
+        "io.github.randomdev/thing": "registry",
+    }
+    assert _trust("pr-review-skill", curated, origins) == "curated"
+    assert _trust("box", curated, origins) == "official"  # 공식 마켓플레이스
+    assert _trust("io.github.modelcontextprotocol/servers", curated, origins) == "official"  # 신뢰 ns
+    assert _trust("io.github.randomdev/thing", curated, origins) == "community"  # 임의 발행자
+
+
 def test_recommend(client):
     r = client.post("/recommend", json={"description": PR_BOT, "top_k": 4})
     assert r.status_code == 200
@@ -177,22 +231,6 @@ def test_eject_claude_code(client):
     assert "너는 시니어 리뷰어다." in files["CLAUDE.md"]
     settings = json.loads(files[".claude/settings.json"])
     assert settings["permissions"]["allow"] == ["mcp__github-mcp"]
-
-
-def test_key_status_read_only(client):
-    """키는 배포 env 로만 설정. 화면엔 상태(설정 여부·품질 모드)만 노출하고 런타임 변조는 없다
-    (구설계의 전역 os.environ 변조 = 멀티테넌시 누수를 제거)."""
-    st = client.get("/settings/keys").json()
-    assert st["anthropic"]["set"] is False and st["voyage"]["set"] is False  # 테스트 env 에 키 없음
-    assert st["quality_mode"]["ranker"] in ("heuristic", "claude")
-    assert st["quality_mode"]["embedder"] in ("local", "voyage")
-    # 런타임 변조 엔드포인트는 제거됨
-    assert client.put("/settings/keys", json={"anthropic_api_key": "x"}).status_code in (404, 405)
-    assert client.delete("/settings/keys/anthropic").status_code in (404, 405)
-
-
-def test_verify_reports_unset(client):
-    assert client.post("/settings/keys/verify").json()["anthropic"] == "unset"
 
 
 def test_eject_targets_lists_supported(client):

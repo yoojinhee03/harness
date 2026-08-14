@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { api, type ApiToken, type ProviderStatus } from "../api/client";
+import { useEffect, useState } from "react";
+import { api, type ApiToken, type LlmProvider, type LlmSettingsInput, type ProviderStatus } from "../api/client";
 import { useToast } from "../lib/toast";
 import { Badge, Button, Card, EmptyState, Input, Modal, PageHeader } from "../lib/ui";
 
@@ -8,11 +8,7 @@ export default function ScreenSettings({ onLogout }: { onLogout: () => void }) {
   const toast = useToast();
   const qc = useQueryClient();
   const meQ = useQuery({ queryKey: ["me"], queryFn: api.me });
-  const statusQ = useQuery({ queryKey: ["keys"], queryFn: api.getKeys });
   const tokensQ = useQuery({ queryKey: ["tokens"], queryFn: api.listTokens });
-  const [verify, setVerify] = useState<Record<string, string> | null>(null);
-  const verifyM = useMutation({ mutationFn: api.verifyKeys, onSuccess: setVerify });
-  const status = statusQ.data;
 
   // PAT 발급 — 이름 입력 모달 → 발급 → 원문 1회 노출
   const [newName, setNewName] = useState<string | null>(null); // null 이면 모달 닫힘
@@ -125,35 +121,8 @@ export default function ScreenSettings({ onLogout }: { onLogout: () => void }) {
         )}
       </div>
 
-      {/* LLM 키 (배포 구성, 읽기전용) */}
-      <div>
-        <h2 className="text-sm font-semibold text-fg">LLM 키 (품질 모드)</h2>
-        <p className="mb-3 mt-0.5 text-sm text-muted">
-          키는 <b className="text-fg">배포 환경변수</b>(ANTHROPIC_API_KEY·VOYAGE_API_KEY)로만 설정됩니다. 운영 시크릿이라 화면에서 변경하지 않습니다.
-        </p>
-
-        {status && (
-          <Card className="mb-3">
-            <div className="flex items-center gap-2 text-sm text-fg/90">
-              품질 모드 — 임베더 <Badge className="bg-sky-500/15 text-sky-400">{status.quality_mode.embedder}</Badge> · 랭커{" "}
-              <Badge className="bg-violet-500/15 text-violet-400">{status.quality_mode.ranker}</Badge>
-            </div>
-            <p className="mt-1 text-xs text-muted">키가 배포에 있으면 로컬 폴백 → 품질 모드로 자동 전환됩니다.</p>
-          </Card>
-        )}
-
-        <div className="space-y-3">
-          <ProviderRow label="Anthropic (Claude 랭킹 · /run · /eval)" status={status?.anthropic} verify={verify?.anthropic} />
-          <ProviderRow label="Voyage (임베딩 품질 모드)" status={status?.voyage} verify={verify?.voyage} />
-        </div>
-
-        <div className="mt-4 flex items-center gap-3">
-          <Button variant="subtle" onClick={() => verifyM.mutate()} disabled={verifyM.isPending}>
-            {verifyM.isPending ? "확인 중…" : "연동 확인"}
-          </Button>
-          <span className="text-xs text-muted">배포 env 키로 최소 호출을 시도해 실제 연동 여부를 검사합니다.</span>
-        </div>
-      </div>
+      {/* LLM·임베딩 키 등록 (앱 레벨, 화면 등록) */}
+      <LlmSettingsSection />
 
       {newName !== null && (
         <Modal title="새 API 토큰 발급" onClose={() => setNewName(null)}>
@@ -205,21 +174,142 @@ function TokenRow({ token, onRevoke, busy }: { token: ApiToken; onRevoke: () => 
   );
 }
 
-function ProviderRow({ label, status, verify }: { label: string; status?: ProviderStatus; verify?: string }) {
+function LlmSettingsSection() {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["llm-settings"], queryFn: api.getLlmSettings });
+  const s = q.data;
+  const [provider, setProvider] = useState<LlmProvider>("anthropic");
+  const [llmKey, setLlmKey] = useState("");
+  const [embKey, setEmbKey] = useState("");
+  const [initd, setInitd] = useState(false);
+
+  useEffect(() => {
+    if (s && !initd) {
+      setProvider(s.provider);
+      setInitd(true);
+    }
+  }, [s, initd]);
+
+  const saveM = useMutation({
+    mutationFn: (body: LlmSettingsInput) => api.putLlmSettings(body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["llm-settings"] });
+      setLlmKey("");
+      setEmbKey("");
+      toast("저장됨");
+    },
+    onError: (e: Error) => toast(e.message || "저장 실패", "error"),
+  });
+
   return (
-    <Card className="flex items-center justify-between">
+    <div className="space-y-6">
+      {/* ① LLM 키 */}
       <div>
-        <div className="text-sm font-medium text-fg">{label}</div>
-        <div className="text-xs text-muted">배포 환경변수로 설정 · 런타임 변경 불가</div>
+        <h2 className="text-sm font-semibold text-fg">① LLM 키</h2>
+        <p className="mb-3 mt-0.5 text-sm text-muted">
+          스튜디오 <b className="text-fg">생성·테스트</b>에 쓰는 provider·키. 서버에서 <b className="text-fg">암호화 저장</b>·마스킹.{" "}
+          <b className="text-fg">키가 없으면 LLM 기능이 잠깁니다.</b>
+        </p>
+        <Card className="space-y-4">
+          <div>
+            <div className="mb-1.5 text-xs font-medium text-muted">Provider</div>
+            <div className="flex gap-1.5">
+              {(["anthropic", "openai"] as LlmProvider[]).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setProvider(p)}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                    provider === p ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted hover:text-fg"
+                  }`}
+                >
+                  {p === "anthropic" ? "Claude (Anthropic)" : "OpenAI"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <KeyField
+            label={`${provider === "anthropic" ? "Anthropic" : "OpenAI"} API 키`}
+            current={s?.llm}
+            value={llmKey}
+            onChange={setLlmKey}
+            onClear={() => saveM.mutate({ llm_key: "" })}
+          />
+          <div className="flex justify-end">
+            <Button
+              onClick={() => saveM.mutate({ provider, llm_key: llmKey.trim() ? llmKey.trim() : null })}
+              disabled={saveM.isPending}
+            >
+              저장
+            </Button>
+          </div>
+        </Card>
       </div>
-      <span className="flex items-center gap-2 text-sm">
-        {status?.set ? <Badge className="bg-ok/15 text-ok">{status.masked}</Badge> : <span className="text-muted">미설정</span>}
-        {verify && (
-          <Badge className={verify === "ok" ? "bg-ok/15 text-ok" : "bg-err/15 text-err"}>
-            {verify === "ok" ? "연동 ✓" : verify === "unset" ? "—" : verify}
-          </Badge>
+
+      {/* ② 임베딩 키 */}
+      <div>
+        <h2 className="text-sm font-semibold text-fg">② 임베딩 키 (OpenAI)</h2>
+        <p className="mb-3 mt-0.5 text-sm text-muted">
+          카탈로그 의미 검색(추천)용 OpenAI 임베딩 키. 없으면 로컬(저품질) 폴백. <b className="text-fg">변경은 API 재시작 후 인덱스에 반영</b>됩니다.
+        </p>
+        <Card className="space-y-4">
+          <KeyField
+            label="OpenAI 임베딩 키"
+            current={s?.embedding}
+            value={embKey}
+            onChange={setEmbKey}
+            onClear={() => saveM.mutate({ embedding_key: "" })}
+          />
+          <div className="flex justify-end">
+            <Button
+              onClick={() => saveM.mutate({ embedding_key: embKey.trim() ? embKey.trim() : null })}
+              disabled={saveM.isPending}
+            >
+              저장
+            </Button>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function KeyField({
+  label,
+  current,
+  value,
+  onChange,
+  onClear,
+}: {
+  label: string;
+  current?: ProviderStatus;
+  value: string;
+  onChange: (v: string) => void;
+  onClear: () => void;
+}) {
+  return (
+    <label className="block text-xs font-medium text-muted">
+      <span className="flex items-center gap-2">
+        {label}
+        {current?.set ? (
+          <Badge className="bg-ok/15 text-ok">설정됨 {current.masked}</Badge>
+        ) : (
+          <span className="text-muted/70">미설정</span>
+        )}
+        {current?.set && (
+          <button type="button" className="text-muted hover:text-err" onClick={onClear}>
+            지우기
+          </button>
         )}
       </span>
-    </Card>
+      <Input
+        type="password"
+        className="mt-1.5 font-mono"
+        placeholder={current?.set ? "변경하려면 새 키 입력(비우면 유지)" : "키 입력"}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        autoComplete="off"
+      />
+    </label>
   );
 }

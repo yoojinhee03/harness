@@ -28,6 +28,9 @@ class Settings:
     ranker_mode: str  # auto | heuristic | claude
     embed_model: str
     claude_model: str
+    # OpenAI(임베딩/LLM) — 기본값과 함께 끝에 추가(기존 kwargs 생성 무파손).
+    openai_key: str | None = None
+    openai_embed_model: str = "text-embedding-3-small"
     # 라이브 카탈로그(공식 MCP 레지스트리) — 기본값과 함께 끝에 추가(기존 kwargs 생성 무파손).
     live_registry_mode: str = "off"  # off | on
     registry_url: str = "https://registry.modelcontextprotocol.io"
@@ -48,12 +51,11 @@ class Settings:
         return self.marketplace_mode == "on"
 
     @property
-    def use_voyage(self) -> bool:
-        if self.embedder_mode == "local":
-            return False
-        if self.embedder_mode == "voyage":
-            return True
-        return bool(self.voyage_key)  # auto
+    def embedder_choice(self) -> str:
+        """임베더 선택: local | openai (Voyage 제거). 명시 모드 우선, auto 는 openai_key 있으면 openai."""
+        if self.embedder_mode in ("local", "openai"):
+            return self.embedder_mode
+        return "openai" if self.openai_key else "local"
 
     @property
     def use_claude(self) -> bool:
@@ -67,7 +69,9 @@ class Settings:
 def load_settings() -> Settings:
     return Settings(
         anthropic_key=os.environ.get("ANTHROPIC_API_KEY") or None,
-        voyage_key=os.environ.get("VOYAGE_API_KEY") or None,
+        voyage_key=None,  # Voyage 제거(필드는 하위호환 위해 유지, 미사용)
+        openai_key=os.environ.get("OPENAI_API_KEY") or None,
+        openai_embed_model=os.environ.get("HARNESS_OPENAI_EMBED_MODEL", "text-embedding-3-small"),
         embedder_mode=os.environ.get("HARNESS_EMBEDDER", "auto"),
         ranker_mode=os.environ.get("HARNESS_RANKER", "auto"),
         embed_model=os.environ.get("HARNESS_EMBED_MODEL", "voyage-3.5"),

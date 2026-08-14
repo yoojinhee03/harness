@@ -3,6 +3,7 @@
 const BASE = "/api";
 
 export type ComponentType = "skill" | "mcp" | "context" | "hook";
+export type Trust = "curated" | "official" | "community" | "user"; // 프로비넌스 신뢰 등급("user"=내가 만듦)
 
 export interface CatalogItem {
   id: string;
@@ -19,6 +20,8 @@ export interface CatalogItem {
   context_tokens: number;
   added_tools: number;
   auth_required: boolean;
+  trust: Trust; // curated(손큐레이션) | official(공식 소스) | community(미검증 외부)
+  source: string | null; // 출처 URL/경로(있으면)
 }
 
 export interface Recommendation {
@@ -37,6 +40,7 @@ export interface Recommendation {
   exclusive_group: string | null;
   conflicts_with: string[];
   auth_required: boolean;
+  trust?: Trust; // API 가 주입
 }
 
 export interface RecommendResult {
@@ -161,6 +165,64 @@ export interface SelectionInput {
   config?: Record<string, unknown>;
 }
 
+// ── 유저 저작 컴포넌트(스튜디오) ──
+export type ComponentStatus = "draft" | "valid" | "ready";
+
+/** 채팅으로 생성/편집되는 Component(관련 필드만 명시, 나머지는 보존해 저장 시 되돌려보낸다). */
+export interface AuthoredComponent {
+  id: string;
+  type: ComponentType;
+  name: string;
+  version: string;
+  summary: string;
+  description: string;
+  body: string | null;
+  provides: string[];
+  capability_tags: string[];
+  use_when: string[];
+  [k: string]: unknown;
+}
+
+export interface ComponentSummary {
+  id: string;
+  scope: string;
+  owner_id: string;
+  type: ComponentType;
+  name: string;
+  description: string;
+  status: ComponentStatus;
+  version: number;
+  updated_at: string;
+}
+
+export interface ComponentValidation {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface ComponentTestResult {
+  skipped?: boolean;
+  pass: boolean;
+  risk: string;
+  reasons: string[];
+}
+
+// ── 앱 LLM/임베딩 키 설정 (화면 등록, 서버에서 암호화·마스킹) ──
+export type LlmProvider = "anthropic" | "openai";
+
+export interface LlmSettingsStatus {
+  provider: LlmProvider;
+  llm: { set: boolean; masked: string | null }; // 선택 provider 의 LLM 키
+  embedding: { set: boolean; masked: string | null }; // OpenAI 임베딩 키
+}
+
+export interface LlmSettingsInput {
+  provider?: string;
+  llm_key?: string | null; // null=유지(생략), ""=삭제, 값=교체
+  embedding_key?: string | null;
+}
+
 export interface HarnessInput {
   metadata?: { id: string; name?: string; version?: string; description?: string };
   extends?: string | null;
@@ -190,30 +252,33 @@ export interface ProviderStatus {
   masked: string | null;
 }
 
-export interface KeyStatus {
-  anthropic: ProviderStatus;
-  voyage: ProviderStatus;
-  quality_mode: { embedder: string; ranker: string };
-}
 
 export const api = {
   health: () => fetch(`${BASE}/health`).then((r) => r.json()),
   catalog: () => fetch(`${BASE}/catalog`).then((r) => r.json() as Promise<CatalogItem[]>),
   // 페이지네이션 — type·capability·q 필터/검색 + limit/offset. 총계는 X-Total-Count 헤더.
-  catalogPage: (params: { type?: string | null; capability?: string | null; q?: string; limit?: number; offset?: number } = {}) => {
+  catalogPage: (params: { type?: string | null; capability?: string | null; q?: string; limit?: number; offset?: number; excludeCurated?: boolean } = {}) => {
     const sp = new URLSearchParams();
     if (params.type) sp.set("type", params.type);
     if (params.capability) sp.set("capability", params.capability);
     if (params.q) sp.set("q", params.q);
     if (params.limit != null) sp.set("limit", String(params.limit));
     if (params.offset != null) sp.set("offset", String(params.offset));
+    if (params.excludeCurated) sp.set("exclude_curated", "true");
     return fetch(`${BASE}/catalog?${sp.toString()}`).then(async (r) => ({
       items: (await r.json()) as CatalogItem[],
       total: Number(r.headers.get("X-Total-Count") ?? 0),
     }));
   },
-  catalogItem: (id: string) =>
-    fetch(`${BASE}/catalog/${id}`).then((r) => r.json() as Promise<Record<string, unknown>>),
+  catalogItem: (id: string) => {
+    // 연합 레지스트리 id 는 슬래시를 포함할 수 있다(io.github.owner/server). 세그먼트별로 인코딩해
+    // 특수문자는 escape 하되 경로 구분자 '/' 는 보존한다(서버는 :path 로 받는다).
+    const path = id.split("/").map(encodeURIComponent).join("/");
+    return fetch(`${BASE}/catalog/${path}`).then((r) => {
+      if (!r.ok) throw new Error(`카탈로그 항목을 불러오지 못했습니다 (${r.status})`);
+      return r.json() as Promise<Record<string, unknown>>;
+    });
+  },
   recommend: (description: string, top_k = 6) =>
     post<RecommendResult>("/recommend", { description, top_k }),
   resolve: (harness: HarnessInput) => post<ResolveResult>("/resolve", harness),
@@ -221,9 +286,6 @@ export const api = {
   ejectTargets: () => fetch(`${BASE}/eject/targets`).then((r) => r.json() as Promise<string[]>),
   eject: (harness: HarnessInput, target: string) =>
     post<EjectResult>(`/eject?target=${encodeURIComponent(target)}`, harness),
-  // LLM 키는 배포 env 로만 설정 — 상태(읽기전용)만 조회/검증.
-  getKeys: () => send<KeyStatus>("GET", "/settings/keys"),
-  verifyKeys: () => send<Record<string, string>>("POST", "/settings/keys/verify"),
 
   // ── 인증 (OAuth 로그인 + PAT 발급) ──
   authConfig: () => fetch(`${BASE}/auth/config`).then((r) => r.json() as Promise<AuthConfig>),
@@ -253,6 +315,36 @@ export const api = {
     send<HarnessDoc>("PUT", `/harnesses/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`, body),
   deleteHarness: (id: string, scope = "personal") =>
     send<{ ok: boolean }>("DELETE", `/harnesses/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`),
+
+  // ── 사용자별 LLM 설정 (provider·모델·키; 키는 서버에서 암호화·마스킹) ──
+  getLlmSettings: () => send<LlmSettingsStatus>("GET", "/settings/llm"),
+  putLlmSettings: (body: LlmSettingsInput) => send<LlmSettingsStatus>("PUT", "/settings/llm", body),
+
+  // ── 유저 저작 컴포넌트(스튜디오: 채팅 생성 → 검증 → 테스트 → 내 구성요소) ──
+  authorComponent: (prompt: string, prior_id?: string) =>
+    post<{ component: AuthoredComponent }>("/components/author", { prompt, prior_id: prior_id ?? null }),
+  listComponents: (status?: ComponentStatus) =>
+    send<ComponentSummary[]>("GET", `/components${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  readyComponents: () => send<Recommendation[]>("GET", "/components/ready"),
+  getComponent: (id: string, scope = "personal") =>
+    send<ComponentSummary & { component: AuthoredComponent }>(
+      "GET",
+      `/components/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`,
+    ),
+  putComponent: (id: string, scope: string, body: { name?: string; description?: string; data: AuthoredComponent }) =>
+    send<ComponentSummary & { component: AuthoredComponent; validation: ComponentValidation }>(
+      "PUT",
+      `/components/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`,
+      body,
+    ),
+  testComponent: (id: string, scope = "personal") =>
+    send<{ result: ComponentTestResult; status: ComponentStatus }>(
+      "POST",
+      `/components/${encodeURIComponent(id)}/test?scope=${encodeURIComponent(scope)}`,
+      undefined,
+    ),
+  deleteComponent: (id: string, scope = "personal") =>
+    send<{ ok: boolean }>("DELETE", `/components/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`),
 };
 
 /** 저장소 변경(가시 스코프)을 SSE 로 실시간 구독. 토큰은 EventSource 제약상 쿼리로 전달. */
@@ -260,6 +352,17 @@ export function subscribeHarnessEvents(onEvent: (type: string) => void): () => v
   const t = auth.token();
   if (!t) return () => undefined; // 로그인 전엔 구독 안 함
   const es = new EventSource(`${BASE}/harnesses/events?token=${encodeURIComponent(t)}`);
+  for (const ev of ["ready", "upsert", "delete"]) {
+    es.addEventListener(ev, () => onEvent(ev));
+  }
+  return () => es.close();
+}
+
+/** 유저 컴포넌트 변경(가시 스코프)을 SSE 로 구독 — 스튜디오 목록 실시간 갱신. */
+export function subscribeComponentEvents(onEvent: (type: string) => void): () => void {
+  const t = auth.token();
+  if (!t) return () => undefined;
+  const es = new EventSource(`${BASE}/components/events?token=${encodeURIComponent(t)}`);
   for (const ev of ["ready", "upsert", "delete"]) {
     es.addEventListener(ev, () => onEvent(ev));
   }

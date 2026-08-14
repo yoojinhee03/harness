@@ -97,6 +97,35 @@ export function Chip({ children, className = "bg-surface-2 text-muted" }: { chil
   );
 }
 
+/** 프로비넌스 신뢰 등급 배지 — curated(검증됨)·official(공식)·community(미검증). */
+const TRUST_META: Record<string, { label: string; cls: string; title: string }> = {
+  curated: { label: "검증됨", cls: "bg-ok/15 text-ok", title: "손큐레이션 — 직접 검토한 구성요소" },
+  official: {
+    label: "공식",
+    cls: "bg-sky-500/15 text-sky-400",
+    title: "공식 소스 — Anthropic 마켓플레이스 또는 신뢰 네임스페이스 레지스트리",
+  },
+  community: {
+    label: "미검증",
+    cls: "bg-warn/15 text-warn",
+    title: "외부 커뮤니티 발행 — 신원은 인증됐지만 개별 안전성은 검증되지 않음",
+  },
+  user: {
+    label: "내 구성요소",
+    cls: "bg-violet-500/15 text-violet-400",
+    title: "내가(또는 팀이) 저작한 구성요소 — 검증·테스트 완료",
+  },
+};
+
+export function TrustBadge({ trust }: { trust?: string }) {
+  const m = TRUST_META[trust ?? "community"] ?? TRUST_META.community;
+  return (
+    <span title={m.title}>
+      <Badge className={m.cls}>{m.label}</Badge>
+    </span>
+  );
+}
+
 export function Kbd({ children }: { children: ReactNode }) {
   return (
     <kbd className="rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-muted">

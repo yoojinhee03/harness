@@ -22,6 +22,7 @@ import ScreenD from "./screens/ScreenD";
 import ScreenE from "./screens/ScreenE";
 import ScreenGuide from "./screens/ScreenGuide";
 import ScreenSettings from "./screens/ScreenSettings";
+import ScreenStudio from "./screens/ScreenStudio";
 import ScreenSync from "./screens/ScreenSync";
 
 export type Step = "A" | "B" | "C" | "D";
@@ -199,6 +200,7 @@ export default function App() {
         )}
 
         {view === "catalog" && <ScreenE onColdStart={newHarness} />}
+        {view === "studio" && <ScreenStudio workspace={workspace} />}
         {view === "harnesses" && <ScreenSync onCreate={newHarness} workspace={workspace} />}
         {view === "settings" && <ScreenSettings onLogout={logout} />}
         {view === "guide" && <ScreenGuide setView={setView} onNewHarness={newHarness} />}

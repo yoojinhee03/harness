@@ -67,6 +67,21 @@ class CatalogStore:
             return None
         return comp
 
+    def origins_for(self, ids: list[str]) -> dict[str, str]:
+        """주어진 id 들의 origin(registry|marketplace) 매핑. 프로비넌스(신뢰 등급) 판정용.
+
+        페이지 단위(수십 개)로만 조회해 전체 스캔을 피한다. 로컬 시드는 DB 에 없어 여기 안 나온다.
+        """
+        if not ids:
+            return {}
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(catalog_components.c.id, catalog_components.c.origin).where(
+                    catalog_components.c.id.in_(ids)
+                )
+            ).all()
+        return {r[0]: r[1] for r in rows}
+
     def count(self) -> int:
         with self._engine.connect() as conn:
             n = conn.execute(select(func.count()).select_from(catalog_components)).scalar()

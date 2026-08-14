@@ -12,6 +12,7 @@ dependencies = [
 # 품질 모드 — 키가 있을 때만. 로컬 폴백은 이 없이도 돈다.
 voyage = ["voyageai>=0.3"]
 claude = ["anthropic>=0.40"]
+openai = ["openai>=1.40"]  # OpenAI 임베딩(text-embedding-3) — HARNESS_EMBEDDER=openai
 
 [build-system]
 requires = ["hatchling"]

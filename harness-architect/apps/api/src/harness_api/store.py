@@ -274,6 +274,8 @@ async def event_stream(
         yield {"event": "ready", "data": json.dumps({"harnesses": snapshot}, ensure_ascii=False, default=str)}
         while True:
             event = await q.get()
+            if event.get("kind") == "component":  # 컴포넌트 이벤트는 별도 스트림(component_event_stream) 담당
+                continue
             if event.get("scope") not in visible_scopes:
                 continue
             yield {"event": event["type"], "data": json.dumps(event, ensure_ascii=False, default=str)}

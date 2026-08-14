@@ -76,11 +76,11 @@ def test_local_fallback_regression(registry):
 def test_settings_mode_flags():
     s = Settings(
         anthropic_key=None, voyage_key=None, embedder_mode="auto", ranker_mode="auto",
-        embed_model="voyage-3.5", claude_model="claude-sonnet-5",
+        embed_model="x", claude_model="claude-sonnet-5",
     )
-    assert s.use_voyage is False and s.use_claude is False
+    assert s.embedder_choice == "local" and s.use_claude is False
     forced = Settings(
-        anthropic_key=None, voyage_key=None, embedder_mode="voyage", ranker_mode="claude",
-        embed_model="voyage-3.5", claude_model="claude-sonnet-5",
+        anthropic_key=None, voyage_key=None, embedder_mode="openai", ranker_mode="claude",
+        embed_model="x", claude_model="claude-sonnet-5", openai_key="o",
     )
-    assert forced.use_voyage is True and forced.use_claude is True
+    assert forced.embedder_choice == "openai" and forced.use_claude is True

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -34,7 +35,7 @@ from harness_catalog import (
     load_settings,
     resolve_catalog_dir,
 )
-from harness_resolver import HarnessConfig, InMemoryRegistry, ResolveResult, resolve
+from harness_resolver import Component, HarnessConfig, InMemoryRegistry, ResolveResult, resolve
 from harness_runtime import AnthropicRunner, available_targets, build_request, emit
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -42,7 +43,12 @@ from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
 
 from .accounts import AccountStore
+from .authoring import author_context, test_component, validate_component
 from .catalog_store import CatalogStore, DbCatalogSource, sync_catalog
+from .component_store import ComponentStore, UserComponentSource, component_event_stream
+from .llm_client import DEFAULT_MODEL
+from .llm_client import complete_json as _provider_complete_json
+from .llm_settings import AppSettingsStore
 from .observability import (
     ObservabilityMiddleware,
     configure_logging,
@@ -52,9 +58,12 @@ from .observability import (
 )
 from .schemas import (
     CatalogItem,
+    ComponentAuthorBody,
+    ComponentSaveBody,
     DevLoginBody,
     GenerateResponse,
     HarnessSaveBody,
+    LlmSettingsBody,
     MemberBody,
     RecommendRequest,
     ResolveRequest,
@@ -84,6 +93,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = make_engine(resolve_database_url(resolve_store_dir()))
     app.state.engine = engine
     app.state.store = HarnessStore(engine)
+    app.state.component_store = ComponentStore(engine)  # 유저 저작 컴포넌트(스코프 격리)
+    app.state.app_settings = AppSettingsStore(engine)  # 앱 레벨 LLM/임베딩 키(암호화, 화면 등록)
     app.state.accounts = AccountStore(engine)
     app.state.broadcaster = make_broadcaster()  # REDIS_URL 있으면 Redis(스케일아웃)
     # OAuth CSRF state 임시 저장(state -> 생성 시각). 단일 인스턴스 개발용 — 멀티 인스턴스는 Redis/DB 로.
@@ -105,7 +116,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # off 면 로컬 시드만(결정적·오프라인). on 이면 로컬 + DB(harvest 결과)를 합쳐 서빙.
     registry = FederatedRegistry(local, [DbCatalogSource(catalog_store)]) if harvest_on else local
     app.state.registry = registry
-    app.state.recommender = LiveRecommender(registry)
+    # 임베더 — 앱 등록 OpenAI 임베딩 키가 있으면 OpenAI, 없으면 Local(키 없이). 전역 인덱스라
+    # 시작 시 확정한다(키 변경은 재시작으로 반영). 서버 env 는 쓰지 않는다.
+    from harness_catalog import LocalEmbedder, OpenAIEmbedder
+
+    _emb_key = AppSettingsStore(engine).resolve()["embedding_key"]
+    try:
+        embedder = OpenAIEmbedder(api_key=_emb_key) if _emb_key else LocalEmbedder()
+    except RuntimeError:  # openai 미설치 등 → 로컬 폴백
+        embedder = LocalEmbedder()
+    app.state.recommender = LiveRecommender(registry, embedder=embedder)
 
     async def _sync_loop() -> None:
         # 주기적으로 하이브리드 harvest→DB(증분 또는 full). 첫 기동엔 상태가 없어 즉시 1회(full),
@@ -171,6 +191,45 @@ def _recommender(request: Request) -> Recommender:
     return cast(LiveRecommender, request.app.state.recommender).get()
 
 
+def _curated_ids(request: Request) -> set[str]:
+    """손큐레이션(로컬 시드) 컴포넌트 id 집합 = 최상위 신뢰. 외부 수확분은 여기 없다.
+
+    FederatedRegistry 면 `.local`(오프라인 큐레이션분)만 본다. harvest off 면 registry 자체가 로컬.
+    """
+    reg = _registry(request)
+    base = getattr(reg, "local", reg)
+    return {c.id for c in base.all()}
+
+
+# MCP 레지스트리에서 '공식'으로 볼 신뢰 네임스페이스(신원인증 + 유지보수 주체가 신뢰됨).
+# 나머지 레지스트리 발행물은 신원은 인증됐어도 개별 검증은 안 된 community 로 둔다. 확장은 여기서.
+_TRUSTED_NAMESPACES = frozenset(
+    {"io.github.modelcontextprotocol", "io.modelcontextprotocol", "com.anthropic"}
+)
+
+
+def _origins_for(request: Request, ids: list[str]) -> dict[str, str]:
+    store = getattr(request.app.state, "catalog_store", None)
+    return store.origins_for(ids) if store is not None else {}
+
+
+def _trust(component_id: str, curated: set[str], origins: dict[str, str]) -> str:
+    """프로비넌스 신뢰 등급: curated | official | community.
+
+    - curated: 손큐레이션 시드(직접 검토).
+    - official: Anthropic 공식 마켓플레이스(origin=marketplace) 또는 신뢰 네임스페이스 레지스트리.
+    - community: 그 외 외부 발행물 — 신원은 인증돼도 개별 안전성은 미검증.
+    """
+    if component_id in curated:
+        return "curated"
+    if origins.get(component_id) == "marketplace":
+        return "official"  # anthropics/claude-plugins-official = 공식 큐레이션
+    namespace = component_id.split("/", 1)[0] if "/" in component_id else ""
+    if namespace in _TRUSTED_NAMESPACES:
+        return "official"
+    return "community"
+
+
 @app.get("/health")
 def health(request: Request) -> dict[str, Any]:
     """라이브니스 — 프로세스가 떠 있는지. 라이브 페치를 유발하지 않도록 로컬 카탈로그 크기만 본다."""
@@ -192,68 +251,6 @@ def metrics() -> Response:
     return metrics_response()
 
 
-# ─────────── 설정: LLM 키 상태 (배포 env 전용 · 읽기전용) ───────────
-# 키는 배포 환경변수(ANTHROPIC_API_KEY·VOYAGE_API_KEY)로만 주입한다. 런타임에 사용자별로 바꾸지
-# 않는다 — LLM 키는 서비스가 소유하는 운영 시크릿이라, 사용자 변조는 멀티테넌시 누수(전역 os.environ)를
-# 낳는다(구설계의 결함). 화면엔 마스킹된 '설정 여부'만 노출한다.
-
-
-def _mask(key: str) -> str:
-    return f"{key[:6]}…{key[-4:]}" if len(key) > 12 else "****"
-
-
-def _provider_status(env_var: str) -> dict[str, Any]:
-    key = os.environ.get(env_var)
-    return {"set": bool(key), "masked": _mask(key) if key else None}
-
-
-@app.get("/settings/keys")
-def get_keys() -> dict[str, Any]:
-    """LLM 키 상태(배포 구성) — 읽기전용. 값 설정은 배포 env 로만."""
-    from harness_catalog import load_settings
-
-    s = load_settings()
-    return {
-        "anthropic": _provider_status("ANTHROPIC_API_KEY"),
-        "voyage": _provider_status("VOYAGE_API_KEY"),
-        "quality_mode": {
-            "embedder": "voyage" if s.use_voyage else "local",
-            "ranker": "claude" if s.use_claude else "heuristic",
-        },
-    }
-
-
-@app.post("/settings/keys/verify")
-def verify_keys() -> dict[str, str]:
-    """배포 env 키로 최소 호출을 시도해 실제 연동 여부를 확인(원본 키는 반환 안 함)."""
-    out: dict[str, str] = {}
-    ak = os.environ.get("ANTHROPIC_API_KEY")
-    if not ak:
-        out["anthropic"] = "unset"
-    else:
-        try:
-            import anthropic
-
-            anthropic.Anthropic(api_key=ak).messages.create(
-                model="claude-sonnet-5", max_tokens=1, messages=[{"role": "user", "content": "ping"}]
-            )
-            out["anthropic"] = "ok"
-        except Exception as exc:  # noqa: BLE001 - 네트워크/인증 오류를 사용자에게 요약 전달
-            out["anthropic"] = f"error: {type(exc).__name__}"
-    vk = os.environ.get("VOYAGE_API_KEY")
-    if not vk:
-        out["voyage"] = "unset"
-    else:
-        try:
-            import voyageai
-
-            voyageai.Client(api_key=vk).embed(["ping"], model="voyage-3.5", input_type="document")
-            out["voyage"] = "ok"
-        except Exception as exc:  # noqa: BLE001
-            out["voyage"] = f"error: {type(exc).__name__}"
-    return out
-
-
 @app.get("/catalog", response_model=list[CatalogItem])
 def catalog(
     request: Request,
@@ -263,14 +260,18 @@ def catalog(
     q: str | None = Query(default=None, description="id·name·summary·태그 부분일치 검색"),
     limit: int | None = Query(default=None, ge=1, le=200, description="페이지 크기(미지정=전체)"),
     offset: int = Query(default=0, ge=0, description="페이지 시작 오프셋"),
+    exclude_curated: bool = Query(default=False, description="손큐레이션 시드(curated) 제외 — 외부 수확분만"),
 ) -> list[CatalogItem]:
     """카탈로그 목록 — type·capability·q 로 필터/검색하고 limit·offset 으로 페이지네이션.
 
     총 개수(필터 적용 후)는 `X-Total-Count` 헤더로 준다(본문은 현재 페이지만). 카탈로그가
     수천 개로 커져도 서버에서 잘라 보내므로 페이로드·렌더가 가볍다. 필터·검색·정렬은 서버가 하므로
-    검색이 현재 페이지가 아니라 전체에 걸린다.
+    검색이 현재 페이지가 아니라 전체에 걸린다. `exclude_curated` 는 우리 시드를 빼고 외부 소스만 본다.
     """
+    curated = _curated_ids(request)
     comps = _registry(request).all()
+    if exclude_curated:
+        comps = [c for c in comps if c.id not in curated]
     if type:
         comps = [c for c in comps if c.type == type]
     if capability:
@@ -286,35 +287,135 @@ def catalog(
     # 안정적 페이지 경계 — 타입·이름·id 순 정렬 후 슬라이스.
     comps.sort(key=lambda c: (c.type, c.name.lower(), c.id))
     page = comps[offset : offset + limit] if limit is not None else comps[offset:]
+    origins = _origins_for(request, [c.id for c in page])
     response.headers["X-Total-Count"] = str(total)
-    return [CatalogItem.from_component(c) for c in page]
+    return [CatalogItem.from_component(c, trust=_trust(c.id, curated, origins)) for c in page]
 
 
-@app.get("/catalog/{component_id}")
+@app.get("/catalog/{component_id:path}")
 def catalog_detail(request: Request, component_id: str) -> dict[str, Any]:
+    # `:path` 컨버터 — 연합 레지스트리 id 는 `io.github.owner/server` 처럼 슬래시를 포함한다.
+    # 기본 `{id}`(단일 세그먼트)면 슬래시에서 라우트 매칭 실패 → 404 → 화면 크래시였다.
     c = _registry(request).get(component_id)
     if c is None:
         raise HTTPException(status_code=404, detail=f"컴포넌트 '{component_id}' 없음")
-    return c.model_dump()
+    data = c.model_dump()
+    data["trust"] = _trust(component_id, _curated_ids(request), _origins_for(request, [component_id]))
+    return data
+
+
+# ─────────────── 멀티테넌시: 인증(Bearer) + 팀(자가서브) + 스코프 격리 저장소 ───────────────
+# (resolve/generate 가 optional_user·_scoped_registry 를 기본인자로 참조하므로 그 앞에 정의한다)
+
+
+def _store(request: Request) -> HarnessStore:
+    return cast(HarnessStore, request.app.state.store)
+
+
+def _broadcaster(request: Request) -> SSEBroadcaster:
+    return cast(SSEBroadcaster, request.app.state.broadcaster)
+
+
+def _accounts(request: Request) -> AccountStore:
+    return cast(AccountStore, request.app.state.accounts)
+
+
+def _component_store(request: Request) -> ComponentStore:
+    return cast(ComponentStore, request.app.state.component_store)
+
+
+def _app_settings(request: Request) -> AppSettingsStore:
+    return cast(AppSettingsStore, request.app.state.app_settings)
+
+
+def _llm_complete(request: Request) -> Any:
+    """LLM 호출 함수 (system,user,max_tokens)->JSON. 앱 등록 키 없으면 None(호출부가 차단).
+
+    앱(인스턴스) 레벨 LLM 키만 사용한다 — 서버 env 폴백 없음. 전역 os.environ 은 건드리지 않는다.
+    """
+    res = _app_settings(request).resolve()
+    key = res["llm_key"]
+    if not key:
+        return None
+    provider = res["provider"] or "anthropic"
+    model = DEFAULT_MODEL.get(provider, "")
+
+    def _complete(system: str, user_msg: str, max_tokens: int) -> Any:
+        return _provider_complete_json(provider, model, key, system, user_msg, max_tokens=max_tokens)
+
+    return _complete
+
+
+def _bearer(authorization: str | None, token: str | None) -> str:
+    """Authorization: Bearer <t> 또는 ?token=<t> 에서 원문 토큰을 뽑는다(SSE 는 헤더 불가라 쿼리 허용)."""
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return (token or "").strip()
+
+
+async def current_user(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    token: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """Bearer 토큰(세션 또는 PAT)으로 사용자 신원 확인. SSE(EventSource)는 ?token= 도 허용."""
+    user = _accounts(request).user_by_token(_bearer(authorization, token))
+    if user is None:
+        raise HTTPException(status_code=401, detail="인증 필요 — 로그인하세요")
+    return user
+
+
+async def optional_user(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    token: str | None = Query(default=None),
+) -> dict[str, Any] | None:
+    """토큰 있으면 사용자, 없거나 무효면 None(401 안 냄). resolve/generate 를 미로그인에서도 열어두되
+    로그인 시 그 유저의 ready 컴포넌트를 스코프-편입하기 위한 것."""
+    return _accounts(request).user_by_token(_bearer(authorization, token))
+
+
+def _scoped_registry(request: Request, user: dict[str, Any] | None) -> Any:
+    """요청-스코프 레지스트리 — 전역 카탈로그 + (로그인 시) 그 유저의 가시 ready 컴포넌트.
+
+    전역 app.state.registry 는 유저 무관이라 유저 컴포넌트를 절대 안 넣는다(전원 누출). 대신 요청마다
+    그 유저 것만 담은 UserComponentSource 를 FederatedRegistry 로 감싸 resolve/generate 에 넘긴다.
+    """
+    base = _registry(request)
+    if user is None:
+        return base
+    scopes = _accounts(request).visible_scope_keys(user["id"])
+    return FederatedRegistry(base, [UserComponentSource(_component_store(request), scopes)])
 
 
 @app.post("/recommend")
 @limiter.limit("60/minute")
 def recommend(request: Request, body: RecommendRequest) -> dict[str, Any]:
     result = _recommender(request).recommend(body.description, top_k=body.top_k)
-    return result.model_dump()
+    data = result.model_dump()
+    # 추천 카드에도 프로비넌스 표시. (추천기 모델은 안 건드리고 API 에서 주입.)
+    recs = data.get("recommendations", [])
+    curated = _curated_ids(request)
+    origins = _origins_for(request, [r.get("id", "") for r in recs])
+    for rec in recs:
+        rec["trust"] = _trust(rec.get("id", ""), curated, origins)
+    return data
 
 
 @app.post("/resolve", response_model=ResolveResult)
-def resolve_endpoint(request: Request, body: ResolveRequest) -> ResolveResult:
+def resolve_endpoint(
+    request: Request, body: ResolveRequest, user: dict[str, Any] | None = Depends(optional_user)
+) -> ResolveResult:
     config = body.to_config()
-    return resolve(config, _registry(request))
+    return resolve(config, _scoped_registry(request, user))
 
 
 @app.post("/generate", response_model=GenerateResponse)
-def generate(request: Request, body: ResolveRequest) -> GenerateResponse:
+def generate(
+    request: Request, body: ResolveRequest, user: dict[str, Any] | None = Depends(optional_user)
+) -> GenerateResponse:
     config = body.to_config()
-    result = resolve(config, _registry(request))
+    result = resolve(config, _scoped_registry(request, user))
     return GenerateResponse(
         yaml=to_harness_yaml(config),
         ok=result.ok,
@@ -326,10 +427,12 @@ def generate(request: Request, body: ResolveRequest) -> GenerateResponse:
 
 @app.post("/run")
 @limiter.limit("30/minute")
-def run_endpoint(request: Request, body: RunRequest) -> dict[str, Any]:
+def run_endpoint(
+    request: Request, body: RunRequest, user: dict[str, Any] | None = Depends(optional_user)
+) -> dict[str, Any]:
     """resolve → build_request → (키 있으면) Anthropic 전송, 없으면 dry_run. 런타임 관통."""
     config = body.to_config()
-    result = resolve(config, _registry(request))
+    result = resolve(config, _scoped_registry(request, user))
     if not result.ok or result.resolved is None:
         return {"ok": False, "diagnostics": result.diagnostics.model_dump(), "built": None, "run": None}
     built = build_request(result.resolved, body.message)
@@ -356,49 +459,18 @@ def eject_targets() -> list[str]:
 
 @app.post("/eject")
 def eject_endpoint(
-    request: Request, body: ResolveRequest, target: str = Query("claude-code")
+    request: Request,
+    body: ResolveRequest,
+    target: str = Query("claude-code"),
+    user: dict[str, Any] | None = Depends(optional_user),
 ) -> dict[str, Any]:
     """resolve → emit(target). ResolvedHarness IR 을 런타임 네이티브 파일 트리로 컴파일 (Phase 5)."""
     if target not in available_targets():
         raise HTTPException(status_code=400, detail=f"지원하지 않는 타깃: {target} (가능: {available_targets()})")
-    result = resolve(body.to_config(), _registry(request))
+    result = resolve(body.to_config(), _scoped_registry(request, user))
     if not result.ok or result.resolved is None:
         return {"ok": False, "target": target, "diagnostics": result.diagnostics.model_dump(), "files": None}
     return {"ok": True, "target": target, "files": emit(result.resolved, target)}
-
-
-# ─────────────── 멀티테넌시: 인증(Bearer) + 팀(자가서브) + 스코프 격리 저장소 ───────────────
-
-
-def _store(request: Request) -> HarnessStore:
-    return cast(HarnessStore, request.app.state.store)
-
-
-def _broadcaster(request: Request) -> SSEBroadcaster:
-    return cast(SSEBroadcaster, request.app.state.broadcaster)
-
-
-def _accounts(request: Request) -> AccountStore:
-    return cast(AccountStore, request.app.state.accounts)
-
-
-def _bearer(authorization: str | None, token: str | None) -> str:
-    """Authorization: Bearer <t> 또는 ?token=<t> 에서 원문 토큰을 뽑는다(SSE 는 헤더 불가라 쿼리 허용)."""
-    if authorization and authorization.lower().startswith("bearer "):
-        return authorization[7:].strip()
-    return (token or "").strip()
-
-
-async def current_user(
-    request: Request,
-    authorization: str | None = Header(default=None),
-    token: str | None = Query(default=None),
-) -> dict[str, Any]:
-    """Bearer 토큰(세션 또는 PAT)으로 사용자 신원 확인. SSE(EventSource)는 ?token= 도 허용."""
-    user = _accounts(request).user_by_token(_bearer(authorization, token))
-    if user is None:
-        raise HTTPException(status_code=401, detail="인증 필요 — 로그인하세요")
-    return user
 
 
 # ─────────────── OAuth 로그인 (사람=이메일 신원) ───────────────
@@ -702,6 +774,192 @@ async def delete_harness(
         raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음(scope={scope})")
     await _broadcaster(request).publish({"type": "delete", "id": safe_id(hid), "scope": sk})
     return {"ok": True, "id": safe_id(hid), "scope": sk}
+
+
+# ── 유저 저작 컴포넌트 (스튜디오: 채팅 생성 → 검증 → 테스트 → 내 구성요소) ──
+
+
+def _component_doc(doc: dict[str, Any]) -> dict[str, Any]:
+    """저장 doc 의 data(JSON 문자열)를 파싱해 `component` 로 노출(프런트 편의)."""
+    out = {k: v for k, v in doc.items() if k not in ("data",)}
+    try:
+        out["component"] = json.loads(doc["data"]) if doc.get("data") else None
+    except (json.JSONDecodeError, TypeError):
+        out["component"] = None
+    return out
+
+
+@app.post("/components/author")
+@limiter.limit("30/minute")
+def component_author(
+    request: Request, body: ComponentAuthorBody, user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    """자연어 → context 컴포넌트 초안(아직 미저장). prior_id 주면 가시 스코프의 이전본을 리파인."""
+    store = _component_store(request)
+    prior: Component | None = None
+    if body.prior_id:
+        for sk in _accounts(request).visible_scope_keys(user["id"]):
+            d = store.get(sk, body.prior_id)
+            if d:
+                try:
+                    prior = Component.model_validate_json(d["data"])
+                except Exception:  # noqa: BLE001
+                    prior = None
+                break
+    complete = _llm_complete(request)
+    if complete is None:
+        raise HTTPException(status_code=400, detail="LLM 키가 없습니다 — 설정에서 LLM 키를 등록하세요")
+    comp = author_context(body.prompt, prior, complete=complete)
+    return {"component": comp.model_dump()}
+
+
+@app.get("/components")
+def list_components(
+    request: Request,
+    status: str | None = Query(default=None, description="draft|valid|ready 필터"),
+    limit: int | None = Query(default=None, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: dict[str, Any] = Depends(current_user),
+) -> list[dict[str, Any]]:
+    """내 가시 스코프(personal + 팀)의 유저 컴포넌트 요약 목록(최신순)."""
+    scopes = sorted(_accounts(request).visible_scope_keys(user["id"]))
+    return _component_store(request).list_scopes(scopes, status=status, limit=limit, offset=offset)
+
+
+# ⚠ 라우트 순서: 고정 경로(/components/events)를 {cid} 보다 먼저 선언(매칭 가로채임 방지).
+@app.get("/components/events")
+async def component_events(
+    request: Request, user: dict[str, Any] = Depends(current_user)
+) -> EventSourceResponse:
+    """SSE — 내 가시 스코프의 컴포넌트 변경만 실시간 푸시(하네스와 브로드캐스터 공유, kind 로 구분)."""
+    scopes = _accounts(request).visible_scope_keys(user["id"])
+    return EventSourceResponse(component_event_stream(_component_store(request), _broadcaster(request), scopes))
+
+
+@app.get("/components/ready")
+def list_ready_components(
+    request: Request, user: dict[str, Any] = Depends(current_user)
+) -> list[dict[str, Any]]:
+    """위저드(화면 B) 선택용 — 내 가시 스코프의 ready 컴포넌트를 추천 카드 형태로. ref 는 id@semver."""
+    scopes = _accounts(request).visible_scope_keys(user["id"])
+    comps = _component_store(request).ready_components(sorted(scopes))
+    return [
+        {
+            "id": c.id, "type": c.type, "name": c.name, "version": c.version,
+            "summary": c.summary, "reason": "내가 만든 구성요소(검증·테스트 완료)",
+            "provides": c.provides, "requires": c.requires, "matched_capabilities": c.provides,
+            "context_tokens": c.cost.context_tokens, "added_tools": c.cost.added_tools,
+            "exclusive_group": c.constraints.exclusive_group, "conflicts_with": c.conflicts_with,
+            "auth_required": bool(c.auth and c.auth.required), "score": 0.0, "trust": "user",
+        }
+        for c in comps
+    ]
+
+
+@app.get("/components/{cid}")
+def get_component(
+    request: Request,
+    cid: str,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    sk = _resolve_scope(request, user, scope)
+    doc = _component_store(request).get(sk, cid)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"컴포넌트 '{cid}' 없음(scope={scope})")
+    return _component_doc(doc)
+
+
+@app.put("/components/{cid}")
+async def put_component(
+    request: Request,
+    cid: str,
+    body: ComponentSaveBody,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """저장(upsert) — data(Component dict) 검증 후 status 갱신(valid/draft). 편집은 테스트를 무효화한다."""
+    sk = _resolve_scope(request, user, scope, write=True)
+    try:
+        comp = Component.model_validate(body.data)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"컴포넌트 형식 오류: {exc}") from exc
+    val = validate_component(comp)
+    status = "valid" if val["ok"] else "draft"
+    store = _component_store(request)
+    doc = store.put(
+        sk, cid, user["id"], body.name or comp.name, body.description or comp.summary,
+        comp.model_dump_json(), type_=comp.type, status=status,
+    )
+    await _broadcaster(request).publish(
+        {"type": "upsert", "kind": "component", "id": doc["id"], "scope": sk, "component": store.summary(doc)}
+    )
+    return {**_component_doc(doc), "validation": val}
+
+
+@app.post("/components/{cid}/test")
+async def test_component_endpoint(
+    request: Request,
+    cid: str,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """LLM 심사(적합성 + 인젝션/안전). 통과 시 status=ready(위저드 사용 가능). draft 는 검증 먼저."""
+    sk = _resolve_scope(request, user, scope, write=True)
+    store = _component_store(request)
+    doc = store.get(sk, cid)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"컴포넌트 '{cid}' 없음(scope={scope})")
+    if doc["status"] == "draft":
+        raise HTTPException(status_code=400, detail="검증(valid)을 먼저 통과해야 테스트할 수 있습니다")
+    complete = _llm_complete(request)
+    if complete is None:
+        raise HTTPException(status_code=400, detail="LLM 키가 없습니다 — 설정에서 LLM 키를 등록하세요")
+    comp = Component.model_validate_json(doc["data"])
+    result = test_component(comp, complete=complete)
+    new_status = doc["status"]
+    if result.get("pass"):
+        updated = store.set_status(sk, cid, "ready")
+        new_status = updated["status"] if updated else "ready"
+        await _broadcaster(request).publish(
+            {"type": "upsert", "kind": "component", "id": doc["id"], "scope": sk, "component": store.summary(updated or doc)}
+        )
+    return {"result": result, "status": new_status}
+
+
+@app.delete("/components/{cid}")
+async def delete_component(
+    request: Request,
+    cid: str,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    sk = _resolve_scope(request, user, scope, write=True)
+    if not _component_store(request).delete(sk, cid):
+        raise HTTPException(status_code=404, detail=f"컴포넌트 '{cid}' 없음(scope={scope})")
+    await _broadcaster(request).publish({"type": "delete", "kind": "component", "id": safe_id(cid), "scope": sk})
+    return {"ok": True, "id": safe_id(cid), "scope": sk}
+
+
+# ── 사용자별 LLM 설정 (화면에서 입력·저장 · provider/모델 선택 · 키 암호화) ──
+
+
+@app.get("/settings/llm")
+def get_llm_settings(request: Request, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    """앱 LLM/임베딩 키 상태 — provider·키 설정 여부(마스킹). 원문 키는 반환하지 않는다."""
+    return _app_settings(request).status()
+
+
+@app.put("/settings/llm")
+def put_llm_settings(
+    request: Request, body: LlmSettingsBody, user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    """앱 LLM/임베딩 키 저장 — 키는 None=유지·""=삭제·값=교체(암호화). 임베딩 키 변경은 재시작 후 인덱스 반영."""
+    return _app_settings(request).put(
+        provider=body.provider,
+        llm_key=body.llm_key,
+        embedding_key=body.embedding_key,
+    )
 
 
 def to_harness_yaml(config: HarnessConfig) -> str:

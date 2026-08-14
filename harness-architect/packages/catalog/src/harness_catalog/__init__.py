@@ -5,7 +5,7 @@ RAG 엔진 *코드* 는 백엔드에 잔류하고, 컴포넌트 *데이터* 는 
 
 from __future__ import annotations
 
-from .embeddings import Embedder, LocalEmbedder, VoyageEmbedder, get_embedder
+from .embeddings import Embedder, LocalEmbedder, OpenAIEmbedder, get_embedder
 from .enrichment import CapabilityClassifier, CapabilityEnricher, claude_classifier, get_classifier
 from .harvest import ServerDescriptor, component_to_yaml, harvest, harvest_component, uncovered
 from .loader import build_registry, load_components, resolve_catalog_dir
@@ -54,7 +54,7 @@ __all__ = [
     "ServerDescriptor",
     "Settings",
     "VectorStore",
-    "VoyageEmbedder",
+    "OpenAIEmbedder",
     "build_live_sources",
     "build_registry",
     "claude_classifier",
