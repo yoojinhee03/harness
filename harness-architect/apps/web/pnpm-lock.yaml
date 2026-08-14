@@ -28,8 +28,8 @@ importers:
         specifier: ^5.2.0
         version: 5.2.0(vite@5.4.21)
       autoprefixer:
-        specifier: ^10.4.20
-        version: 10.5.3(postcss@8.5.19)
+        specifier: ^10.5.4
+        version: 10.5.4(postcss@8.5.19)
       postcss:
         specifier: ^8.4.47
         version: 8.5.19
@@ -473,17 +473,12 @@ packages:
   arg@5.0.2:
     resolution: {integrity: sha512-PYjyFOLKQ9y57JvQ6QLo8dAgNqswh8M1RMJYdQduT6xbWSgK36P/Z/v+p888pM69jMMfS8Xd8F6I1kQ/I9HUGg==}
 
-  autoprefixer@10.5.3:
-    resolution: {integrity: sha512-bJRzflk8GgE4JX+iZNEwz9f9p460NCHnU7bd+CZ9vIjIlZuTkt6F3WSl2oNO8StZBFx17nLEsiQ6H2wcZiY7nA==}
+  autoprefixer@10.5.4:
+    resolution: {integrity: sha512-MaU0U/za7N3r6brxD4YB/l4NSrFzLPlANv6wEuQVaIPlD3L4W9rFcQPbL/EilY9BHhHvhfcz3gInDLrEtWT4EA==}
     engines: {node: ^10 || ^12 || >=14}
     hasBin: true
     peerDependencies:
       postcss: ^8.1.0
-
-  baseline-browser-mapping@2.10.43:
-    resolution: {integrity: sha512-AjYpR78kDWAY3Efj+cDTFH9t9SCoL7OoTp1BOb0mQV7S+6CiLwnWM3FyxhJtdPufDFKzmCSFoUncKjWgJEZTCQ==}
-    engines: {node: '>=6.0.0'}
-    hasBin: true
 
   baseline-browser-mapping@2.11.14:
     resolution: {integrity: sha512-JyJ954WzuIR8/FFzX0o5krdSTrBAkcCSRfWSleRsIHSWV+cZe2FI1PKggVkFke1hBldRs+LRxUczzE9iPmgZww==}
@@ -498,11 +493,6 @@ packages:
     resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
     engines: {node: '>=8'}
 
-  browserslist@4.28.6:
-    resolution: {integrity: sha512-FQBYNK15VMslhLHpA7+n+n1GOlF1kId2xcCg7/j95f24AOF6VDYMNH4mFxF7KuaTdv627faazpOAjFzMrfJOUw==}
-    engines: {node: ^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7}
-    hasBin: true
-
   browserslist@4.28.8:
     resolution: {integrity: sha512-V2NpofLblG64mfOtSgDhOJESZEGogzDMBv/q+W6oc4LXWP/q75eOXoOaaOu1EOadB9U4Bwx/e0yzbvwKH8zalA==}
     engines: {node: ^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7}
@@ -511,9 +501,6 @@ packages:
   camelcase-css@2.0.1:
     resolution: {integrity: sha512-QOSvevhslijgYwRx6Rv7zKdMF8lbRmx+uQGx2+vDc+KI/eBnsy9kit5aj23AgGu3pa4t9AgwbnXWqS+iOY+2aA==}
     engines: {node: '>= 6'}
-
-  caniuse-lite@1.0.30001805:
-    resolution: {integrity: sha512-52noaS3DubycKSXaU30TwPGIp+POyQSUVa5jBEq3vkRkY0kjyb3LQgvhU6WGyCcyXqVLWO0Cw0Q6BSdD0kUfVA==}
 
   caniuse-lite@1.0.30001809:
     resolution: {integrity: sha512-xxWVywk6a6Arlk+hymeycyn/VgqEfLDxupvhH/xiY5SJ/18kmi9o6MiO320DCUzypORHLtvh0I4i04tUhCNHNQ==}
@@ -551,9 +538,6 @@ packages:
 
   dlv@1.1.3:
     resolution: {integrity: sha512-+HlytyjlPKnIG8XuRG8WvmBP8xs8P71y+SKKS6ZXWoEgLuePxtDoUEiH7WkdePWrQ5JBpE6aoVqfZfJUQkjXwA==}
-
-  electron-to-chromium@1.5.392:
-    resolution: {integrity: sha512-1yQq3VQCZRwsnYc67Oc+1fge6Lwtn0hzi6zmEVkB61Zx21kTbwJAW4dFLadl5Rc1tKhG/kSpYXnfiAhu0f0a1g==}
 
   electron-to-chromium@1.5.406:
     resolution: {integrity: sha512-hWH5ORBi3d0IipnMh7BN5GDTaAmrSSSWmznwt2zltdiRNEWoEQyTwF0FFSBxzHO7hLSRT6loQu3IQGV0wg/Tvg==}
@@ -683,10 +667,6 @@ packages:
     resolution: {integrity: sha512-bzlKTyNJ7+LdGIIwy8ijFpIqEQIvafahV7eYykJ8Cvh42EdJeODoJ6gUJXpQJvej1BddH8OqTXZNE/KfbWAu8Q==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
-
-  node-releases@2.0.51:
-    resolution: {integrity: sha512-wRNIrw4DmVLKQlbgOMdkMx27Wrpzes2hh5Jtbi2bjPd+4wJstWIqP5A+lscnqbm0xxmT5Bpg8Lec5ItEBwx6BQ==}
-    engines: {node: '>=18'}
 
   node-releases@2.0.53:
     resolution: {integrity: sha512-D9UOmYG3UH1V+ENW56t5QXBwJw1YEY18ruVeus89Rw+SyIgjPkCO84bRzO3uNIYosJbNwiabWVn48o3uJLjxFQ==}
@@ -860,12 +840,6 @@ packages:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
     hasBin: true
-
-  update-browserslist-db@1.2.3:
-    resolution: {integrity: sha512-Js0m9cx+qOgDxo0eMiFGEueWztz+d4+M3rGlmKPT+T4IS/jP4ylw3Nwpu6cpTTP8R1MAC1kF4VbdLt3ARf209w==}
-    hasBin: true
-    peerDependencies:
-      browserslist: '>= 4.21.0'
 
   update-browserslist-db@1.3.1:
     resolution: {integrity: sha512-ZZ61DsRsOnakl74HAmp3oSN4aXUmEWXf+i/yv0h7tIBfICc3VdrFErQKUUKPgu3AMsTUMbcongALEN4l6GSUrQ==}
@@ -1262,16 +1236,14 @@ snapshots:
 
   arg@5.0.2: {}
 
-  autoprefixer@10.5.3(postcss@8.5.19):
+  autoprefixer@10.5.4(postcss@8.5.19):
     dependencies:
-      browserslist: 4.28.6
-      caniuse-lite: 1.0.30001805
+      browserslist: 4.28.8
+      caniuse-lite: 1.0.30001809
       fraction.js: 5.3.4
       picocolors: 1.1.1
       postcss: 8.5.19
       postcss-value-parser: 4.2.0
-
-  baseline-browser-mapping@2.10.43: {}
 
   baseline-browser-mapping@2.11.14: {}
 
@@ -1280,14 +1252,6 @@ snapshots:
   braces@3.0.3:
     dependencies:
       fill-range: 7.1.1
-
-  browserslist@4.28.6:
-    dependencies:
-      baseline-browser-mapping: 2.10.43
-      caniuse-lite: 1.0.30001805
-      electron-to-chromium: 1.5.392
-      node-releases: 2.0.51
-      update-browserslist-db: 1.2.3(browserslist@4.28.6)
 
   browserslist@4.28.8:
     dependencies:
@@ -1298,8 +1262,6 @@ snapshots:
       update-browserslist-db: 1.3.1(browserslist@4.28.8)
 
   camelcase-css@2.0.1: {}
-
-  caniuse-lite@1.0.30001805: {}
 
   caniuse-lite@1.0.30001809: {}
 
@@ -1330,8 +1292,6 @@ snapshots:
   didyoumean@1.2.2: {}
 
   dlv@1.1.3: {}
-
-  electron-to-chromium@1.5.392: {}
 
   electron-to-chromium@1.5.406: {}
 
@@ -1454,8 +1414,6 @@ snapshots:
       thenify-all: 1.6.0
 
   nanoid@3.3.16: {}
-
-  node-releases@2.0.51: {}
 
   node-releases@2.0.53: {}
 
@@ -1643,12 +1601,6 @@ snapshots:
   ts-interface-checker@0.1.13: {}
 
   typescript@5.9.3: {}
-
-  update-browserslist-db@1.2.3(browserslist@4.28.6):
-    dependencies:
-      browserslist: 4.28.6
-      escalade: 3.2.0
-      picocolors: 1.1.1
 
   update-browserslist-db@1.3.1(browserslist@4.28.8):
     dependencies:
