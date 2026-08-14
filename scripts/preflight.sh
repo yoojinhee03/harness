@@ -31,6 +31,13 @@ if command -v uv >/dev/null 2>&1; then
     ( cd "$APP" && uv run mypy \
         packages/resolver/src packages/catalog/src packages/runtime/src \
         apps/api/src apps/cli/src apps/mcp/src ) && ok "mypy" || bad "mypy 타입 오류"
+
+    step "Alembic 마이그레이션 드리프트"
+    ( cd "$APP" && rm -f .preflight-alembic.db \
+        && DATABASE_URL="sqlite:///.preflight-alembic.db" uv run alembic upgrade head \
+        && DATABASE_URL="sqlite:///.preflight-alembic.db" uv run alembic check; \
+        rc=$?; rm -f .preflight-alembic.db; exit $rc ) \
+      && ok "alembic" || bad "마이그레이션 누락(모델↔리비전 드리프트) — alembic revision --autogenerate 필요"
   fi
 else
   bad "uv 미설치 — ruff/mypy 검증 불가 (https://docs.astral.sh/uv/ 설치 필요)"
