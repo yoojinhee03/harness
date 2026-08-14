@@ -18,7 +18,7 @@ from harness_resolver import Component
 from sqlalchemy import delete, func, insert, select
 from sqlalchemy.engine import Engine
 
-from .db import catalog_components
+from .db import catalog_components, catalog_sync_state
 from .store import now_iso
 
 log = logging.getLogger("harness_api.catalog_store")
@@ -87,6 +87,78 @@ class CatalogStore:
         with self._engine.connect() as conn:
             return conn.execute(select(func.max(catalog_components.c.updated_at))).scalar()
 
+    # ── 증분 upsert / delete (하이브리드 sync) ──
+    def upsert(self, origin: str, components: list[Component]) -> int:
+        """origin 의 해당 id 행만 갈아끼운다(전체 교체 아님). 반환: upsert 개수."""
+        if not components:
+            return 0
+        ts = now_iso()
+        ids = [c.id for c in components]
+        rows = [
+            {
+                "origin": origin,
+                "id": c.id,
+                "type": c.type,
+                "name": c.name,
+                "version": c.version,
+                "data": c.model_dump_json(),
+                "updated_at": ts,
+            }
+            for c in components
+        ]
+        with self._engine.begin() as conn:
+            conn.execute(
+                delete(catalog_components).where(
+                    catalog_components.c.origin == origin, catalog_components.c.id.in_(ids)
+                )
+            )
+            conn.execute(insert(catalog_components), rows)
+        return len(rows)
+
+    def delete(self, origin: str, ids: list[str]) -> int:
+        """origin 의 주어진 id 행 삭제(상류에서 제거·폐기된 것). 반환: 삭제 개수."""
+        ids = list(ids)
+        if not ids:
+            return 0
+        with self._engine.begin() as conn:
+            r = conn.execute(
+                delete(catalog_components).where(
+                    catalog_components.c.origin == origin, catalog_components.c.id.in_(ids)
+                )
+            )
+        return r.rowcount or 0
+
+    # ── sync 상태(워터마크·시각) ──
+    def get_state(self, origin: str) -> tuple[str | None, str | None]:
+        """(watermark, last_full_at). 없으면 (None, None)."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(catalog_sync_state.c.watermark, catalog_sync_state.c.last_full_at).where(
+                    catalog_sync_state.c.origin == origin
+                )
+            ).first()
+        return (row[0], row[1]) if row else (None, None)
+
+    def set_state(
+        self, origin: str, *, watermark: str | None, last_full_at: str | None, last_sync_at: str
+    ) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(delete(catalog_sync_state).where(catalog_sync_state.c.origin == origin))
+            conn.execute(
+                insert(catalog_sync_state).values(
+                    origin=origin,
+                    watermark=watermark,
+                    last_full_at=last_full_at,
+                    last_sync_at=last_sync_at,
+                )
+            )
+
+    def due_for_sync(self, interval_seconds: float) -> bool:
+        """마지막 sync(모든 origin 중 최신) 이후 interval 이 지났으면 True. 상태 없으면 True(첫 sync)."""
+        with self._engine.connect() as conn:
+            last = conn.execute(select(func.max(catalog_sync_state.c.last_sync_at))).scalar()
+        return seconds_since(last) >= interval_seconds
+
 
 class DbCatalogSource:
     """서빙용 소스 — DB(CatalogStore)를 읽는다. 네트워크 없음. revision 이 바뀔 때만 재조회(캐시).
@@ -112,25 +184,42 @@ class DbCatalogSource:
 
 def sync_catalog(
     engine: Engine, settings: Settings | None = None, fetcher: Fetcher | None = None
-) -> dict[str, int]:
-    """활성 라이브 소스에서 harvest 해 DB 에 origin 별로 적재. 반환: {origin: 개수}.
+) -> dict[str, dict[str, object]]:
+    """하이브리드 harvest → DB. 반환: {origin: {mode, upsert, delete}}.
 
-    한 소스가 실패하면 그 origin 의 기존 DB 행은 **그대로 두고** 스킵(부분 실패 격리). 플래그가 모두
-    off 면 소스가 없어 아무것도 하지 않는다(카탈로그는 로컬 시드만).
+    origin 별로:
+    - **증분(delta)**: 소스가 지원하고(supports_delta) 워터마크가 있으며 full 주기가 안 됐으면
+      `updated_since=<watermark>` 로 바뀐 것만 upsert(+상류에서 삭제된 건 delete). 값싸고 빠름.
+    - **전체(full)**: 최초·워터마크 없음·full 주기 도래 시 전체 재수집 후 origin 통째 교체(드리프트 정리).
+    마켓플레이스는 증분 API 가 없어 항상 full. 한 소스 실패는 격리(기존 DB 유지, 스킵).
     """
     cfg = settings or load_settings()
     store = CatalogStore(engine)
-    result: dict[str, int] = {}
+    result: dict[str, dict[str, object]] = {}
     for source in build_live_sources(cfg, fetcher):
         origin = getattr(source, "origin", "live")
+        watermark, last_full = store.get_state(origin)
+        full_due = last_full is None or seconds_since(last_full) >= cfg.catalog_full_interval
+        use_delta = bool(getattr(source, "supports_delta", False)) and bool(watermark) and not full_due
         try:
-            components = source.components()  # 네트워크 fetch (+enrich)
+            if use_delta:
+                upserts, deletes, wm = source.fetch_delta(watermark)  # type: ignore[attr-defined]
+                u = store.upsert(origin, upserts)
+                d = store.delete(origin, deletes)
+                store.set_state(origin, watermark=wm or watermark, last_full_at=last_full, last_sync_at=now_iso())
+                result[origin] = {"mode": "delta", "upsert": u, "delete": d}
+                log.info("카탈로그 sync(delta) origin=%s +%d/-%d", origin, u, d)
+            else:
+                components = source.components()  # 전체 재수집(+enrich)
+                n = store.replace(origin, components)
+                wm = getattr(source, "last_watermark", None)
+                now = now_iso()
+                store.set_state(origin, watermark=wm, last_full_at=now, last_sync_at=now)
+                result[origin] = {"mode": "full", "upsert": n, "delete": 0}
+                log.info("카탈로그 sync(full) origin=%s → %d개", origin, n)
         except Exception as exc:  # noqa: BLE001 — 한 소스 실패가 전체를 막지 않게
             log.warning("harvest 실패(origin=%s) — 기존 DB 유지, 스킵: %s", origin, exc)
             continue
-        n = store.replace(origin, components)
-        result[origin] = n
-        log.info("카탈로그 sync: origin=%s → %d개 DB 적재", origin, n)
     return result
 
 

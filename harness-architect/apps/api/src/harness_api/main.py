@@ -42,7 +42,7 @@ from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
 
 from .accounts import AccountStore
-from .catalog_store import CatalogStore, DbCatalogSource, seconds_since, sync_catalog
+from .catalog_store import CatalogStore, DbCatalogSource, sync_catalog
 from .observability import (
     ObservabilityMiddleware,
     configure_logging,
@@ -108,14 +108,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.recommender = LiveRecommender(registry)
 
     async def _sync_loop() -> None:
-        # 주기적으로 harvest→DB. 첫 기동에 DB 가 비었으면 즉시 1회. 최근 sync 가 있으면 건너뛴다
-        # (다중 레플리카 중복 완화 — 값싼 last_synced 확인). 서빙은 이 루프와 무관하게 항상 DB 를 읽는다.
+        # 주기적으로 하이브리드 harvest→DB(증분 또는 full). 첫 기동엔 상태가 없어 즉시 1회(full),
+        # 이후 sync_interval 마다 증분, full_interval(기본 24h)마다 전체 대조. due_for_sync 는 마지막
+        # sync 시각(state) 기준이라 다중 레플리카 중복도 완화한다. 서빙은 이 루프와 무관하게 DB 를 읽는다.
         while True:
             try:
-                last = await asyncio.to_thread(catalog_store.last_synced)
-                if seconds_since(last) >= cfg.catalog_sync_interval:
+                if await asyncio.to_thread(catalog_store.due_for_sync, cfg.catalog_sync_interval):
                     res = await asyncio.to_thread(sync_catalog, engine, cfg)
-                    log.info("카탈로그 sync 완료: %s (총 %s개)", res, await asyncio.to_thread(catalog_store.count))
+                    total = await asyncio.to_thread(catalog_store.count)
+                    log.info("카탈로그 sync 완료: %s (총 %s개)", res, total)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — 실패해도 루프 유지(다음 주기 재시도)

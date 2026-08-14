@@ -107,6 +107,18 @@ catalog_components = Table(
     Column("updated_at", String(40), nullable=False, index=True),
 )
 
+# harvest 스케줄 상태(origin별) — 하이브리드 sync 를 위한 워터마크·시각.
+# watermark: 상류 updatedAt 최대치(다음 증분의 updated_since 기준). last_full_at: 마지막 full 대조.
+# last_sync_at: 마지막 sync 시각(delta/full 무관) — 스케줄러 throttle 기준.
+catalog_sync_state = Table(
+    "catalog_sync_state",
+    metadata,
+    Column("origin", String(32), primary_key=True),
+    Column("watermark", String(40), nullable=True),
+    Column("last_full_at", String(40), nullable=True),
+    Column("last_sync_at", String(40), nullable=True),
+)
+
 
 def resolve_database_url(store_dir: Path) -> str:
     """`DATABASE_URL`(프로덕션 Postgres) 또는 기본 SQLite(store 폴더 밑)."""

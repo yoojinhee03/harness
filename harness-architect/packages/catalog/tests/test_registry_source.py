@@ -17,6 +17,7 @@ from harness_catalog import (
     descriptor_from_entry,
     federate,
 )
+from harness_catalog.registry_source import classify_entry
 from harness_resolver import Component, InMemoryRegistry
 
 
@@ -96,6 +97,43 @@ def test_descriptor_skips_non_latest_and_deleted():
     assert descriptor_from_entry(STALE_ENTRY) is None
     assert descriptor_from_entry(DELETED_ENTRY) is None
     assert descriptor_from_entry({"description": "이름 없음"}) is None
+
+
+def _reg(name, status="active", is_latest=True, updated="2026-05-01T00:00:00Z"):
+    return {
+        "server": {"name": name, "title": name, "version": "1.0.0", "remotes": [{"type": "http", "url": "https://m/x"}]},
+        "_meta": {
+            "io.modelcontextprotocol.registry/official": {
+                "status": status,
+                "isLatest": is_latest,
+                "updatedAt": updated,
+            }
+        },
+    }
+
+
+def test_classify_entry_upsert_delete_skip():
+    assert classify_entry(_reg("a"))[:2] == ("upsert", "a")
+    assert classify_entry(_reg("b", status="deleted"))[:2] == ("delete", "b")
+    assert classify_entry(_reg("c", is_latest=False)) is None  # 구버전 무시
+    assert classify_entry({"server": {}, "_meta": {}}) is None  # 이름 없음
+
+
+def test_fetch_delta_upserts_deletes_and_advances_watermark():
+    up = _reg("acme/a", updated="2026-05-01T00:00:00Z")
+    de = _reg("acme/b", status="deleted", updated="2026-06-02T00:00:00Z")
+    calls = []
+
+    def fetcher(url: str) -> dict:
+        calls.append(url)
+        return {"servers": [up, de], "metadata": {}}
+
+    src = MCPRegistrySource(fetcher=fetcher, clock=lambda: 0.0)
+    upserts, deletes, watermark = src.fetch_delta("2026-01-01T00:00:00Z")
+    assert [c.id for c in upserts] == ["acme/a"]
+    assert deletes == ["acme/b"]
+    assert watermark == "2026-06-02T00:00:00Z"  # 본 updatedAt 최대치
+    assert "updated_since=" in calls[0]  # 증분 쿼리 경로
 
 
 def test_descriptor_unwraps_real_wrapped_shape():

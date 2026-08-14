@@ -36,7 +36,8 @@ class Settings:
     registry_enrich_max: int = 150  # caps 빈 컴포넌트 LLM 보강 상한(0=끔, 키 있을 때만 동작)
     marketplace_mode: str = "off"  # off | on
     marketplace_url: str = ""  # 빈 값이면 소스 기본(anthropics/claude-plugins-official)
-    catalog_sync_interval: int = 21600  # harvest→DB 주기(초, 기본 6h). API 백그라운드 스케줄러가 사용
+    catalog_sync_interval: int = 3600  # harvest→DB 주기(초, 기본 1h). 증분이 싸서 자주 돌려 신선도↑
+    catalog_full_interval: int = 86400  # 전체 대조(full reconcile) 주기(초, 기본 24h). 드리프트 정리
 
     @property
     def use_live_registry(self) -> bool:
@@ -78,5 +79,6 @@ def load_settings() -> Settings:
         registry_enrich_max=int(os.environ.get("HARNESS_REGISTRY_ENRICH_MAX", "150")),
         marketplace_mode=os.environ.get("HARNESS_MARKETPLACE", "off"),
         marketplace_url=os.environ.get("HARNESS_MARKETPLACE_URL", ""),
-        catalog_sync_interval=int(os.environ.get("HARNESS_CATALOG_SYNC_INTERVAL", "21600")),
+        catalog_sync_interval=int(os.environ.get("HARNESS_CATALOG_SYNC_INTERVAL", "3600")),
+        catalog_full_interval=int(os.environ.get("HARNESS_CATALOG_FULL_INTERVAL", "86400")),
     )

@@ -23,7 +23,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any, Protocol
 
 from harness_resolver import Component, HarnessConfig, Registry
@@ -137,6 +137,35 @@ def descriptor_from_entry(entry: dict[str, Any]) -> ServerDescriptor | None:
     return desc
 
 
+def _max_updated(entry: dict[str, Any], current: str | None) -> str | None:
+    """엔트리의 상류 updatedAt 과 현재 워터마크 중 큰 값(ISO 문자열 사전식 비교=UTC 시간순)."""
+    ua = _official_meta(entry).get("updatedAt")
+    if ua and (current is None or str(ua) > current):
+        return str(ua)
+    return current
+
+
+def classify_entry(entry: dict[str, Any]) -> tuple[str, str, Component | None] | None:
+    """레지스트리 엔트리 분류 → ('upsert', id, Component) | ('delete', id, None) | None(무시).
+
+    최신(isLatest) 활성 → upsert. 최신 deleted/deprecated → delete. 구버전(isLatest=false) → 무시.
+    증분 sync 는 upsert·delete 를 모두 처리하고, full sync 는 upsert 만 쓴다(삭제는 전체 교체로 처리).
+    """
+    official = _official_meta(entry)
+    if official.get("isLatest") is False:  # 구버전 → 무시
+        return None
+    srv = entry.get("server") if isinstance(entry.get("server"), dict) else entry
+    name = srv.get("name") if isinstance(srv, dict) else None
+    if not name:
+        return None
+    if official.get("status") not in (None, "active"):  # deleted/deprecated → 삭제
+        return ("delete", str(name), None)
+    desc = descriptor_from_entry(entry)  # active+latest → 정상 파싱
+    if desc is None:
+        return None
+    return ("upsert", str(name), harvest_component(desc))
+
+
 class LiveSource(Protocol):
     """라이브 카탈로그 소스 — `components()` 로 현재 컴포넌트 스냅샷을 준다."""
 
@@ -152,6 +181,7 @@ class _TTLSource:
     """
 
     _label = "라이브 소스"
+    supports_delta = False  # True 면 fetch_delta(updated_since) 로 증분 harvest 가능
 
     def __init__(
         self,
@@ -166,6 +196,7 @@ class _TTLSource:
         self._enricher = enricher  # None 이면 무보강(휴리스틱 caps 유지)
         self._cache: list[Component] = []
         self._fetched_at: float | None = None
+        self.last_watermark: str | None = None  # 마지막 full 페치에서 본 상류 updatedAt 최대치
 
     def _fresh(self) -> bool:
         return self._fetched_at is not None and (self._clock() - self._fetched_at) < self._ttl
@@ -195,6 +226,7 @@ class MCPRegistrySource(_TTLSource):
 
     _label = "MCP 레지스트리"
     origin = "registry"  # DB 적재 시 origin 태그(catalog_store.sync_catalog)
+    supports_delta = True  # updated_since 로 증분 harvest 지원
 
     def __init__(
         self,
@@ -211,38 +243,56 @@ class MCPRegistrySource(_TTLSource):
         self._page_limit = page_limit
         self._max_pages = max_pages
 
-    def _fetch_all(self) -> list[Component]:
-        components: list[Component] = []
-        seen: set[str] = set()
+    def _paged(self, extra: str = "") -> Iterator[dict[str, Any]]:
+        """/v0/servers 를 커서 페이지네이션하며 서버 엔트리를 순회. extra 는 추가 쿼리(예: updated_since)."""
         cursor: str | None = None
         pages = 0
         while pages < self._max_pages:
-            url = f"{self._base}/v0/servers?limit={self._page_limit}"
+            url = f"{self._base}/v0/servers?limit={self._page_limit}{extra}"
             if cursor:
                 url += f"&cursor={urllib.parse.quote(cursor, safe='')}"
             data = self._fetch(url)
             for entry in data.get("servers") or []:
-                if not isinstance(entry, dict):
-                    continue
-                desc = descriptor_from_entry(entry)
-                if desc is None or desc.id in seen:
-                    continue
-                seen.add(desc.id)
-                components.append(harvest_component(desc))
+                if isinstance(entry, dict):
+                    yield entry
             pages += 1
             metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
             cursor = metadata.get("nextCursor") if metadata else None
             if not cursor:
-                break
-        else:
-            # max_pages 에서 절단 — 침묵 금지(정직 표기).
-            log.warning(
-                "MCP 레지스트리 %d페이지에서 절단 — 일부 서버 미수집(max_pages=%d, 커서 잔존)",
-                pages,
-                self._max_pages,
-            )
-        log.info("MCP 레지스트리 라이브: %d개 컴포넌트 수집(%d페이지)", len(components), pages)
+                return
+        log.warning("MCP 레지스트리 %d페이지에서 절단(max_pages=%d, 커서 잔존)", pages, self._max_pages)
+
+    def _fetch_all(self) -> list[Component]:
+        components: list[Component] = []
+        seen: set[str] = set()
+        watermark: str | None = None
+        for entry in self._paged():
+            watermark = _max_updated(entry, watermark)
+            cl = classify_entry(entry)
+            if cl is None or cl[0] != "upsert" or cl[1] in seen or cl[2] is None:
+                continue
+            seen.add(cl[1])
+            components.append(cl[2])
+        self.last_watermark = watermark
+        log.info("MCP 레지스트리 full: %d개 수집", len(components))
         return components
+
+    def fetch_delta(self, updated_since: str) -> tuple[list[Component], list[str], str | None]:
+        """updated_since 이후 바뀐 것만 → (upserts, deleted_ids, watermark). id별 마지막 분류가 이김."""
+        changes: dict[str, tuple[str, Component | None]] = {}
+        watermark: str | None = None
+        extra = f"&updated_since={urllib.parse.quote(updated_since, safe='')}"
+        for entry in self._paged(extra):
+            watermark = _max_updated(entry, watermark)
+            cl = classify_entry(entry)
+            if cl is not None:
+                changes[cl[1]] = (cl[0], cl[2])
+        upserts = [c for kind, c in changes.values() if kind == "upsert" and c is not None]
+        deletes = [cid for cid, (kind, _) in changes.items() if kind == "delete"]
+        if self._enricher is not None and self._enricher.active:
+            upserts = self._enricher.enrich(upserts)
+        log.info("MCP 레지스트리 delta(since %s): +%d / -%d", updated_since, len(upserts), len(deletes))
+        return upserts, deletes, watermark
 
 
 # ── 플러그인 마켓플레이스(non-mcp 타입 소스) ──

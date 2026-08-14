@@ -114,11 +114,89 @@ def test_sync_catalog_writes_both_origins(tmp_path):
     engine = _engine(tmp_path)
     cfg = _settings(live_registry_mode="on", marketplace_mode="on")
     res = sync_catalog(engine, settings=cfg, fetcher=_both_sources_fetcher)
-    assert res == {"registry": 1, "marketplace": 1}
+    assert res["registry"]["mode"] == "full" and res["registry"]["upsert"] == 1  # 첫 sync=full
+    assert res["marketplace"]["mode"] == "full" and res["marketplace"]["upsert"] == 1
     store = CatalogStore(engine)
     by_id = {c.id: c for c in store.all()}
     assert set(by_id) == {"acme/remote-mcp", "box"}
     assert by_id["box"].type == "skill" and by_id["acme/remote-mcp"].type == "mcp"
+
+
+# ── 하이브리드: full → delta(증분 upsert + delete) ──
+def _reg_entry(name: str, status: str = "active", updated: str = "2026-05-01T00:00:00Z") -> dict:
+    return {
+        "server": {
+            "name": name,
+            "title": name,
+            "version": "1.0.0",
+            "remotes": [{"type": "streamable-http", "url": "https://mcp/x"}],
+        },
+        "_meta": {
+            "io.modelcontextprotocol.registry/official": {
+                "status": status,
+                "isLatest": True,
+                "updatedAt": updated,
+            }
+        },
+    }
+
+
+def _hybrid_fetcher(full_servers: list[dict], delta_servers: list[dict]):
+    def f(url: str) -> dict:
+        if "/v0/servers" in url:
+            return {"servers": delta_servers if "updated_since" in url else full_servers, "metadata": {}}
+        return {"plugins": []}  # 마켓플레이스 없음
+    return f
+
+
+def test_hybrid_full_then_delta_upsert_and_delete(tmp_path):
+    engine = _engine(tmp_path)
+    a = _reg_entry("acme/a", updated="2026-05-01T00:00:00Z")
+    b = _reg_entry("acme/b", updated="2026-06-01T00:00:00Z")  # 증분에서 새로 추가
+    a_del = _reg_entry("acme/a", status="deleted", updated="2026-06-02T00:00:00Z")  # 증분에서 삭제됨
+    cfg = _settings(live_registry_mode="on")
+    fetcher = _hybrid_fetcher(full_servers=[a], delta_servers=[b, a_del])
+    store = CatalogStore(engine)
+
+    r1 = sync_catalog(engine, settings=cfg, fetcher=fetcher)  # 첫 sync = full
+    assert r1["registry"]["mode"] == "full"
+    assert [c.id for c in store.all()] == ["acme/a"]
+    assert store.get_state("registry")[0] == "2026-05-01T00:00:00Z"  # 워터마크 설정
+
+    r2 = sync_catalog(engine, settings=cfg, fetcher=fetcher)  # 둘째 sync = delta
+    assert r2["registry"] == {"mode": "delta", "upsert": 1, "delete": 1}
+    assert [c.id for c in store.all()] == ["acme/b"]  # a 삭제 + b 추가
+    assert store.get_state("registry")[0] == "2026-06-02T00:00:00Z"  # 워터마크 전진
+
+
+def test_full_reconcile_forced_when_due(tmp_path):
+    engine = _engine(tmp_path)
+    fetcher = _hybrid_fetcher([_reg_entry("acme/a")], [_reg_entry("acme/b")])
+    sync_catalog(engine, settings=_settings(live_registry_mode="on"), fetcher=fetcher)  # full
+    # full_interval=0 → 매번 full_due → 증분 안 씀(전체 대조).
+    r2 = sync_catalog(engine, settings=_settings(live_registry_mode="on", catalog_full_interval=0), fetcher=fetcher)
+    assert r2["registry"]["mode"] == "full"
+
+
+def test_marketplace_always_full(tmp_path):
+    engine = _engine(tmp_path)
+
+    def f(url: str) -> dict:
+        return {"servers": [], "metadata": {}} if "/v0/servers" in url else {"plugins": [MARKET_PLUGIN]}
+
+    cfg = _settings(marketplace_mode="on")
+    assert sync_catalog(engine, settings=cfg, fetcher=f)["marketplace"]["mode"] == "full"
+    assert sync_catalog(engine, settings=cfg, fetcher=f)["marketplace"]["mode"] == "full"  # 증분 미지원
+
+
+def test_due_for_sync(tmp_path):
+    from harness_api.store import now_iso
+
+    store = CatalogStore(_engine(tmp_path))
+    assert store.due_for_sync(3600) is True  # 상태 없음 → due
+    store.set_state("registry", watermark=None, last_full_at=None, last_sync_at=now_iso())
+    assert store.due_for_sync(3600) is False  # 방금 sync → 아님
+    assert store.due_for_sync(0) is True  # interval 0 → 항상 due
 
 
 def test_sync_catalog_noop_when_flags_off(tmp_path):
