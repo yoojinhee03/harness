@@ -1,6 +1,5 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.js";
 
 /* ─────────── 디자인 토큰 (Linear 풍 · 다크 우선 + 라이트 토글) ───────────
    색은 "R G B"(공백 구분)로 두어 tailwind 의 rgb(var(--x) / <alpha>) 와 맞춘다. */
