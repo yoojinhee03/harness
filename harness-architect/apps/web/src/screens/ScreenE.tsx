@@ -201,19 +201,18 @@ function Detail({ id }: { id: string }) {
         {meaning.noun} · {d.id}@{d.version} · {d.status}
       </p>
 
-      {/* ① 이걸 넣으면 — 효과 한 줄 + 자세한 설명 */}
-      <div className="mt-3 rounded-lg border border-accent/30 bg-accent/5 p-3">
-        <p className="text-xs font-semibold text-accent">🎯 이걸 넣으면</p>
-        <p className="mt-1 text-sm text-fg/90">{effectLine(d)}</p>
+      {/* 효과 — 한 줄 + 자세한 설명 */}
+      <div className="mt-3 border-l-2 border-accent/50 pl-3">
+        <p className="text-sm text-fg/90">{effectLine(d)}</p>
         {(d.description || d.summary) && (
           <p className="mt-1.5 text-xs leading-relaxed text-muted">{d.description || d.summary}</p>
         )}
       </div>
 
-      {/* ② 이럴 때 씁니다 — use_when + examples */}
+      {/* 쓰임새 — use_when + examples */}
       {(useWhen.length > 0 || examples.length > 0) && (
         <div className="mt-3">
-          <p className="text-xs font-semibold text-fg/80">💡 이럴 때 씁니다</p>
+          <p className="text-xs font-semibold text-muted">쓰임새</p>
           {useWhen.length > 0 && (
             <ul className="mt-1 space-y-0.5">
               {useWhen.map((w) => (

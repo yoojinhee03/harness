@@ -101,14 +101,49 @@ def test_ready_component_resolves_via_scoped_registry(tmp_path):
 # ── authoring 단위(휴리스틱/스킵) ──
 
 
-def test_author_context_heuristic_offline(monkeypatch):
+def test_author_component_heuristic_offline(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    from harness_api.authoring import author_context, validate_component
+    from harness_api.authoring import author_component, validate_component
 
-    comp = author_context("팀 파이썬 코딩 컨벤션: 타입힌트 필수, 함수는 짧게")
+    comp = author_component("팀 파이썬 코딩 컨벤션: 타입힌트 필수, 함수는 짧게", "context")
     assert comp.type == "context" and comp.body
     assert comp.id.startswith("u-")  # 네임스페이스 접두사
     assert validate_component(comp)["ok"] is True
+
+    # skill 도 휴리스틱으로 body 채움
+    sk = author_component("PR diff 를 정확성·가독성·컨벤션 순으로 리뷰하는 절차", "skill")
+    assert sk.type == "skill" and sk.body and sk.entrypoint
+
+    # mcp/hook 은 실행 스펙이 없으면 검증에서 draft(에러)로 — 휴리스틱만으론 미완성
+    m = author_component("GitHub 저장소·이슈·PR 접근", "mcp")
+    assert m.type == "mcp" and validate_component(m)["ok"] is False  # mcp 스펙 없음
+
+
+def test_author_all_types_via_llm():
+    from harness_api.authoring import author_component, validate_component
+
+    payload = {
+        "name": "X", "summary": "s", "description": "d", "provides": ["review.code"],
+        "body": "step 1", "requires": ["vcs.code-hosting"],
+        "mcp": {"transport": "stdio", "command": "npx", "args": ["-y", "srv"]},
+        "usage_note": "쓰기 주의", "auth": {"required": True, "type": "oauth", "scopes": ["repo"]},
+        "events": ["before_tool_call"], "emit_command": "echo ok", "sandbox": "restricted",
+        "blocking": True, "failure": "fail_closed",
+    }
+
+    def fake(_system, _user, _mt):
+        return payload
+
+    sk = author_component("x", "skill", complete=fake)
+    assert sk.type == "skill" and sk.body == "step 1" and sk.requires == ["vcs.code-hosting"] and sk.entrypoint
+
+    m = author_component("x", "mcp", complete=fake)
+    assert m.type == "mcp" and m.mcp and m.mcp.command == "npx" and m.auth and m.auth.required
+    assert validate_component(m)["ok"] is True
+
+    h = author_component("x", "hook", complete=fake)
+    assert h.type == "hook" and h.events == ["before_tool_call"] and h.emit_command == "echo ok"
+    assert validate_component(h)["ok"] is True
 
 
 def test_validate_rejects_empty_body_and_bad_cap(monkeypatch):

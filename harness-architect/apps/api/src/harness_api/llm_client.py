@@ -53,3 +53,19 @@ def _openai_json(model: str, api_key: str, system: str, user: str, max_tokens: i
     )
     text = resp.choices[0].message.content or ""
     return json.loads(_strip_fence(text))
+
+
+def verify_key(provider: str, model: str, api_key: str) -> None:
+    """키·모델로 최소 호출을 시도(성공=예외 없음). JSON 파싱은 하지 않는다 — 인증/도달만 확인."""
+    if provider == "openai":
+        import openai
+
+        openai.OpenAI(api_key=api_key).chat.completions.create(
+            model=model, max_tokens=1, messages=[{"role": "user", "content": "ping"}]
+        )
+    else:
+        import anthropic
+
+        anthropic.Anthropic(api_key=api_key).messages.create(
+            model=model, max_tokens=1, messages=[{"role": "user", "content": "ping"}]
+        )

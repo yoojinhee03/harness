@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, type ApiToken, type LlmProvider, type LlmSettingsInput, type ProviderStatus } from "../api/client";
+import { api, type ApiToken, type LlmProvider, type LlmSettingsInput, type LlmVerifyResult, type ProviderStatus } from "../api/client";
 import { useToast } from "../lib/toast";
 import { Badge, Button, Card, EmptyState, Input, Modal, PageHeader } from "../lib/ui";
 
@@ -202,6 +202,13 @@ function LlmSettingsSection() {
     onError: (e: Error) => toast(e.message || "저장 실패", "error"),
   });
 
+  const [verify, setVerify] = useState<LlmVerifyResult | null>(null);
+  const verifyM = useMutation({
+    mutationFn: () => api.verifyLlmSettings(),
+    onSuccess: setVerify,
+    onError: (e: Error) => toast(e.message || "연결 테스트 실패", "error"),
+  });
+
   return (
     <div className="space-y-6">
       {/* ① LLM 키 */}
@@ -235,7 +242,16 @@ function LlmSettingsSection() {
             onChange={setLlmKey}
             onClear={() => saveM.mutate({ llm_key: "" })}
           />
-          <div className="flex justify-end">
+          <div className="flex items-center justify-end gap-2">
+            <VerifyBadge r={verify?.llm} />
+            <Button
+              variant="subtle"
+              onClick={() => verifyM.mutate()}
+              disabled={verifyM.isPending || !s?.llm.set}
+              title={s?.llm.set ? "저장된 키로 최소 호출을 시도해 연동 확인" : "먼저 키를 저장하세요"}
+            >
+              {verifyM.isPending ? "확인 중…" : "연결 테스트"}
+            </Button>
             <Button
               onClick={() => saveM.mutate({ provider, llm_key: llmKey.trim() ? llmKey.trim() : null })}
               disabled={saveM.isPending}
@@ -260,7 +276,16 @@ function LlmSettingsSection() {
             onChange={setEmbKey}
             onClear={() => saveM.mutate({ embedding_key: "" })}
           />
-          <div className="flex justify-end">
+          <div className="flex items-center justify-end gap-2">
+            <VerifyBadge r={verify?.embedding} />
+            <Button
+              variant="subtle"
+              onClick={() => verifyM.mutate()}
+              disabled={verifyM.isPending || !s?.embedding.set}
+              title={s?.embedding.set ? "저장된 키로 최소 호출을 시도해 연동 확인" : "먼저 키를 저장하세요"}
+            >
+              {verifyM.isPending ? "확인 중…" : "연결 테스트"}
+            </Button>
             <Button
               onClick={() => saveM.mutate({ embedding_key: embKey.trim() ? embKey.trim() : null })}
               disabled={saveM.isPending}
@@ -272,6 +297,13 @@ function LlmSettingsSection() {
       </div>
     </div>
   );
+}
+
+function VerifyBadge({ r }: { r?: string }) {
+  if (!r) return null;
+  if (r === "ok") return <Badge className="bg-ok/15 text-ok">연동 확인됨</Badge>;
+  if (r === "unset") return <Badge className="bg-surface-2 text-muted">미설정</Badge>;
+  return <Badge className="bg-err/15 text-err">{r}</Badge>;
 }
 
 function KeyField({

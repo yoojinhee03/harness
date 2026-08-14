@@ -43,11 +43,12 @@ from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
 
 from .accounts import AccountStore
-from .authoring import author_context, test_component, validate_component
+from .authoring import author_component, test_component, validate_component
 from .catalog_store import CatalogStore, DbCatalogSource, sync_catalog
 from .component_store import ComponentStore, UserComponentSource, component_event_stream
 from .llm_client import DEFAULT_MODEL
 from .llm_client import complete_json as _provider_complete_json
+from .llm_client import verify_key as _provider_verify_key
 from .llm_settings import AppSettingsStore
 from .observability import (
     ObservabilityMiddleware,
@@ -809,7 +810,7 @@ def component_author(
     complete = _llm_complete(request)
     if complete is None:
         raise HTTPException(status_code=400, detail="LLM 키가 없습니다 — 설정에서 LLM 키를 등록하세요")
-    comp = author_context(body.prompt, prior, complete=complete)
+    comp = author_component(body.prompt, body.type, prior, complete=complete)
     return {"component": comp.model_dump()}
 
 
@@ -960,6 +961,33 @@ def put_llm_settings(
         llm_key=body.llm_key,
         embedding_key=body.embedding_key,
     )
+
+
+@app.post("/settings/llm/verify")
+def verify_llm_settings(request: Request, user: dict[str, Any] = Depends(current_user)) -> dict[str, str]:
+    """등록된 LLM/임베딩 키로 최소 호출을 시도해 실제 연동 여부 확인(원문 키는 반환 안 함)."""
+    res = _app_settings(request).resolve()
+    out: dict[str, str] = {}
+    if not res["llm_key"]:
+        out["llm"] = "unset"
+    else:
+        provider = res["provider"] or "anthropic"
+        try:
+            _provider_verify_key(provider, DEFAULT_MODEL.get(provider, ""), res["llm_key"])
+            out["llm"] = "ok"
+        except Exception as exc:  # noqa: BLE001 — 인증/네트워크/SDK 오류를 요약 전달
+            out["llm"] = f"error: {type(exc).__name__}"
+    if not res["embedding_key"]:
+        out["embedding"] = "unset"
+    else:
+        try:
+            from harness_catalog import OpenAIEmbedder
+
+            OpenAIEmbedder(api_key=res["embedding_key"]).embed(["ping"])
+            out["embedding"] = "ok"
+        except Exception as exc:  # noqa: BLE001
+            out["embedding"] = f"error: {type(exc).__name__}"
+    return out
 
 
 def to_harness_yaml(config: HarnessConfig) -> str:

@@ -115,9 +115,10 @@ class HarnessSaveBody(BaseModel):
 
 
 class ComponentAuthorBody(BaseModel):
-    """자연어 → context 컴포넌트 초안 생성(스튜디오 채팅). prior_id=이전 저장본 리파인."""
+    """자연어 → 카탈로그 컴포넌트 초안(스튜디오 빌더). type 으로 skill|mcp|context|hook 선택."""
 
     prompt: str = Field(min_length=1)
+    type: str = "context"
     prior_id: str | None = None
 
 

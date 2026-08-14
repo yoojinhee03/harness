@@ -168,7 +168,15 @@ export interface SelectionInput {
 // ── 유저 저작 컴포넌트(스튜디오) ──
 export type ComponentStatus = "draft" | "valid" | "ready";
 
-/** 채팅으로 생성/편집되는 Component(관련 필드만 명시, 나머지는 보존해 저장 시 되돌려보낸다). */
+export interface McpSpec {
+  transport: string;
+  command: string | null;
+  args: string[];
+  env: Record<string, string>;
+  url: string | null;
+}
+
+/** 빌더로 생성/편집되는 Component(타입별 필드 포함, 나머지는 보존해 저장 시 되돌려보낸다). */
 export interface AuthoredComponent {
   id: string;
   type: ComponentType;
@@ -176,10 +184,16 @@ export interface AuthoredComponent {
   version: string;
   summary: string;
   description: string;
-  body: string | null;
   provides: string[];
   capability_tags: string[];
   use_when: string[];
+  body?: string | null; // context/skill
+  requires?: string[]; // skill
+  entrypoint?: string | null; // skill
+  mcp?: McpSpec | null; // mcp
+  usage_note?: string | null; // mcp
+  events?: string[]; // hook
+  emit_command?: string | null; // hook
   [k: string]: unknown;
 }
 
@@ -221,6 +235,11 @@ export interface LlmSettingsInput {
   provider?: string;
   llm_key?: string | null; // null=유지(생략), ""=삭제, 값=교체
   embedding_key?: string | null;
+}
+
+export interface LlmVerifyResult {
+  llm: string; // "ok" | "unset" | "error: X"
+  embedding: string;
 }
 
 export interface HarnessInput {
@@ -319,10 +338,11 @@ export const api = {
   // ── 사용자별 LLM 설정 (provider·모델·키; 키는 서버에서 암호화·마스킹) ──
   getLlmSettings: () => send<LlmSettingsStatus>("GET", "/settings/llm"),
   putLlmSettings: (body: LlmSettingsInput) => send<LlmSettingsStatus>("PUT", "/settings/llm", body),
+  verifyLlmSettings: () => send<LlmVerifyResult>("POST", "/settings/llm/verify", undefined),
 
-  // ── 유저 저작 컴포넌트(스튜디오: 채팅 생성 → 검증 → 테스트 → 내 구성요소) ──
-  authorComponent: (prompt: string, prior_id?: string) =>
-    post<{ component: AuthoredComponent }>("/components/author", { prompt, prior_id: prior_id ?? null }),
+  // ── 카탈로그 빌더(스튜디오: 타입 선택 → 설명으로 생성 → 검증 → 테스트 → 내 구성요소) ──
+  authorComponent: (prompt: string, type: ComponentType, prior_id?: string) =>
+    post<{ component: AuthoredComponent }>("/components/author", { prompt, type, prior_id: prior_id ?? null }),
   listComponents: (status?: ComponentStatus) =>
     send<ComponentSummary[]>("GET", `/components${status ? `?status=${encodeURIComponent(status)}` : ""}`),
   readyComponents: () => send<Recommendation[]>("GET", "/components/ready"),

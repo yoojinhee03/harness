@@ -82,6 +82,18 @@ def test_settings_llm_requires_auth(client):
     assert client.get("/settings/llm").status_code == 401
 
 
+def test_verify_llm_settings(client, monkeypatch):
+    import harness_api.main as m
+
+    monkeypatch.setattr(m, "_provider_verify_key", lambda provider, model, key: None)  # 최소 호출 성공 흉내
+    a = auth(client, "alice@x.io")
+    r0 = client.post("/settings/llm/verify", headers=a).json()
+    assert r0["llm"] == "unset" and r0["embedding"] == "unset"
+    client.put("/settings/llm", json={"llm_key": "sk-x"}, headers=a)
+    r1 = client.post("/settings/llm/verify", headers=a).json()
+    assert r1["llm"] == "ok"
+
+
 def test_author_uses_injected_provider(client, monkeypatch):
     """앱 LLM 키가 있으면 author 가 주입된 provider 호출을 사용(휴리스틱이 아니라)."""
     import harness_api.main as m
