@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal, cast
 
 from harness_catalog import CAPABILITY_VOCAB, extract_capabilities_heuristic
 from harness_resolver import (
@@ -49,7 +49,8 @@ _SYSTEM: dict[str, str] = {
     "skill": "너는 하네스 'skill' 저작기다. 에이전트가 따를 작업 절차를 만든다(접근은 requires 로 MCP 에 위임).\n"
     '델타: {"body":"단계적 절차(SKILL.md)","requires":["필요한 접근 능력(access)",...]}.\n' + _COMMON,
     "mcp": "너는 하네스 'mcp' 저작기다. **실존하는** MCP 서버의 카탈로그 항목을 기술한다(서버를 새로 만들지 않음).\n"
-    '델타: {"mcp":{"transport":"stdio|http|sse","command":"npx 등","args":[],"env":{"KEY":"${ENV_VAR}"},"url":"원격이면"},'
+    '델타: {"mcp":{"transport":"stdio|http|sse","command":"npx 등","args":[],'
+    '"env":{"KEY":"${ENV_VAR}"},"url":"원격이면"},'
     '"usage_note":"언제·어떻게 쓰나","auth":{"required":bool,"type":"oauth 등","scopes":[]}}.\n'
     "stdio 면 command, http/sse 면 url. 비밀값은 ${ENV_VAR} 표기.\n" + _COMMON,
     "hook": "너는 하네스 'hook' 저작기다. 요청 전후 자동 실행되는 검사/차단 스펙을 만든다(여기서 실행하진 않음).\n"
@@ -83,9 +84,17 @@ def _from_llm(type_: str, data: dict[str, Any], prompt: str) -> Component:
     if type_ == "context":
         base.update(body=str(data.get("body") or ""), source="inline")
     elif type_ == "skill":
-        base.update(body=str(data.get("body") or ""), entrypoint=f"skills/{cid}/SKILL.md", requires=_caps(data.get("requires")))
+        base.update(
+            body=str(data.get("body") or ""),
+            entrypoint=f"skills/{cid}/SKILL.md",
+            requires=_caps(data.get("requires")),
+        )
     elif type_ == "mcp":
-        base.update(mcp=_mcp_spec(data.get("mcp")), usage_note=str(data.get("usage_note") or "") or None, auth=_auth(data.get("auth")))
+        base.update(
+            mcp=_mcp_spec(data.get("mcp")),
+            usage_note=str(data.get("usage_note") or "") or None,
+            auth=_auth(data.get("auth")),
+        )
     elif type_ == "hook":
         base.update(
             events=[e for e in (data.get("events") or []) if e in _HOOK_EVENTS],
@@ -100,7 +109,11 @@ def _from_llm(type_: str, data: dict[str, Any], prompt: str) -> Component:
 def _mcp_spec(raw: Any) -> McpServerSpec | None:
     if not isinstance(raw, dict):
         return None
-    transport = raw.get("transport") if raw.get("transport") in _TRANSPORTS else "stdio"
+    raw_transport = raw.get("transport")
+    transport = cast(
+        Literal["stdio", "http", "sse"],
+        raw_transport if raw_transport in _TRANSPORTS else "stdio",
+    )
     try:
         return McpServerSpec(
             transport=transport,
@@ -123,7 +136,12 @@ def _heuristic(type_: str, prompt: str) -> Component:
     """LLM 없음/실패 시 초안 — 텍스트 타입은 프롬프트를 본문으로, mcp/hook 은 검증에서 스펙 보완 유도."""
     caps = _caps(extract_capabilities_heuristic(prompt))
     name = (prompt.strip().splitlines()[0][:60] if prompt.strip() else "새 구성요소") or "새 구성요소"
-    data: dict[str, Any] = {"name": name, "summary": prompt.strip()[:120], "description": prompt.strip(), "provides": caps}
+    data: dict[str, Any] = {
+        "name": name,
+        "summary": prompt.strip()[:120],
+        "description": prompt.strip(),
+        "provides": caps,
+    }
     if type_ in ("context", "skill"):
         data["body"] = prompt.strip()
     return _from_llm(type_, data, prompt)

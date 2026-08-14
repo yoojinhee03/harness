@@ -78,7 +78,7 @@ jobs:
       - name: Build API image
         run: docker build -t harness-api:ci harness-architect
       - name: Trivy scan (API image)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: harness-api:ci
           severity: CRITICAL,HIGH

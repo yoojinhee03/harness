@@ -66,7 +66,9 @@ class AppSettingsStore:
 
         llm_enc = key_enc(llm_key, existing["llm_key_enc"] if existing else "")
         emb_enc = key_enc(embedding_key, existing["embedding_key_enc"] if existing else "")
-        prov = (provider if provider is not None else (existing["provider"] if existing else "anthropic")) or "anthropic"
+        prov = (
+            provider if provider is not None else (existing["provider"] if existing else "anthropic")
+        ) or "anthropic"
         if prov not in PROVIDERS:
             prov = "anthropic"
 

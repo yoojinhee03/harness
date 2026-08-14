@@ -181,7 +181,8 @@ def test_author_requires_llm_key(client):
 def test_author_save_validate_test_flow(client):
     a = auth(client, "alice@x.io")
     client.put("/settings/llm", json={"llm_key": "sk-x"}, headers=a)  # 키 등록(SDK 없어 생성은 휴리스틱 폴백)
-    comp = client.post("/components/author", json={"prompt": "팀 코딩 컨벤션: 타입힌트 필수"}, headers=a).json()["component"]
+    resp = client.post("/components/author", json={"prompt": "팀 코딩 컨벤션: 타입힌트 필수"}, headers=a)
+    comp = resp.json()["component"]
     assert comp["type"] == "context" and comp["body"]
     cid = comp["id"]
 
