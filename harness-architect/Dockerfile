@@ -1,7 +1,7 @@
 # 백엔드(FastAPI) 이미지 — uv 워크스페이스를 그대로 빌드한다.
 # 카탈로그 *데이터*(harness-catalog/components)는 이미지에 넣지 않고 런타임에
 # CATALOG_DIR 로 읽기전용 마운트한다(루트 docker-compose.yml 참고). 코드↔자산 분리 유지.
-FROM python:3.12-slim AS base
+FROM python:3.14-slim AS base
 
 # uv 바이너리 — astral 공식 이미지에서 복사(로컬과 동일한 0.11 라인).
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /bin/uv
