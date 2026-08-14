@@ -28,7 +28,6 @@ provides: [prompt.safety]
 
 # ── 타입 델타: context (프롬프트 조각) ──
 source: inline
-refresh: static
 body: |
   민감정보(비밀키·개인정보)를 응답에 노출하지 않는다. 파괴적이거나 되돌릴 수 없는 작업은
   실행 전 확인을 요청한다. 불확실하면 단정하지 말고 한계와 가정을 밝힌다.

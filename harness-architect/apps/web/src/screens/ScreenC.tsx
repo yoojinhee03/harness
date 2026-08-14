@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, type HarnessInput } from "../api/client";
-import { Button, Card, SeverityDot } from "../lib/ui";
+import { Button, Card, SeverityDot, Spinner } from "../lib/ui";
 
 export default function ScreenC({
   harness,
@@ -16,8 +16,13 @@ export default function ScreenC({
     queryFn: () => api.resolve(harness),
   });
 
-  if (isPending) return <Card>검증 중…</Card>;
-  if (isError || !data) return <Card>검증 실패 — 백엔드(:8000) 확인.</Card>;
+  if (isPending)
+    return (
+      <Card className="mx-auto max-w-3xl flex items-center gap-2 text-sm text-muted">
+        <Spinner /> 검증 중…
+      </Card>
+    );
+  if (isError || !data) return <Card className="mx-auto max-w-3xl">검증 실패 — 백엔드(:8000) 확인.</Card>;
 
   const items = data.diagnostics.items;
   const errors = items.filter((d) => d.severity === "error");
@@ -26,21 +31,20 @@ export default function ScreenC({
   const authNeeds = data.resolved?.auth_needs ?? [];
 
   const banner = errors.length
-    ? { tone: "err", text: `오류 ${errors.length}건 — 생성 전 해결 필요` }
+    ? { tone: "err" as const, text: `오류 ${errors.length}건 — 생성 전 해결 필요` }
     : gaps.length
-      ? { tone: "warn", text: `gap ${gaps.length}건 — 재조정하면 풀립니다` }
+      ? { tone: "warn" as const, text: `gap ${gaps.length}건 — 재조정하면 풀립니다` }
       : warnings.length
-        ? { tone: "warn", text: `경고 ${warnings.length}건 — 진행 가능` }
-        : { tone: "ok", text: "모든 검사 통과 — 생성 준비 완료" };
-
+        ? { tone: "warn" as const, text: `경고 ${warnings.length}건 — 진행 가능` }
+        : { tone: "ok" as const, text: "모든 검사 통과 — 생성 준비 완료" };
   const bannerBg =
-    banner.tone === "err" ? "bg-err-bg text-err" : banner.tone === "ok" ? "bg-ok-bg text-ok" : "bg-warn-bg text-warn";
+    banner.tone === "err" ? "bg-err/10 text-err" : banner.tone === "ok" ? "bg-ok/10 text-ok" : "bg-warn/10 text-warn";
 
   return (
     <div className="mx-auto max-w-3xl">
-      <div className={`mb-5 rounded-xl px-4 py-3 text-sm font-medium ${bannerBg}`}>{banner.text}</div>
+      <div className={`mb-5 rounded-xl border border-line px-4 py-3 text-sm font-medium ${bannerBg}`}>{banner.text}</div>
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         <CheckSection title="참조 해소 · 충돌" ok={errors.length === 0}>
           {errors.length === 0 ? (
             <Passed text="모든 참조가 카탈로그에 존재하고 충돌 없음" />
@@ -54,7 +58,7 @@ export default function ScreenC({
             <Passed text="모든 requires 가 선택 집합 안에서 충족됨" />
           ) : (
             gaps.map((d, i) => (
-              <div key={i} className="flex items-center justify-between rounded-lg bg-warn-bg px-3 py-2">
+              <div key={i} className="flex items-center justify-between rounded-lg bg-warn/10 px-3 py-2">
                 <div className="flex items-center gap-2 text-sm text-warn">
                   <SeverityDot severity="gap" />
                   <span>
@@ -87,12 +91,12 @@ export default function ScreenC({
             <Passed text="인증이 필요한 구성요소 없음" />
           ) : (
             authNeeds.map((a) => (
-              <div key={a.component_id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                <span className="text-slate-700">
+              <div key={a.component_id} className="flex items-center justify-between rounded-lg bg-surface-2 px-3 py-2 text-sm">
+                <span className="text-fg/90">
                   <b>{a.component_id}</b> — {a.type ?? "auth"} {a.scopes.join(", ")}
                   {a.granted_scope && <span className="text-ok"> · {a.granted_scope} 로 축소</span>}
                 </span>
-                <span className="text-xs text-slate-400">직접 연결 필요</span>
+                <span className="text-xs text-muted">직접 연결 필요</span>
               </div>
             ))
           )}
@@ -116,7 +120,7 @@ function CheckSection({ title, ok, children }: { title: string; ok: boolean; chi
     <Card>
       <div className="mb-2 flex items-center gap-2">
         <SeverityDot severity={ok ? "ok" : "warning"} />
-        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+        <h3 className="text-sm font-semibold text-fg">{title}</h3>
       </div>
       <div className="space-y-1.5">{children}</div>
     </Card>
@@ -124,7 +128,7 @@ function CheckSection({ title, ok, children }: { title: string; ok: boolean; chi
 }
 
 function Passed({ text }: { text: string }) {
-  return <p className="text-sm text-slate-500">{text}</p>;
+  return <p className="text-sm text-muted">{text}</p>;
 }
 
 function DiagRow({ severity, message }: { severity: "error" | "warning"; message: string }) {

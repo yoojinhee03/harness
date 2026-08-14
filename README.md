@@ -158,9 +158,10 @@ corepack pnpm dev                                 # http://localhost:5173
 - ✅ RAG 추천 — 로컬 폴백으로 관통 (추출 → 검색 → 랭킹)
 - ✅ RAG 실연동 — Voyage 임베더·Claude Reasoner 주입 가능(키 있으면 자동, 없으면 폴백)
 - ✅ 런타임 — 빌더 + 훅 엔진(sandbox·timeout·권한 강제) + Anthropic 러너(dry_run), `POST /run`
+- ✅ OpenHarness 임베드(선택) — 검증된 IR 을 오픈소스 [OpenHarness](https://github.com/HKUDS/OpenHarness) `QueryEngine` 에 태워 **실제 에이전트 루프(Action·Observation)** 실행. 우리는 Tools·Knowledge·Permissions 를 찍고 루프는 OpenHarness 가 준다 → 5요소 완성. `pip install openharness-ai` 로 옵트인(코어는 이것 없이도 오프라인 완주)
 - ✅ 프론트엔드 — 화면 A~F (생성 A~D · 카탈로그 E · 대시보드 F)
 - ✅ 카탈로그 확장 — 13 컴포넌트(skill 3·mcp 4·context 4·hook 2, 프롬프트 조각 3 포함) · 3 시나리오(PR 리뷰·이슈 분류·문서 초안)
-- ✅ 다중 런타임 컴파일 (`eject`) — `ResolvedHarness` → Claude Code Emitter · `POST /eject` + `harness eject/resolve` CLI (**플래그십**). 타깃은 현재 Claude Code 하나(Cursor·Cline·Raw 는 Emitter seam 만, 미구현). MCP 서버는 실행 스펙을 갖춰 **그대로 도는 `.mcp.json`** 으로 방출된다(훅 `command` 는 아직 자리표시 — 태생적 근사).
+- ✅ 다중 런타임 컴파일 (`eject`) — `ResolvedHarness` → **Claude Code · Cursor** 두 Emitter · `POST /eject` + `harness eject/resolve` CLI (**플래그십**). 같은 IR 이 `.claude/`(CLAUDE.md·.mcp.json·settings.json)와 `.cursor/`(rules/*.mdc·mcp.json)로 방출된다(Cline·Raw 는 seam 만). MCP 서버는 실행 스펙을 갖춰 **그대로 도는 `.mcp.json`** 으로 나가고(훅 `command` 도 카탈로그가 주면 실 명령), 두 타깃이 mcpServers 조립을 공유한다.
 - ✅ 프롬프트 관리 — 시스템 프롬프트를 합성·변수·버전·린트 가능한 1급 아티팩트로(리졸버 prompt 합성 단계 + 카탈로그 프롬프트 조각)
 - ✅ MCP 서버 — recommend·resolve·eject 를 MCP 툴로(Claude Code·Cursor·Desktop), in-process·백엔드 불필요 → [harness-architect/apps/mcp](./harness-architect/apps/mcp)
 - 🚧 하드닝 — 실 네트워크 호출(키 필요) · 훅 프로세스/WASM 격리 · pgvector 전환
@@ -169,7 +170,7 @@ corepack pnpm dev                                 # http://localhost:5173
 검증된 IR(`ResolvedHarness`)을 아무 런타임으로나 컴파일한다. 기존 플러그인의 포맷 락인·수동
 조립·런타임 터짐·학습 없음을 정면으로 뒤집는 게 목표다.
 
-- 📋 이젝트 타깃 확장 — Cursor(`.cursor/rules`)·Cline·Raw API Emitter (현재 Claude Code 만 관통)
+- ✅ 이젝트 타깃 — Claude Code·Cursor(`.cursor/rules`) 관통. 📋 남은 타깃: Cline·Raw API Emitter
 - 📋 실행 전 프리뷰/시뮬레이터 · 역방향 `adopt`(기존 설정 흡수) · 정책 as code(팀 가드레일)
 - 📋 경험적 검증 — 프롬프트 eval(입력→기대속성)로 "하네스가 실제로 낫다"를 측정해 피드백 루프에 연결 → [docs/plan/11](./harness-architect/docs/plan/11-empirical-validation.md)
 - 📋 피드백 루프 활성화 & 카탈로그 생애주기(드리프트·레시피)

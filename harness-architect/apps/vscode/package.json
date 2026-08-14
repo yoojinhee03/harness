@@ -1,0 +1,297 @@
+{
+  "name": "harness-architect",
+  "displayName": "Harness Architect",
+  "description": "카탈로그 근거로 하네스 구성요소를 추천하고, harness.yaml 을 검증(resolve)·컴파일(eject)한다 — VSCode 안에서.",
+  "version": "0.1.0",
+  "publisher": "dweax",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yoojinhee03/harness.git",
+    "directory": "harness-architect/apps/vscode"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other",
+    "AI"
+  ],
+  "keywords": [
+    "harness",
+    "claude",
+    "mcp",
+    "agent",
+    "scaffolding"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/*.harness.yaml",
+    "workspaceContains:**/harness.yaml",
+    "workspaceContains:harness-architect/**"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "harness.recommend",
+        "title": "구성요소 추천",
+        "category": "Harness Architect",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "harness.resolve",
+        "title": "현재 harness.yaml 검증(resolve)",
+        "category": "Harness Architect",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "harness.eject",
+        "title": "eject — 런타임 네이티브 포맷으로 컴파일",
+        "category": "Harness Architect",
+        "icon": "$(export)"
+      },
+      {
+        "command": "harness.refreshCatalog",
+        "title": "카탈로그 새로고침",
+        "category": "Harness Architect",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "harness.restartServer",
+        "title": "서버 재시작",
+        "category": "Harness Architect",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "harness.copyRef",
+        "title": "컴포넌트 ref 복사",
+        "category": "Harness Architect"
+      },
+      {
+        "command": "harness.createStarter",
+        "title": "추천으로 harness.yaml 스타터 생성",
+        "category": "Harness Architect"
+      },
+      {
+        "command": "harness.saveToStore",
+        "title": "공유 저장소에 저장 (웹과 동기화)",
+        "category": "Harness Architect",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "harness.refreshStore",
+        "title": "내 하네스 새로고침",
+        "category": "Harness Architect",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "harness.openFromStore",
+        "title": "저장소에서 열기",
+        "category": "Harness Architect"
+      },
+      {
+        "command": "harness.deleteFromStore",
+        "title": "저장소에서 삭제",
+        "category": "Harness Architect",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "harness.login",
+        "title": "로그인 / 가입 (공유 저장소)",
+        "category": "Harness Architect",
+        "icon": "$(account)"
+      },
+      {
+        "command": "harness.createTeam",
+        "title": "새 팀 만들기",
+        "category": "Harness Architect"
+      },
+      {
+        "command": "harness.addTeamMember",
+        "title": "팀 멤버 추가",
+        "category": "Harness Architect"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "harness.architect",
+        "name": "harness",
+        "fullName": "Harness Architect",
+        "description": "프로젝트를 설명하면 카탈로그 근거로 하네스 구성요소를 추천합니다",
+        "isSticky": true
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "harness",
+          "title": "Harness Architect",
+          "icon": "media/harness.svg"
+        }
+      ]
+    },
+    "views": {
+      "harness": [
+        {
+          "id": "harnessCatalog",
+          "name": "카탈로그",
+          "icon": "media/harness.svg",
+          "contextualTitle": "Harness Architect 카탈로그"
+        },
+        {
+          "id": "harnessStore",
+          "name": "내 하네스 (동기화)",
+          "icon": "media/harness.svg",
+          "contextualTitle": "내 하네스 — 웹과 동기화"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "harnessCatalog",
+        "contents": "카탈로그를 불러오지 못했습니다.\n[구성요소 추천](command:harness.recommend)\n[새로고침](command:harness.refreshCatalog)\n서버 경로는 설정 `harness.serverCommand` 에서 지정합니다."
+      },
+      {
+        "view": "harnessStore",
+        "contents": "공유 저장소에 로그인하면 내 하네스와 팀 하네스가 여기 나타납니다.\n[로그인 / 가입](command:harness.login)\n로그인 후 harness.yaml 을 [공유 저장소에 저장](command:harness.saveToStore)(개인 또는 팀).\n[새 팀 만들기](command:harness.createTeam)\n백엔드 주소는 설정 `harness.apiUrl` (기본 http://localhost:8000)."
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "harness.recommend",
+          "when": "view == harnessCatalog",
+          "group": "navigation@1"
+        },
+        {
+          "command": "harness.refreshCatalog",
+          "when": "view == harnessCatalog",
+          "group": "navigation@2"
+        },
+        {
+          "command": "harness.login",
+          "when": "view == harnessStore",
+          "group": "navigation@1"
+        },
+        {
+          "command": "harness.refreshStore",
+          "when": "view == harnessStore",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "harness.deleteFromStore",
+          "when": "view == harnessStore && viewItem == harnessStoreItem",
+          "group": "inline"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "harness.resolve",
+          "when": "resourceFilename =~ /harness\\.ya?ml$/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "harness.eject",
+          "when": "resourceFilename =~ /harness\\.ya?ml$/",
+          "group": "navigation@2"
+        },
+        {
+          "command": "harness.saveToStore",
+          "when": "resourceFilename =~ /harness\\.ya?ml$/",
+          "group": "navigation@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "harness.resolve",
+          "when": "resourceFilename =~ /harness\\.ya?ml$/",
+          "group": "harness@1"
+        },
+        {
+          "command": "harness.eject",
+          "when": "resourceFilename =~ /harness\\.ya?ml$/",
+          "group": "harness@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "harness.copyRef",
+          "when": "false"
+        },
+        {
+          "command": "harness.createStarter",
+          "when": "false"
+        },
+        {
+          "command": "harness.openFromStore",
+          "when": "false"
+        },
+        {
+          "command": "harness.deleteFromStore",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Harness Architect",
+      "properties": {
+        "harness.serverCommand": {
+          "type": "string",
+          "default": "${workspaceFolder}/harness-architect/.venv/bin/harness-mcp",
+          "markdownDescription": "harness MCP 서버 실행 파일 경로. `${workspaceFolder}` 와 `~` 를 확장한다. 기본값은 워크스페이스 내 venv 콘솔 스크립트(PATH·uv 무의존)."
+        },
+        "harness.serverArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "서버 실행 인자. 예: `command` 를 `uv` 로 두고 `[\"run\", \"--project\", \"${workspaceFolder}/harness-architect\", \"harness-mcp\"]`."
+        },
+        "harness.catalogDir": {
+          "type": "string",
+          "default": "${workspaceFolder}/harness-catalog/components",
+          "markdownDescription": "카탈로그 컴포넌트 디렉터리(`CATALOG_DIR`). 비우면 서버가 자동 탐색한다."
+        },
+        "harness.defaultTarget": {
+          "type": "string",
+          "enum": [
+            "claude-code",
+            "cursor"
+          ],
+          "default": "claude-code",
+          "description": "eject 기본 타깃 런타임."
+        },
+        "harness.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "markdownDescription": "공유 하네스 저장소 백엔드 URL(웹과 동일 FastAPI). '내 하네스' 뷰가 이 백엔드로 저장·동기화한다. SSE 로 웹의 변경을 실시간 수신."
+        },
+        "harness.apiToken": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "공유 저장소 Bearer 토큰(사용자 신원). 'Harness Architect: 로그인/가입'으로 발급·저장된다. 사용자별 격리와 팀 공유에 사용."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "node esbuild.js --production",
+    "check-types": "tsc --noEmit",
+    "build:server": "bash scripts/build-server.sh",
+    "vsix": "vsce package --no-dependencies -o harness-architect.vsix",
+    "vsix:bundled": "npm run build:server && vsce package --no-dependencies -o harness-architect.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -24,8 +24,10 @@ from .models import (
     ResolvedComponent,
     ResolvedHarness,
     ResolvedPrompt,
+    ResolvedSubAgent,
+    SubAgentSpec,
 )
-from .prompt import compose_prompt, estimate_tokens
+from .prompt import component_segment_text, compose_prompt, estimate_tokens
 from .registry import InMemoryRegistry, Registry
 from .resolver import ResolveResult, resolve
 
@@ -51,6 +53,9 @@ __all__ = [
     "ResolvedComponent",
     "ResolvedHarness",
     "ResolvedPrompt",
+    "ResolvedSubAgent",
+    "SubAgentSpec",
+    "component_segment_text",
     "compose_prompt",
     "estimate_tokens",
     "merge_harness_configs",

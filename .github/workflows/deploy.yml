@@ -1,0 +1,64 @@
+name: Deploy
+
+# 태그(vX.Y.Z) 또는 수동 실행 시 이미지를 GHCR 로 빌드·푸시하고, 배포 잡(골격)을 돌린다.
+# 이미지 푸시는 내장 GITHUB_TOKEN 으로 되므로 외부 시크릿 불필요. 실제 배포 타깃·시크릿만 채우면 된다.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Meta (API)
+        id: meta-api
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}-api
+      - name: Build & push API
+        uses: docker/build-push-action@v6
+        with:
+          context: harness-architect
+          push: true
+          tags: ${{ steps.meta-api.outputs.tags }}
+          labels: ${{ steps.meta-api.outputs.labels }}
+
+      - name: Meta (web)
+        id: meta-web
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}-web
+      - name: Build & push web
+        uses: docker/build-push-action@v6
+        with:
+          context: harness-architect/apps/web
+          push: true
+          tags: ${{ steps.meta-web.outputs.tags }}
+          labels: ${{ steps.meta-web.outputs.labels }}
+
+  deploy:
+    needs: images
+    runs-on: ubuntu-latest
+    # ── 배포 타깃 골격 ── 아래 중 하나를 채우고, 필요한 시크릿을 repo Settings > Secrets 에 넣는다.
+    #   프로덕션 env(예): DATABASE_URL(Postgres)·REDIS_URL·ANTHROPIC_API_KEY·VOYAGE_API_KEY·SENTRY_DSN
+    #   이미지: ghcr.io/${{ github.repository }}-api:latest · ghcr.io/${{ github.repository }}-web:latest
+    steps:
+      - name: 배포 (타깃 미설정)
+        run: |
+          echo "이미지 준비됨: ghcr.io/${{ github.repository }}-api · -web"
+          echo "TODO: 배포 타깃을 채우세요 — 예시는 아래 주석 참고."
+      # 예1) Fly.io:  uses: superfly/flyctl-actions/setup-flyctl@master 후 `flyctl deploy` (FLY_API_TOKEN 시크릿)
+      # 예2) VPS(SSH): uses: appleboy/ssh-action  → `docker compose pull && docker compose up -d` (SSH_* 시크릿)
+      # 예3) k8s:      uses: azure/setup-kubectl 후 `kubectl set image deploy/api api=ghcr.io/...-api:${{ github.ref_name }}`

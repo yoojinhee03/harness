@@ -32,8 +32,12 @@ conflicts_with: []
 
 # ── 타입 델타: context ──
 source: "file"
-size_estimate: 1200
-refresh: static
+body: |
+  팀 코딩 컨벤션(요약):
+  - 네이밍: 함수·변수 snake_case, 클래스 PascalCase, 상수 UPPER_SNAKE.
+  - 포맷: 들여쓰기 4칸, 최대 줄 길이 100, import 는 표준→서드파티→로컬 순.
+  - 구조: 함수는 한 가지 일만, 부수효과는 경계에 모은다.
+  리뷰·생성은 위 기준을 우선 적용한다. style_guide config 로 세부 프리셋(google/airbnb/pep8)을 선택한다.
 
 # ── 실행/설정 (빌더, 엄격) ──
 config_schema:

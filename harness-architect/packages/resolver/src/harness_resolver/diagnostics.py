@@ -63,6 +63,3 @@ class Diagnostics(BaseModel):
 
     def has_errors(self) -> bool:
         return any(d.severity == "error" for d in self.items)
-
-    def has_gaps(self) -> bool:
-        return any(d.severity == "gap" for d in self.items)

@@ -136,3 +136,40 @@ class Recommender:
             conflicts_with=c.conflicts_with,
             auth_required=bool(c.auth and c.auth.required),
         )
+
+
+class LiveRecommender:
+    """레지스트리 generation 이 바뀌면 Recommender 를 재구성(재인덱싱)한다.
+
+    라이브 레지스트리(FederatedRegistry)는 TTL refresh 로 컴포넌트 집합이 변할 수 있는데,
+    Recommender 는 생성 시 1회 임베딩 인덱싱한다 → 그대로 두면 recommend 가 startup 스냅샷에
+    고정된다. 이 래퍼가 `registry.generation()` 변화를 감지해 재구성 → recommend 도 실시간 반영.
+    `generation()` 이 없는 정적 레지스트리(라이브 off)면 1회 구성 후 고정(무비용).
+
+    비고: 재구성은 전체 재임베딩이다. LocalEmbedder 는 값싸고, Voyage 는 비용이 있으나
+    **내용이 바뀔 때만** 돈다(같은 집합이면 generation 불변 → 재사용).
+    """
+
+    def __init__(
+        self,
+        registry: Registry,
+        embedder: Embedder | None = None,
+        reasoner: Reasoner | None = None,
+    ) -> None:
+        self._registry = registry
+        self._embedder = embedder
+        self._reasoner = reasoner
+        self._rec: Recommender | None = None
+        self._gen: int | None = None
+
+    def _generation(self) -> int | None:
+        gen = getattr(self._registry, "generation", None)
+        return gen() if callable(gen) else None
+
+    def get(self) -> Recommender:
+        """현재 레지스트리 상태에 맞는 Recommender. generation 이 바뀌었으면 재구성."""
+        gen = self._generation()
+        if self._rec is None or gen != self._gen:
+            self._rec = Recommender(self._registry, embedder=self._embedder, reasoner=self._reasoner)
+            self._gen = gen
+        return self._rec

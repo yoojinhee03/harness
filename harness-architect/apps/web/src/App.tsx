@@ -1,40 +1,117 @@
-import { useMemo, useState } from "react";
-import type { HarnessInput, Recommendation } from "./api/client";
-import { saveHarness, type SavedHarness } from "./lib/store";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, auth, scopePref, type HarnessInput, type Recommendation } from "./api/client";
+import { AppShell, type View } from "./components/AppShell";
+import { CommandPalette } from "./components/CommandPalette";
+import { LoginScreen } from "./components/LoginScreen";
+import { clearDraft, loadDraft, saveDraft } from "./lib/draft";
+
+interface Draft {
+  step: Step;
+  description: string;
+  requirements: string[];
+  recommendations: Recommendation[];
+  groups: Record<string, string[]>;
+  selection: Selection;
+  metadataId: string;
+}
 import ScreenA from "./screens/ScreenA";
 import ScreenB from "./screens/ScreenB";
 import ScreenC from "./screens/ScreenC";
 import ScreenD from "./screens/ScreenD";
 import ScreenE from "./screens/ScreenE";
-import ScreenF from "./screens/ScreenF";
+import ScreenGuide from "./screens/ScreenGuide";
+import ScreenSettings from "./screens/ScreenSettings";
+import ScreenStudio from "./screens/ScreenStudio";
+import ScreenSync from "./screens/ScreenSync";
 
 export type Step = "A" | "B" | "C" | "D";
-export type View = "create" | "catalog" | "dashboard";
+export type Selection = Record<string, Recommendation>;
 
 const STEPS: { key: Step; label: string }[] = [
   { key: "A", label: "설명" },
-  { key: "B", label: "추천·선택" },
+  { key: "B", label: "추천" },
   { key: "C", label: "검증" },
-  { key: "D", label: "harness.yaml" },
+  { key: "D", label: "yaml" },
 ];
-
-const NAV: { key: View; label: string }[] = [
-  { key: "create", label: "생성" },
-  { key: "catalog", label: "카탈로그" },
-  { key: "dashboard", label: "대시보드" },
-];
-
-export type Selection = Record<string, Recommendation>;
 
 export default function App() {
+  const [authed, setAuthed] = useState(() => auth.token().length > 0);
+  const draft0 = useRef(loadDraft<Draft>()).current; // 새로고침 후 드래프트 복원(1회)
   const [view, setView] = useState<View>("create");
-  const [step, setStep] = useState<Step>("A");
-  const [description, setDescription] = useState("");
-  const [requirements, setRequirements] = useState<string[]>([]);
-  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
-  const [groups, setGroups] = useState<Record<string, string[]>>({});
-  const [selection, setSelection] = useState<Selection>({});
-  const [metadataId, setMetadataId] = useState("untitled-harness");
+  const [step, setStep] = useState<Step>(draft0?.step ?? "A");
+  const [cmdOpen, setCmdOpen] = useState(false);
+  const [workspace, setWorkspaceState] = useState(() => scopePref.get()); // 전역 워크스페이스(개인/팀)
+  const setWorkspace = (s: string) => {
+    scopePref.set(s);
+    setWorkspaceState(s);
+  };
+
+  // OAuth 콜백 착지 — 백엔드가 ?session=<토큰> 으로 리다이렉트. 저장 후 URL 정리하고 진입.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const session = params.get("session");
+    if (session) {
+      auth.setToken(session);
+      window.history.replaceState({}, "", window.location.pathname);
+      setAuthed(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 로그인 후 계정 정보(사이드바 표시). 토큰이 만료/무효면 401 → 자동 로그아웃.
+  const queryClient = useQueryClient();
+  const meQ = useQuery({ queryKey: ["me"], queryFn: api.me, enabled: authed, retry: false });
+  useEffect(() => {
+    if (meQ.isError) {
+      logout();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meQ.isError]);
+
+  // 로그아웃 = 이 브라우저의 이전 사용자 흔적을 전부 제거(계정 간 데이터 누출 방지):
+  // react-query 캐시(하네스·me·versions)·생성 드래프트·인메모리 상태·워크스페이스.
+  function logout() {
+    api.logout().catch(() => undefined); // 서버 세션 토큰 폐기(best-effort). 토큰 지우기 전에 호출.
+    queryClient.clear();
+    clearDraft();
+    localStorage.removeItem("harness.saved"); // 구 대시보드 잔재
+    scopePref.set("personal");
+    setWorkspaceState("personal");
+    setSelection({});
+    setDescription("");
+    setRequirements([]);
+    setRecommendations([]);
+    setGroups({});
+    setMetadataId("untitled-harness");
+    setStep("A");
+    auth.clear();
+    setAuthed(false);
+    setView("create");
+  }
+
+  const [description, setDescription] = useState(draft0?.description ?? "");
+  const [requirements, setRequirements] = useState<string[]>(draft0?.requirements ?? []);
+  const [recommendations, setRecommendations] = useState<Recommendation[]>(draft0?.recommendations ?? []);
+  const [groups, setGroups] = useState<Record<string, string[]>>(draft0?.groups ?? {});
+  const [selection, setSelection] = useState<Selection>(draft0?.selection ?? {});
+  const [metadataId, setMetadataId] = useState(draft0?.metadataId ?? "untitled-harness");
+
+  // 드래프트 영속 — 탭 이동·새로고침에도 마법사 상태 보존.
+  useEffect(() => {
+    saveDraft({ step, description, requirements, recommendations, groups, selection, metadataId });
+  }, [step, description, requirements, recommendations, groups, selection, metadataId]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCmdOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const harnessInput = useMemo<HarnessInput>(() => {
     const permissions: Record<string, string> = {};
@@ -49,122 +126,117 @@ export default function App() {
   }, [selection, metadataId, description]);
 
   function handleSaved(yaml: string) {
-    saveHarness({
-      id: metadataId,
-      name: harnessInput.metadata?.name || metadataId,
-      createdAt: Date.now(),
-      yaml,
-      components: Object.values(selection),
-      permissions: harnessInput.permissions ?? {},
-    });
-  }
-
-  function reopen(h: SavedHarness) {
-    setSelection(Object.fromEntries(h.components.map((c) => [c.id, c])));
-    setMetadataId(h.id);
-    setDescription(h.name);
-    setView("create");
-    setStep("D");
+    // 저장은 백엔드가 단일 원본(스코프 격리). 예전 localStorage 저장은 전역이라 계정 간 누출 위험 → 제거.
+    api
+      .putHarness(metadataId, workspace, {
+        name: harnessInput.metadata?.name || metadataId,
+        description: description.slice(0, 120),
+        yaml,
+      })
+      .catch(() => undefined);
   }
 
   function newHarness() {
+    clearDraft();
     setSelection({});
     setDescription("");
     setRequirements([]);
     setRecommendations([]);
+    setGroups({});
     setMetadataId("untitled-harness");
-    setView("create");
     setStep("A");
+    setView("create");
   }
 
   const maxStep = STEPS.findIndex((s) => s.key === step);
 
+  // 앱 진입 게이트 — 미로그인이면 콘솔 대신 로그인 화면.
+  if (!authed) {
+    return <LoginScreen onLogin={() => setAuthed(true)} />;
+  }
+
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
-      <header className="mb-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">AI 하네스 아키텍트</h1>
-            <p className="mt-1 text-sm text-slate-500">
-              프로젝트를 설명하면 하네스 구성요소를 추천 → 검증 → 실행 가능한 harness.yaml 생성.
-            </p>
-          </div>
-          <nav className="flex gap-1 rounded-lg bg-slate-100 p-1 text-sm">
-            {NAV.map((n) => (
-              <button
-                key={n.key}
-                onClick={() => setView(n.key)}
-                className={`rounded-md px-3 py-1.5 font-medium transition ${
-                  view === n.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                {n.label}
-              </button>
-            ))}
-          </nav>
-        </div>
-
-        {view === "create" && (
-          <nav className="mt-5 flex items-center gap-2 text-sm">
-            {STEPS.map((s, i) => {
-              const done = i < maxStep;
-              const active = s.key === step;
-              return (
-                <div key={s.key} className="flex items-center gap-2">
-                  <button
-                    disabled={i > maxStep}
-                    onClick={() => setStep(s.key)}
-                    className={`flex items-center gap-2 rounded-full px-3 py-1 font-medium transition ${
-                      active ? "bg-slate-900 text-white" : done ? "bg-slate-200 text-slate-700 hover:bg-slate-300" : "text-slate-400"
-                    }`}
-                  >
-                    <span className="grid h-5 w-5 place-items-center rounded-full border text-xs">{i + 1}</span>
-                    {s.label}
-                  </button>
-                  {i < STEPS.length - 1 && <span className="text-slate-300">→</span>}
-                </div>
-              );
-            })}
-          </nav>
+    <>
+      <AppShell
+        view={view}
+        setView={setView}
+        onCmdK={() => setCmdOpen(true)}
+        account={meQ.data?.name || meQ.data?.email}
+        onLogout={logout}
+        workspace={workspace}
+        setWorkspace={setWorkspace}
+        teams={meQ.data?.teams ?? []}
+        headerRight={view === "create" ? <StepNav step={step} setStep={setStep} maxStep={maxStep} /> : undefined}
+      >
+        {view === "create" && step === "A" && (
+          <ScreenA
+            description={description}
+            setDescription={setDescription}
+            onResult={(r) => {
+              setRequirements(r.requirements);
+              setRecommendations(r.recommendations);
+              setGroups(r.groups);
+              setMetadataId(slugify(description));
+              setStep("B");
+            }}
+          />
         )}
-      </header>
+        {view === "create" && step === "B" && (
+          <ScreenB
+            requirements={requirements}
+            recommendations={recommendations}
+            groups={groups}
+            selection={selection}
+            setSelection={setSelection}
+            onBack={() => setStep("A")}
+            onValidate={() => setStep("C")}
+          />
+        )}
+        {view === "create" && step === "C" && (
+          <ScreenC harness={harnessInput} onBackToRecommend={() => setStep("B")} onConfirm={() => setStep("D")} />
+        )}
+        {view === "create" && step === "D" && (
+          <ScreenD harness={harnessInput} onRevalidate={() => setStep("C")} onSaved={handleSaved} />
+        )}
 
-      {view === "catalog" && <ScreenE onColdStart={newHarness} />}
-      {view === "dashboard" && <ScreenF onNew={newHarness} onReopen={reopen} />}
+        {view === "catalog" && <ScreenE onColdStart={newHarness} />}
+        {view === "studio" && <ScreenStudio workspace={workspace} />}
+        {view === "harnesses" && <ScreenSync onCreate={newHarness} workspace={workspace} />}
+        {view === "settings" && <ScreenSettings onLogout={logout} />}
+        {view === "guide" && <ScreenGuide setView={setView} onNewHarness={newHarness} />}
+      </AppShell>
 
-      {view === "create" && step === "A" && (
-        <ScreenA
-          description={description}
-          setDescription={setDescription}
-          onResult={(r) => {
-            setRequirements(r.requirements);
-            setRecommendations(r.recommendations);
-            setGroups(r.groups);
-            setMetadataId(slugify(description));
-            setStep("B");
-          }}
-        />
-      )}
+      <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} setView={setView} onNewHarness={newHarness} />
+    </>
+  );
+}
 
-      {view === "create" && step === "B" && (
-        <ScreenB
-          requirements={requirements}
-          recommendations={recommendations}
-          groups={groups}
-          selection={selection}
-          setSelection={setSelection}
-          onBack={() => setStep("A")}
-          onValidate={() => setStep("C")}
-        />
-      )}
-
-      {view === "create" && step === "C" && (
-        <ScreenC harness={harnessInput} onBackToRecommend={() => setStep("B")} onConfirm={() => setStep("D")} />
-      )}
-
-      {view === "create" && step === "D" && (
-        <ScreenD harness={harnessInput} onRevalidate={() => setStep("C")} onSaved={handleSaved} />
-      )}
+function StepNav({ step, setStep, maxStep }: { step: Step; setStep: (s: Step) => void; maxStep: number }) {
+  return (
+    <div className="flex items-center gap-1">
+      {STEPS.map((s, i) => {
+        const active = s.key === step;
+        const done = i < maxStep;
+        return (
+          <button
+            key={s.key}
+            disabled={i > maxStep}
+            onClick={() => setStep(s.key)}
+            className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+              active ? "bg-surface-2 text-fg" : done ? "text-muted hover:text-fg" : "text-muted/50"
+            }`}
+          >
+            <span
+              className={`grid h-4 w-4 place-items-center rounded-full text-[10px] ${
+                active ? "bg-accent text-accent-fg" : "border border-line"
+              }`}
+            >
+              {i + 1}
+            </span>
+            {s.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

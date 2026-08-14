@@ -23,6 +23,15 @@ def test_health(client):
     assert r.json()["catalog_size"] == 13  # 시드 10 + 프롬프트 조각 3
 
 
+def test_observability_ready_metrics_request_id(client):
+    """관측성 — 준비도(DB)·Prometheus 메트릭·요청 ID 헤더."""
+    h = client.get("/health")
+    assert any(k.lower() == "x-request-id" for k in h.headers)  # 요청 ID 전파
+    assert client.get("/ready").json()["ready"] is True  # DB 연결 OK
+    m = client.get("/metrics")
+    assert m.status_code == 200 and "harness_http_requests_total" in m.text
+
+
 def test_catalog_list_and_filter(client):
     assert len(client.get("/catalog").json()) == 13
     mcp = client.get("/catalog", params={"type": "mcp"}).json()
@@ -32,8 +41,85 @@ def test_catalog_list_and_filter(client):
     assert [c["id"] for c in hosting] == ["github-mcp"]
 
 
+def test_catalog_pagination(client):
+    # 총계는 X-Total-Count 헤더로, 본문은 현재 페이지만.
+    r = client.get("/catalog", params={"limit": 5, "offset": 0})
+    assert r.headers["X-Total-Count"] == "13"
+    page1 = r.json()
+    assert len(page1) == 5
+    page2 = client.get("/catalog", params={"limit": 5, "offset": 5}).json()
+    assert len(page2) == 5
+    # 페이지 경계 안정(정렬) — 겹침 없음.
+    assert {c["id"] for c in page1}.isdisjoint({c["id"] for c in page2})
+    # 마지막 페이지는 남은 것만.
+    tail = client.get("/catalog", params={"limit": 5, "offset": 10}).json()
+    assert len(tail) == 3
+
+
+def test_catalog_search_q(client):
+    r = client.get("/catalog", params={"q": "slack"})
+    hits = r.json()
+    assert [c["id"] for c in hits] == ["slack-mcp"]  # id 부분일치
+    # 검색 결과 총계가 헤더에 반영(limit 없음 → 본문=전체).
+    assert int(r.headers["X-Total-Count"]) == len(hits)
+
+
 def test_catalog_detail_404(client):
     assert client.get("/catalog/nope").status_code == 404
+
+
+def test_catalog_detail_slashed_id_reaches_handler(client):
+    # 연합 레지스트리 id 는 `io.github.owner/server` 처럼 슬래시를 포함한다. 라우트가 `:path` 여야
+    # 슬래시를 세그먼트로 넘겨 핸들러까지 도달한다(아니면 화면에서 상세 404 → 크래시). 없는 id 라도
+    # 핸들러의 404(전체 id 포함)면 라우팅이 맞은 것 — Starlette 기본 'Not Found' 와 구분된다.
+    slashed = "io.github.owner/server-name"
+    r = client.get(f"/catalog/{slashed}")
+    assert r.status_code == 404
+    assert slashed in r.json()["detail"]
+
+
+def test_catalog_items_trust_curated(client):
+    # 테스트는 로컬 시드만 로드(harvest off) → 전부 손큐레이션 = curated. source 키도 노출.
+    items = client.get("/catalog").json()
+    assert items and all(it["trust"] == "curated" for it in items)
+    assert all("source" in it for it in items)
+
+
+def test_catalog_exclude_curated(client):
+    # 테스트는 시드만 로드 → curated 제외하면 외부 수확분이 없어 빈 목록.
+    r = client.get("/catalog", params={"exclude_curated": "true"})
+    assert r.json() == []
+    assert r.headers["X-Total-Count"] == "0"
+
+
+def test_catalog_detail_includes_trust(client):
+    cid = client.get("/catalog").json()[0]["id"]
+    assert client.get(f"/catalog/{cid}").json()["trust"] == "curated"
+
+
+def test_catalog_item_trust_defaults_community():
+    # 외부 수확분은 community 가 기본 — from_component 에 명시해야 등급이 바뀐다.
+    from harness_api.schemas import CatalogItem
+    from harness_resolver import Component
+
+    c = Component(id="io.github.x/y", type="mcp", name="Y", version="1.0.0")
+    assert CatalogItem.from_component(c).trust == "community"
+    assert CatalogItem.from_component(c, trust="official").trust == "official"
+
+
+def test_trust_tiers():
+    from harness_api.main import _trust
+
+    curated = {"pr-review-skill"}
+    origins = {
+        "box": "marketplace",
+        "io.github.modelcontextprotocol/servers": "registry",
+        "io.github.randomdev/thing": "registry",
+    }
+    assert _trust("pr-review-skill", curated, origins) == "curated"
+    assert _trust("box", curated, origins) == "official"  # 공식 마켓플레이스
+    assert _trust("io.github.modelcontextprotocol/servers", curated, origins) == "official"  # 신뢰 ns
+    assert _trust("io.github.randomdev/thing", curated, origins) == "community"  # 임의 발행자
 
 
 def test_recommend(client):
@@ -147,9 +233,22 @@ def test_eject_claude_code(client):
     assert settings["permissions"]["allow"] == ["mcp__github-mcp"]
 
 
+def test_eject_targets_lists_supported(client):
+    """프론트 타깃 셀렉터용 — 지원 타깃 목록."""
+    targets = client.get("/eject/targets").json()
+    assert "claude-code" in targets and "cursor" in targets
+
+
+def test_eject_cursor_tree(client):
+    body = {"metadata": {"id": "x"}, "components": [{"ref": "github-mcp@1.4.0"}]}
+    data = client.post("/eject", params={"target": "cursor"}, json=body).json()
+    assert data["ok"] is True
+    assert ".cursor/rules/harness.mdc" in data["files"]
+
+
 def test_eject_unknown_target_400(client):
     body = {"metadata": {"id": "x"}, "components": [{"ref": "github-mcp@1.4.0"}]}
-    r = client.post("/eject", params={"target": "cursor"}, json=body)
+    r = client.post("/eject", params={"target": "nonexistent-runtime"}, json=body)
     assert r.status_code == 400
 
 

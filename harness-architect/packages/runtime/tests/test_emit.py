@@ -74,6 +74,49 @@ def test_claude_md_is_composed_prompt() -> None:
     assert "너는 시니어 리뷰어다." in md and "## 컨텍스트: 컨벤션" in md
 
 
+def test_skill_emitted_as_skill_md_and_removed_from_claude_md() -> None:
+    """skill 은 .claude/skills/<id>/SKILL.md 로 분리 방출되고, 본문은 CLAUDE.md 에서 빠진다."""
+    from harness_resolver.models import PromptSegment
+
+    r = make_resolved()
+    r.components = [
+        *r.components,
+        ResolvedComponent(
+            id="pr-review-skill", type="skill", version="2.1.0", name="PR 리뷰 절차",
+            summary="PR diff 를 구조화 리뷰", body="너는 시니어 코드 리뷰어다. diff 를 리뷰한다.",
+        ),
+    ]
+    r.prompt = ResolvedPrompt(
+        system_text="(무시됨 — segments 우선)",
+        segments=[
+            PromptSegment(source="component:coding-convention-ctx", layer=0, tokens=5, text="## 컨텍스트: 컨벤션"),
+            PromptSegment(
+                source="component:pr-review-skill", layer=1, tokens=10,
+                text="## 스킬 절차: PR 리뷰 절차\n너는 시니어 코드 리뷰어다. diff 를 리뷰한다.",
+            ),
+        ],
+        hash="sha256:x",
+    )
+    tree = emit(r, "claude-code")
+    assert ".claude/skills/pr-review-skill/SKILL.md" in tree
+    skill = tree[".claude/skills/pr-review-skill/SKILL.md"]
+    assert skill.startswith("---\nname: pr-review-skill")
+    assert "description: PR diff 를 구조화 리뷰" in skill
+    assert "너는 시니어 코드 리뷰어다." in skill
+    md = tree["CLAUDE.md"]
+    assert "## 컨텍스트: 컨벤션" in md  # context 는 남고
+    assert "너는 시니어 코드 리뷰어다." not in md  # skill 본문은 빠짐
+
+
+def test_capabilities_section_from_usage_note() -> None:
+    """mcp 의 usage_note 는 CLAUDE.md Capabilities 절로 방출된다(도구 description 은 서버 몫)."""
+    r = make_resolved()
+    r.components[0].usage_note = "PR diff 는 이 서버로 가져온다."
+    md = emit(r, "claude-code")["CLAUDE.md"]
+    assert "## Capabilities" in md
+    assert "github-mcp" in md and "PR diff 는 이 서버로 가져온다." in md
+
+
 def test_settings_model_permissions_hooks() -> None:
     settings = json.loads(emit(make_resolved(), "claude-code")[".claude/settings.json"])
     assert settings["model"] == "claude-sonnet-5"
@@ -121,6 +164,23 @@ def test_mcp_json_missing_spec_is_honest_placeholder() -> None:
     assert "TODO" in entry["command"]
 
 
+def test_hook_emit_command_used_when_present() -> None:
+    """훅에 emit_command 가 있으면 자리표시 대신 그 실제 명령을 방출한다."""
+    r = make_resolved()
+    r.hook_plan["before_tool_call"][0].emit_command = "grep -qiE 'secret' && exit 2 || exit 0"
+    settings = json.loads(emit(r, "claude-code")[".claude/settings.json"])
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert cmd == "grep -qiE 'secret' && exit 2 || exit 0"
+    assert "echo '[harness]" not in cmd  # 자리표시가 아님
+
+
+def test_hook_placeholder_when_no_emit_command() -> None:
+    """emit_command 가 없는 훅(인프로세스 핸들러)은 정직한 자리표시로 남는다."""
+    settings = json.loads(emit(make_resolved(), "claude-code")[".claude/settings.json"])
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "[harness]" in cmd and "secret-scan-hook" in cmd
+
+
 def test_no_mcp_omits_mcp_json() -> None:
     r = make_resolved()
     r.components = []  # MCP 없음
@@ -129,15 +189,64 @@ def test_no_mcp_omits_mcp_json() -> None:
     assert "CLAUDE.md" in tree and ".claude/settings.json" in tree
 
 
+def test_emit_subagent_files() -> None:
+    """멀티에이전트 팀 → Claude Code 서브에이전트 파일(.claude/agents/<name>.md)."""
+    from harness_resolver.models import ResolvedPrompt, ResolvedSubAgent
+
+    r = make_resolved()
+    r.subagents = [
+        ResolvedSubAgent(
+            name="reviewer", description="코드 리뷰 역할",
+            prompt=ResolvedPrompt(system_text="너는 리뷰어다.", hash="sha256:x"),
+        )
+    ]
+    tree = emit(r, "claude-code")
+    assert ".claude/agents/reviewer.md" in tree
+    md = tree[".claude/agents/reviewer.md"]
+    assert md.startswith("---\nname: reviewer")
+    assert "코드 리뷰 역할" in md and "너는 리뷰어다." in md
+
+
 def test_emit_is_deterministic() -> None:
     assert emit(make_resolved(), "claude-code") == emit(make_resolved(), "claude-code")
 
 
 def test_unknown_target_raises() -> None:
     with pytest.raises(ValueError):
-        emit(make_resolved(), "cursor")  # 아직 미지원
+        emit(make_resolved(), "does-not-exist")  # 미등록 타깃
 
 
 def test_available_targets() -> None:
-    assert "claude-code" in available_targets()
+    targets = available_targets()
+    assert "claude-code" in targets and "cursor" in targets
     assert ClaudeCodeEmitter.target == "claude-code"
+
+
+# ─────────────────────────── Cursor 타깃 (이식성) ───────────────────────────
+
+
+def test_cursor_file_set() -> None:
+    tree = emit(make_resolved(), "cursor")
+    assert set(tree) == {".cursor/rules/harness.mdc", ".cursor/mcp.json"}
+
+
+def test_cursor_rule_has_frontmatter_and_prompt() -> None:
+    mdc = emit(make_resolved(), "cursor")[".cursor/rules/harness.mdc"]
+    assert mdc.startswith("---\n") and "alwaysApply: true" in mdc
+    assert "너는 시니어 리뷰어다." in mdc  # 합성 프롬프트가 그대로 들어감
+
+
+def test_cursor_mcp_matches_claude_code_format() -> None:
+    """단일 IR → 두 런타임의 mcpServers 는 동일 포맷(공용 헬퍼)."""
+    cursor_mcp = json.loads(emit(make_resolved(), "cursor")[".cursor/mcp.json"])
+    claude_mcp = json.loads(emit(make_resolved(), "claude-code")[".mcp.json"])
+    assert cursor_mcp == claude_mcp
+    assert cursor_mcp["mcpServers"]["github-mcp"]["command"] == "npx"
+
+
+def test_cursor_omits_mcp_when_none() -> None:
+    r = make_resolved()
+    r.components = []
+    tree = emit(r, "cursor")
+    assert ".cursor/mcp.json" not in tree
+    assert ".cursor/rules/harness.mdc" in tree

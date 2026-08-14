@@ -18,6 +18,8 @@ from harness_resolver import (
     PromptLayer,
     PromptSpec,
     PromptVariable,
+    ResolvedComponent,
+    component_segment_text,
     estimate_tokens,
     merge_harness_configs,
     resolve,
@@ -31,14 +33,14 @@ def ctx_component() -> Component:
     return Component(
         id="conv", type="context", name="컨벤션", version="1.0.0",
         cost=Cost(context_tokens=1200), provides=["convention.coding"],
-        source="file", refresh="static",
+        source="file",
     )
 
 
 def skill_component() -> Component:
     return Component(
         id="pr", type="skill", name="PR 리뷰", version="2.1.0",
-        provides=["review.code"], entrypoint="skills/pr/SKILL.md", injection_mode="context",
+        provides=["review.code"], entrypoint="skills/pr/SKILL.md",
     )
 
 
@@ -46,7 +48,7 @@ def role_fragment() -> Component:
     """prompt.system[].ref 로 주입되는 프롬프트 조각 — context facet + body 텍스트."""
     return Component(
         id="role-reviewer", type="context", name="시니어 리뷰어 역할", version="1.0.0",
-        capability_tags=["prompt.role"], source="inline", refresh="static",
+        capability_tags=["prompt.role"], source="inline",
         body="너는 신중한 시니어 코드 리뷰어다.",
     )
 
@@ -115,6 +117,19 @@ def test_variable_substitution_and_unresolved(registry: InMemoryRegistry) -> Non
 
     unresolved = [d for d in result.diagnostics.warnings if d.code == "unresolved_variable"]
     assert [d.detail["variable"] for d in unresolved] == ["project"]
+
+
+def test_component_segment_uses_body_when_present() -> None:
+    """body 가 있으면 실제 텍스트를, 없으면 자리표시를 쓴다(CLAUDE.md 본문 실화)."""
+    ctx = ResolvedComponent(id="conv", type="context", version="1.0.0", name="컨벤션", body="네이밍은 snake_case")
+    assert component_segment_text(ctx) == "## 컨텍스트: 컨벤션 (conv)\n네이밍은 snake_case"
+
+    skill_no_body = ResolvedComponent(id="pr", type="skill", version="2.1.0", name="리뷰")
+    seg = component_segment_text(skill_no_body)
+    assert seg is not None and "[주입된 절차" in seg  # 자리표시 폴백
+
+    mcp = ResolvedComponent(id="gh", type="mcp", version="1.0.0", name="GitHub")
+    assert component_segment_text(mcp) is None  # skill/context 만 프롬프트 기여
 
 
 def test_required_variable_without_value_warns(registry: InMemoryRegistry) -> None:

@@ -62,6 +62,6 @@ def test_eject_returns_tree_without_out_dir() -> None:
 
 
 def test_eject_rejects_unknown_target() -> None:
-    out = server.eject_harness(PR_BOT_YAML, target="cursor")
+    out = server.eject_harness(PR_BOT_YAML, target="nonexistent-runtime")
     assert out["ok"] is False
     assert "targets" in out

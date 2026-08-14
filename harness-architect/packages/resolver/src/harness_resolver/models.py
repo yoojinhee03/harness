@@ -23,8 +23,6 @@ HookEvent = Literal[
 ]
 Sandbox = Literal["none", "restricted", "external"]
 Failure = Literal["fail_open", "fail_closed"]
-InjectionMode = Literal["context", "tool"]
-Refresh = Literal["static", "per_session"]
 
 
 class Cost(BaseModel):
@@ -112,16 +110,15 @@ class Component(BaseModel):
     defaults: dict[str, Any] = Field(default_factory=dict)
 
     # ── 타입 델타: skill ──
-    entrypoint: str | None = None
-    injection_mode: InjectionMode | None = None
+    entrypoint: str | None = None  # skills/<id>/SKILL.md — 네이티브 스킬 방출의 파일 경로
 
     # ── 타입 델타: mcp ──
     mcp: McpServerSpec | None = None  # 서버 실행 스펙 — .mcp.json/러너 방출의 단일 원본
+    usage_note: str | None = None  # "이 MCP 를 언제·어떻게 쓰나" 상위 지침 — CLAUDE.md Capabilities 절로 방출
+    #   (도구별 description 은 서버가 tools/list 로 노출하므로 authoring 안 함; 이건 그 위의 사용 전략)
 
     # ── 타입 델타: context ──
     source: str | None = None
-    size_estimate: int | None = None
-    refresh: Refresh | None = None
     body: str | None = None  # 프롬프트 조각 본문 — prompt.system[].ref 로 주입되는 실제 텍스트
 
     # ── 타입 델타: hook ──
@@ -133,6 +130,7 @@ class Component(BaseModel):
     failure: Failure | None = None
     timeout_ms: int | None = None
     depends_on: list[str] = Field(default_factory=list)
+    emit_command: str | None = None  # eject 시 방출할 실제 셸 명령(없으면 자리표시). 훅 실행 모델 §eject
 
     def embedding_document(self) -> str:
         """임베딩용 합성 문서 — summary + description + use_when + tags + examples."""
@@ -237,6 +235,18 @@ class PromptSpec(BaseModel):
     compose: PromptCompose = Field(default_factory=PromptCompose)
 
 
+class SubAgentSpec(BaseModel):
+    """harness.yaml subagents[] 항목 — 팀의 한 역할(재귀 하네스). 스코프: 1레벨.
+
+    각 서브에이전트는 자체 components·prompt 를 갖고 리졸버가 재귀 검증한다.
+    """
+
+    name: str
+    description: str = ""
+    components: list[ComponentSelection] = Field(default_factory=list)
+    prompt: PromptSpec | None = None
+
+
 class HarnessConfig(BaseModel):
     """harness.yaml — 저작 레이어의 산출물이자 리졸버의 입력."""
 
@@ -251,6 +261,7 @@ class HarnessConfig(BaseModel):
     components: list[ComponentSelection] = Field(default_factory=list)
     budget: Budget | None = None
     prompt: PromptSpec | None = None
+    subagents: list[SubAgentSpec] = Field(default_factory=list)  # 멀티에이전트 팀(선택)
 
 
 # ─────────────────────────── ResolvedHarness (실행 명세) ───────────────────────────
@@ -267,6 +278,7 @@ class HookStep(BaseModel):
     sandbox: Sandbox | None
     failure: Failure | None
     timeout_ms: int | None
+    emit_command: str | None = None  # eject 시 방출할 실제 셸 명령(카탈로그가 제공, 없으면 자리표시)
 
 
 class AuthNeed(BaseModel):
@@ -283,8 +295,11 @@ class ResolvedComponent(BaseModel):
     type: ComponentType
     version: str
     name: str
+    summary: str = ""  # 스킬 SKILL.md frontmatter description 등에 쓰는 한 줄 요약
     config: dict[str, Any] = Field(default_factory=dict)
     mcp: McpServerSpec | None = None  # mcp 타입일 때 실행 스펙(이젝트·러너가 소비)
+    usage_note: str | None = None  # mcp 타입일 때 상위 사용 지침 — CLAUDE.md Capabilities 절
+    body: str | None = None  # skill/context 본문 — skill 은 SKILL.md, context 는 CLAUDE.md 로 방출
 
 
 class CostTotals(BaseModel):
@@ -310,6 +325,15 @@ class ResolvedPrompt(BaseModel):
     hash: str = ""  # "sha256:…" — 드리프트·캐시 키(system_text 기준, 결정적)
 
 
+class ResolvedSubAgent(BaseModel):
+    """리졸브된 서브에이전트 — 팀의 한 역할(검증 완료)."""
+
+    name: str
+    description: str = ""
+    components: list[ResolvedComponent] = Field(default_factory=list)
+    prompt: ResolvedPrompt | None = None
+
+
 class ResolvedHarness(BaseModel):
     """리졸버 출력(성공) — 실행 가능한 명세. 런타임 빌더의 입력."""
 
@@ -322,3 +346,4 @@ class ResolvedHarness(BaseModel):
     auth_needs: list[AuthNeed]
     cost: CostTotals
     prompt: ResolvedPrompt | None = None  # 합성된 시스템 프롬프트(resolve 는 항상 채움)
+    subagents: list[ResolvedSubAgent] = Field(default_factory=list)  # 멀티에이전트 팀(선택)

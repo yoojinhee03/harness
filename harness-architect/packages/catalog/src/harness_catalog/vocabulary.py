@@ -34,6 +34,10 @@ CAPABILITY_VOCAB: dict[str, tuple[Facet, list[str]]] = {
     "review.code": ("task", ["코드 리뷰", "리뷰", "review", "pr 리뷰", "코멘트"]),
     "analyze.data": ("task", ["데이터 분석", "analyze", "분석", "통계"]),
     "transform.extract": ("task", ["추출", "파싱", "extract", "parse"]),
+    "transform.classify": (
+        "task",
+        ["분류", "라벨", "라벨링", "label", "triage", "트리아지", "classify", "우선순위", "카테고리"],
+    ),
     # facet: knowledge — 배경 지식 (주로 Context)
     "convention.coding": ("knowledge", ["코딩 컨벤션", "스타일 가이드", "convention", "style guide", "컨벤션"]),
     "convention.process": ("knowledge", ["프로세스 규칙", "팀 규칙", "process"]),
@@ -43,7 +47,7 @@ CAPABILITY_VOCAB: dict[str, tuple[Facet, list[str]]] = {
     "lifecycle.validation": ("lifecycle", ["입출력 검증", "validation", "검증"]),
     "lifecycle.guardrail": (
         "lifecycle",
-        ["가드레일", "guardrail", "보안", "security", "차단", "스캔", "secret", "시크릿"],
+        ["가드레일", "guardrail", "보안", "security", "차단", "스캔", "secret", "시크릿", "비밀", "자격증명"],
     ),
     "lifecycle.approval": ("lifecycle", ["승인", "approval", "게이트"]),
     "lifecycle.transform": ("lifecycle", ["요청 변형", "응답 변형", "transform"]),
@@ -52,11 +56,6 @@ CAPABILITY_VOCAB: dict[str, tuple[Facet, list[str]]] = {
     "prompt.format": ("prompt", ["출력 형식", "output format", "응답 형식", "포맷 지침", "구조화 출력"]),
     "prompt.safety": ("prompt", ["안전 지침", "safety preamble", "세이프티", "안전 프리앰블"]),
 }
-
-
-def facet_of(capability: str) -> Facet | None:
-    entry = CAPABILITY_VOCAB.get(capability)
-    return entry[0] if entry else None
 
 
 def extract_capabilities_heuristic(description: str) -> list[str]:

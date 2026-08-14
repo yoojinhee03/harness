@@ -28,7 +28,6 @@ provides: [prompt.role]
 
 # ── 타입 델타: context (프롬프트 조각) ──
 source: inline
-refresh: static
 body: |
   너는 신중한 시니어 코드 리뷰어다. 정확성·가독성·팀 컨벤션 관점으로 변경을 평가하고,
   단정 대신 근거와 대안을 제시한다. 사소한 취향 차이는 넘기고 실질적 위험에 집중한다.

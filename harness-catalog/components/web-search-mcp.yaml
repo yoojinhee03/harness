@@ -33,6 +33,11 @@ auth:
   type: api_key
   scopes: ["search:read"]
 
+# ── 상위 사용 지침 (CLAUDE.md Capabilities 절로 방출) ──
+usage_note: >
+  최신·실시간 정보(시세·뉴스 등)는 이 서버로 검색해 그라운딩한다(Perplexity 식 실시간 웹
+  그라운딩). 추측 대신 검색을 우선하고, 답변에 출처(URL)를 함께 남긴다.
+
 # ── MCP 실행 스펙 (eject/러너가 그대로 방출) ──
 mcp:
   transport: stdio

@@ -25,9 +25,12 @@ class CatalogItem(BaseModel):
     context_tokens: int
     added_tools: int
     auth_required: bool
+    # ── 프로비넌스(신뢰 등급) ──
+    trust: str = "community"  # curated(손큐레이션) | official(공식 소스) | community(미검증 외부)
+    source: str | None = None  # 출처 URL/경로(있으면) — 프로비넌스 표시용.
 
     @classmethod
-    def from_component(cls, c: Component) -> CatalogItem:
+    def from_component(cls, c: Component, *, trust: str = "community") -> CatalogItem:
         return cls(
             id=c.id,
             type=c.type,
@@ -43,6 +46,8 @@ class CatalogItem(BaseModel):
             context_tokens=c.cost.context_tokens,
             added_tools=c.cost.added_tools,
             auth_required=bool(c.auth and c.auth.required),
+            trust=trust,
+            source=c.source,
         )
 
 
@@ -51,6 +56,13 @@ class RecommendRequest(BaseModel):
 
     description: str = Field(min_length=1)
     top_k: int = 6
+
+
+class KeyUpdate(BaseModel):
+    """설정 화면 — 런타임 API 키 설정/수정(빈 값/None 은 변경 없음)."""
+
+    anthropic_api_key: str | None = None
+    voyage_api_key: str | None = None
 
 
 class SelectionInput(BaseModel):
@@ -91,6 +103,65 @@ class GenerateResponse(BaseModel):
     gaps: int
     warnings: int
     errors: int
+
+
+class HarnessSaveBody(BaseModel):
+    """공유 하네스 저장소 upsert 본문 — 웹·VSCode 확장이 같은 백엔드로 저장/동기화.
+    스코프(personal|team:<id>)는 쿼리 파라미터로 받는다."""
+
+    name: str = ""
+    description: str = ""
+    yaml: str = Field(min_length=1)
+
+
+class ComponentAuthorBody(BaseModel):
+    """자연어 → 카탈로그 컴포넌트 초안(스튜디오 빌더). type 으로 skill|mcp|context|hook 선택."""
+
+    prompt: str = Field(min_length=1)
+    type: str = "context"
+    prior_id: str | None = None
+
+
+class LlmSettingsBody(BaseModel):
+    """앱 LLM/임베딩 키 저장. 키는 생략(None)=유지 · ""=삭제 · 값=교체(암호화 저장).
+    provider 는 LLM provider(anthropic|openai). 임베딩은 OpenAI 고정(embedding_key)."""
+
+    provider: str | None = None
+    llm_key: str | None = None
+    embedding_key: str | None = None
+
+
+class ComponentSaveBody(BaseModel):
+    """유저 컴포넌트 저장 upsert 본문 — data 는 Component 필드 dict. 스코프는 쿼리 파라미터."""
+
+    name: str = ""
+    description: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class TokenCreateBody(BaseModel):
+    """PAT 발급 — VSCode·기계 연결용 개인 액세스 토큰. 이름으로 식별(원문은 1회 노출)."""
+
+    name: str = Field(default="", max_length=128)
+
+
+class DevLoginBody(BaseModel):
+    """개발용 로그인(HARNESS_DEV_AUTH=on) — 실제 OAuth 앱 없이 이메일로 세션 발급."""
+
+    email: str = Field(min_length=3, max_length=320)
+
+
+class TeamCreateBody(BaseModel):
+    """자가서브 팀 생성 — 생성자가 owner·첫 멤버."""
+
+    name: str = Field(min_length=1, max_length=64)
+
+
+class MemberBody(BaseModel):
+    """팀 멤버 초대 — email + 역할(owner/editor/viewer, 기본 editor)."""
+
+    email: str = Field(min_length=3)
+    role: str = "editor"
 
 
 class RunRequest(ResolveRequest):

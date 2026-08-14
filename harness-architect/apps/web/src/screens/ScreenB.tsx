@@ -1,6 +1,8 @@
-import type { Recommendation, ComponentType } from "../api/client";
+import { useQuery } from "@tanstack/react-query";
+import { api, type ComponentType, type Recommendation } from "../api/client";
 import type { Selection } from "../App";
-import { Button, Card, Chip, TYPE_COLOR, TYPE_LABEL } from "../lib/ui";
+import { capLabel } from "../lib/catalog";
+import { Badge, Button, Card, Chip, TrustBadge, TYPE_COLOR, TYPE_LABEL } from "../lib/ui";
 
 const BUDGET = 8000;
 const TYPE_ORDER: ComponentType[] = ["mcp", "skill", "context", "hook"];
@@ -27,6 +29,10 @@ export default function ScreenB({
   const usedTools = selected.reduce((n, r) => n + r.added_tools, 0);
   const overBudget = usedTokens > BUDGET;
 
+  // 내가(또는 팀이) 만든 ready 컴포넌트 — 추천과 함께 선택 가능(요청-스코프 레지스트리가 resolve).
+  const readyQ = useQuery({ queryKey: ["components", "ready"], queryFn: api.readyComponents });
+  const ready = readyQ.data ?? [];
+
   function toggle(rec: Recommendation) {
     const next = { ...selection };
     if (next[rec.id]) delete next[rec.id];
@@ -34,7 +40,6 @@ export default function ScreenB({
     setSelection(next);
   }
 
-  // 라이브 충돌 힌트(리졸버가 C에서 확정 검사; 여기선 미리보기)
   function conflictHint(rec: Recommendation): string | null {
     for (const other of selected) {
       if (other.id === rec.id) continue;
@@ -50,78 +55,58 @@ export default function ScreenB({
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_300px]">
       <div>
         <div className="mb-4">
-          <h2 className="text-lg font-semibold text-slate-900">추천 구성요소</h2>
-          <p className="mt-1 text-sm text-slate-500">추출된 요구 능력에 근거한 추천입니다. 필요한 것을 고르세요.</p>
+          <h2 className="text-[15px] font-semibold text-fg">추천 구성요소</h2>
+          <p className="mt-0.5 text-sm text-muted">추출된 요구 능력에 근거한 추천입니다. 필요한 것을 고르세요.</p>
           <div className="mt-3 flex flex-wrap gap-1.5">
             {requirements.map((cap) => (
-              <Chip key={cap} className="bg-slate-800 text-white">
-                {cap}
-              </Chip>
+              <Badge key={cap} className="bg-accent/15 text-accent">
+                {capLabel(cap)}
+              </Badge>
             ))}
-            {requirements.length === 0 && <span className="text-xs text-slate-400">추출된 요구 능력 없음</span>}
+            {requirements.length === 0 && <span className="text-xs text-muted">추출된 요구 능력 없음</span>}
           </div>
         </div>
 
+        {/* 내 구성요소(스튜디오에서 검증·테스트한 것) — 추천보다 먼저 노출 */}
+        {ready.length > 0 && (
+          <section className="mb-6">
+            <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-muted">
+              <Chip className="bg-violet-500/15 text-violet-400">내 구성요소</Chip>
+            </h3>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {ready.map((rec) => (
+                <RecCard key={rec.id} rec={rec} isSel={!!selection[rec.id]} conflict={conflictHint(rec)} onToggle={() => toggle(rec)} />
+              ))}
+            </div>
+          </section>
+        )}
+
         {TYPE_ORDER.filter((t) => (groups[t]?.length ?? 0) > 0).map((type) => (
           <section key={type} className="mb-6">
-            <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-600">
+            <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-muted">
               <Chip className={TYPE_COLOR[type]}>{TYPE_LABEL[type]}</Chip>
             </h3>
             <div className="grid gap-3 sm:grid-cols-2">
               {recommendations
                 .filter((r) => r.type === type)
-                .map((rec) => {
-                  const isSel = !!selection[rec.id];
-                  const conflict = conflictHint(rec);
-                  return (
-                    <button
-                      key={rec.id}
-                      onClick={() => toggle(rec)}
-                      className={`rounded-xl border p-4 text-left transition ${
-                        isSel ? "border-slate-900 bg-slate-50 ring-1 ring-slate-900" : "border-slate-200 bg-white hover:border-slate-300"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="font-medium text-slate-900">{rec.name}</div>
-                        <div className="flex items-center gap-1">
-                          {rec.auth_required && <Chip className="bg-warn-bg text-warn">인증</Chip>}
-                          {conflict && <Chip className="bg-err-bg text-err">{conflict}</Chip>}
-                        </div>
-                      </div>
-                      <p className="mt-1 text-xs leading-relaxed text-slate-500">{rec.reason}</p>
-                      <div className="mt-3 flex flex-wrap gap-1 text-[11px]">
-                        {rec.matched_capabilities.map((c) => (
-                          <Chip key={c} className="bg-ok-bg text-ok">
-                            {c}
-                          </Chip>
-                        ))}
-                        {rec.requires.map((c) => (
-                          <Chip key={c} className="bg-slate-100 text-slate-500">
-                            requires {c}
-                          </Chip>
-                        ))}
-                      </div>
-                      <div className="mt-2 text-[11px] text-slate-400">
-                        컨텍스트 {rec.context_tokens}토큰 · 도구 +{rec.added_tools} · score {rec.score}
-                      </div>
-                    </button>
-                  );
-                })}
+                .map((rec) => (
+                  <RecCard key={rec.id} rec={rec} isSel={!!selection[rec.id]} conflict={conflictHint(rec)} onToggle={() => toggle(rec)} />
+                ))}
             </div>
           </section>
         ))}
       </div>
 
       {/* 우측 선택 요약 패널 */}
-      <aside className="lg:sticky lg:top-6 lg:self-start">
+      <aside className="lg:sticky lg:top-2 lg:self-start">
         <Card>
-          <h3 className="text-sm font-semibold text-slate-900">선택 요약</h3>
+          <h3 className="text-sm font-semibold text-fg">선택 요약</h3>
           <div className="mt-3 space-y-1.5">
-            {selected.length === 0 && <p className="text-xs text-slate-400">아직 선택된 구성요소가 없습니다.</p>}
+            {selected.length === 0 && <p className="text-xs text-muted">아직 선택된 구성요소가 없습니다.</p>}
             {selected.map((r) => (
               <div key={r.id} className="flex items-center justify-between text-xs">
-                <span className="text-slate-700">{r.name}</span>
-                <button className="text-slate-400 hover:text-err" onClick={() => toggle(r)}>
+                <span className="text-fg/90">{r.name}</span>
+                <button className="text-muted hover:text-err" onClick={() => toggle(r)}>
                   ✕
                 </button>
               </div>
@@ -129,20 +114,20 @@ export default function ScreenB({
           </div>
 
           <div className="mt-4">
-            <div className="mb-1 flex justify-between text-[11px] text-slate-500">
+            <div className="mb-1 flex justify-between text-xs text-muted">
               <span>컨텍스트 예산</span>
               <span className={overBudget ? "text-err" : ""}>
                 {usedTokens} / {BUDGET}
               </span>
             </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
               <div
                 className={`h-full ${overBudget ? "bg-err" : "bg-ok"}`}
                 style={{ width: `${Math.min(100, (usedTokens / BUDGET) * 100)}%` }}
               />
             </div>
-            <div className="mt-1 text-[11px] text-slate-400">추가 도구 {usedTools}개</div>
-            {overBudget && <p className="mt-2 text-[11px] text-warn">예산 초과 — 검증에서 경고로 표시됩니다.</p>}
+            <div className="mt-1 text-xs text-muted/70">추가 도구 {usedTools}개</div>
+            {overBudget && <p className="mt-2 text-xs text-warn">예산 초과 — 검증에서 경고로 표시됩니다.</p>}
           </div>
 
           <div className="mt-5 flex flex-col gap-2">
@@ -156,5 +141,49 @@ export default function ScreenB({
         </Card>
       </aside>
     </div>
+  );
+}
+
+function RecCard({
+  rec,
+  isSel,
+  conflict,
+  onToggle,
+}: {
+  rec: Recommendation;
+  isSel: boolean;
+  conflict: string | null;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      className={`rounded-xl border p-4 text-left transition-colors ${
+        isSel ? "border-accent bg-accent/5 ring-1 ring-accent/40" : "border-line bg-surface hover:border-muted/40"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="font-medium text-fg">{rec.name}</div>
+        <div className="flex items-center gap-1">
+          <TrustBadge trust={rec.trust} />
+          {rec.auth_required && <Badge className="bg-warn/15 text-warn">인증</Badge>}
+          {conflict && <Badge className="bg-err/15 text-err">{conflict}</Badge>}
+        </div>
+      </div>
+      <p className="mt-1 text-xs leading-relaxed text-muted">{rec.reason}</p>
+      <div className="mt-3 flex flex-wrap gap-1">
+        {rec.matched_capabilities.map((c) => (
+          <Badge key={c} className="bg-ok/15 text-ok">
+            {capLabel(c)}
+          </Badge>
+        ))}
+        {rec.requires.map((c) => (
+          <Badge key={c}>필요: {capLabel(c)}</Badge>
+        ))}
+      </div>
+      <div className="mt-2 text-xs text-muted/70">
+        컨텍스트 {rec.context_tokens}토큰 · 도구 +{rec.added_tools} · score {rec.score}
+      </div>
+    </button>
   );
 }

@@ -13,7 +13,7 @@ harness-catalog/
 │  ├─ slack-mcp.yaml             # mcp     — comms.messaging
 │  ├─ notion-mcp.yaml            # mcp     — knowledge.wiki
 │  ├─ pr-review-skill.yaml       # skill   — review.code (requires vcs.*)
-│  ├─ issue-triage-skill.yaml    # skill   — transform.extract (requires vcs.issue-tracking)
+│  ├─ issue-triage-skill.yaml    # skill   — transform.classify (requires vcs.issue-tracking)
 │  ├─ doc-draft-skill.yaml       # skill   — author.document (requires knowledge.wiki)
 │  ├─ coding-convention-ctx.yaml # context — convention.coding
 │  ├─ secret-scan-hook.yaml      # hook    — lifecycle.guardrail (before_tool_call)
@@ -58,7 +58,7 @@ capability 통제 어휘로 skill → mcp cross-type 연결이 실제 동작하�
 | `slack-mcp` | mcp | comms.messaging | — | oauth |
 | `notion-mcp` | mcp | knowledge.wiki | — | oauth |
 | `pr-review-skill` | skill | review.code | vcs.code-hosting, vcs.code-review | 접근은 MCP 위임 |
-| `issue-triage-skill` | skill | transform.extract | vcs.issue-tracking | 접근은 MCP 위임 |
+| `issue-triage-skill` | skill | transform.classify | vcs.issue-tracking | 접근은 MCP 위임 |
 | `doc-draft-skill` | skill | author.document | knowledge.wiki | 접근은 MCP 위임 |
 | `coding-convention-ctx` | context | convention.coding | — | 매 요청 1200토큰 |
 | `secret-scan-hook` | hook | lifecycle.guardrail | — | before_tool_call, fail_closed |

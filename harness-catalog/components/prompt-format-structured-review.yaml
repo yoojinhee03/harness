@@ -27,7 +27,6 @@ provides: [prompt.format]
 
 # ── 타입 델타: context (프롬프트 조각) ──
 source: inline
-refresh: static
 body: |
   출력은 세 섹션으로 구성한다: (1) 한 줄 요약, (2) 발견 이슈 목록(각 항목에 심각도 태그와
   파일·라인 근거), (3) 구체적 개선 제안. 근거 없는 단정은 넣지 않는다.

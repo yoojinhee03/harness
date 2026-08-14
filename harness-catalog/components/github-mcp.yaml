@@ -47,6 +47,11 @@ config_schema:
 defaults:
   repo_filter: "*"
 
+# ── 상위 사용 지침 (CLAUDE.md Capabilities 절로 방출) ──
+usage_note: >
+  PR diff·이슈·커밋 조회는 이 서버로 한다(GitHub Copilot Workspace 가 PR 컨텍스트를 읽듯).
+  쓰기(코멘트·이슈 생성)는 사용자가 명시적으로 요청할 때만 수행한다.
+
 # ── MCP 실행 스펙 (eject/러너가 그대로 방출) ──
 mcp:
   transport: stdio
