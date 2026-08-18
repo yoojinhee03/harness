@@ -9,9 +9,10 @@ import {
   type Recommendation,
   type StudioConversation,
   type StudioConversationSummary,
+  type StudioHarness,
   type StudioMessage,
 } from "../api/client";
-import { capLabel, TYPE_MEANING } from "../lib/catalog";
+import { capLabel } from "../lib/catalog";
 import { useToast } from "../lib/toast";
 import {
   Badge,
@@ -28,26 +29,20 @@ import {
   TYPE_LABEL,
 } from "../lib/ui";
 
-const TYPES: ComponentType[] = ["context", "skill", "mcp", "hook"];
-
-// 진행 중인 한 턴(스트리밍) — 서버 영속 메시지와 별개로 라이브 렌더.
+// 진행 중인 한 턴(스트리밍) — 서버 영속 세트와 별개로 라이브 렌더.
 interface LiveTurn {
   userText: string;
-  phase: string; // status 라벨(분류/검색/저작…)
-  intent?: string;
-  type?: string | null;
-  rationale?: string;
+  phase: string; // status 라벨(도구 실행 알림)
   prose: string; // 누적 토큰
   recommendations?: Recommendation[];
-  reused?: boolean;
-  draft?: AuthoredComponent;
+  components?: AuthoredComponent[]; // 초안 세트(갱신되면 통째로 들어옴)
+  harness?: StudioHarness;
 }
 
 function scopeQuery(fullScope: string): string {
   return fullScope.startsWith("team:") ? fullScope : "personal";
 }
 
-/** 조건에 맞는 마지막 메시지의 meta 를 찾는다(캔버스가 '현재 산출물'을 잡을 때). */
 function lastMeta<T>(conv: StudioConversation | undefined, pick: (m: StudioMessage) => T | null | undefined): T | null {
   if (!conv) return null;
   for (let i = conv.messages.length - 1; i >= 0; i--) {
@@ -62,7 +57,6 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
   const toast = useToast();
   const [active, setActive] = useState<{ id: string; scope: string } | null>(null);
   const [input, setInput] = useState("");
-  const [overrideType, setOverrideType] = useState<ComponentType | "">("");
   const [live, setLive] = useState<LiveTurn | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const streaming = live !== null;
@@ -78,16 +72,12 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
   const llmQ = useQuery({ queryKey: ["llm-settings"], queryFn: api.getLlmSettings });
   const keySet = llmQ.data?.llm.set ?? false;
 
-  // 사이드바 실시간 갱신(생성/삭제/제목/최신순). 진행 중 턴 중엔 상세는 done 후 직접 무효화한다.
   useEffect(() => subscribeConversationEvents(() => qc.invalidateQueries({ queryKey: ["studio-convs"] })), [qc]);
 
-  // 첫 로드 시 최신 대화 자동 선택.
   useEffect(() => {
     if (!active && convs.length) setActive({ id: convs[0].id, scope: scopeQuery(convs[0].scope) });
   }, [convs, active]);
 
-  // 대화 전환 시 오버라이드 초기화 + 스크롤 하단.
-  useEffect(() => setOverrideType(""), [active?.id]);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [conv?.messages.length, live?.prose, live?.phase]);
@@ -111,13 +101,14 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
   });
 
   const commitMut = useMutation({
-    mutationFn: () => api.commitConversation(active!.id, active!.scope, { type: overrideType || null }),
+    mutationFn: () => api.commitConversation(active!.id, active!.scope, {}),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["studio-conv", active!.id] });
       qc.invalidateQueries({ queryKey: ["components"] });
       qc.invalidateQueries({ queryKey: ["studio-convs"] });
-      if (r.component.validation.ok) toast(`저장·검증 완료: ${r.component.name}`, "success");
-      else toast(`저장(초안) — ${r.component.validation.errors[0] ?? "검증 필요"}`, "error");
+      const ok = r.saved.filter((s) => s.validation.ok).length;
+      const h = r.harness ? ` + 에이전트 '${r.harness.name}'` : "";
+      toast(`${r.saved.length}개 구성요소 저장(검증 ${ok})${h}`, ok === r.saved.length ? "success" : "info");
     },
     onError: (e: Error) => toast(e.message || "저장 실패", "error"),
   });
@@ -127,9 +118,8 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["studio-conv", active!.id] });
       qc.invalidateQueries({ queryKey: ["components"] });
-      if (r.result.skipped) toast("테스트 건너뜀", "info");
-      else if (r.result.pass) toast("테스트 통과 — 사용가능(ready)", "success");
-      else toast(`테스트 보류: ${r.result.reasons[0] ?? ""}`, "error");
+      const passed = r.results.filter((x) => x.pass).length;
+      toast(`테스트 ${passed}/${r.results.length} 통과`, passed === r.results.length ? "success" : "info");
     },
     onError: (e: Error) => toast(e.message || "테스트 실패", "error"),
   });
@@ -145,21 +135,20 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
       a = { id: c.id, scope: scopeQuery(c.scope) };
       setActive(a);
     }
-    const forced = overrideType || null;
-    setLive({ userText: text, phase: "전송 중…", prose: "" });
+    setLive({ userText: text, phase: "생각 중…", prose: "" });
     try {
-      await streamStudioChat(a.id, a.scope, text, forced, (ev) => {
+      await streamStudioChat(a.id, a.scope, text, null, (ev) => {
         setLive((prev) => {
           if (!prev) return prev;
           switch (ev.event) {
             case "status":
               return { ...prev, phase: ev.data.label };
-            case "router":
-              return { ...prev, intent: ev.data.intent, type: ev.data.type, rationale: ev.data.rationale };
             case "recommendations":
-              return { ...prev, recommendations: ev.data.items, reused: ev.data.reused };
-            case "draft":
-              return { ...prev, draft: ev.data.component, type: ev.data.type };
+              return { ...prev, recommendations: ev.data.items };
+            case "drafts":
+              return { ...prev, components: ev.data.components };
+            case "harness":
+              return { ...prev, harness: ev.data.harness };
             case "token":
               return { ...prev, prose: prev.prose + ev.data.text };
             case "error":
@@ -176,20 +165,20 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
       await qc.invalidateQueries({ queryKey: ["studio-conv", a.id] });
       qc.invalidateQueries({ queryKey: ["studio-convs"] });
       setLive(null);
-      setOverrideType("");
     }
   }
 
   const messages = conv?.messages ?? [];
-  const draft = live?.draft ?? conv?.draft_component ?? null;
+  const dset = conv?.draft_set ?? { components: [], harness: null };
+  const components = live?.components ?? dset.components ?? [];
+  const harness = live?.harness ?? dset.harness ?? null;
   const recs = live?.recommendations ?? lastMeta(conv, (m) => m.meta?.recommendations) ?? null;
-  const showRecs = !draft && !!recs && recs.length > 0;
+  const hasResult = components.length > 0 || !!harness;
+  const showRecs = !hasResult && !!recs && recs.length > 0;
   const committed = !!conv?.component_id;
-  const draftType = (draft?.type as ComponentType | undefined) ?? undefined;
-  const rationale = live?.rationale ?? lastMeta(conv, (m) => m.meta?.rationale) ?? "";
 
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_1fr_360px]">
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_1fr_380px]">
       {/* ── 대화 리스트 ── */}
       <aside className="lg:sticky lg:top-2 lg:self-start">
         <div className="mb-2 flex items-center justify-between">
@@ -231,19 +220,18 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
       <div className="flex min-h-[68vh] flex-col">
         <PageHeader
           title="스튜디오"
-          subtitle="채팅으로 카탈로그를 만들어요 — 타입은 자동 분류하고, 이미 있으면 추천합니다."
+          subtitle="대화로 에이전트에 필요한 구성요소를 만들고, 하나의 에이전트로 조립합니다."
         />
 
         <div className="flex-1 space-y-3 overflow-y-auto pr-1">
           {!active || messages.length === 0 ? (
             <EmptyState
-              title="무엇을 만들까요?"
-              hint={'예: "PR 올라오면 슬랙으로 알림 보내는 훅" · "우리 팀 파이썬 컨벤션을 항상 지키게" · "GitHub 이슈에 접근하는 도구 있어?"'}
+              title="어떤 에이전트를 만들까요?"
+              hint={'예: "브이로그를 자동편집하는 에이전트" · "PR 올라오면 슬랙 알림 보내는 훅" · "GitHub 이슈 접근 도구 있어?"'}
             />
           ) : (
             messages.map((m) => <MessageBubble key={m.id} m={m} />)
           )}
-
           {live && <LiveBubble live={live} />}
           <div ref={bottomRef} />
         </div>
@@ -254,16 +242,15 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
           </div>
         )}
 
-        {/* 퀵칩 */}
         <div className="mt-2 flex flex-wrap gap-1.5">
           {[
             { label: "추천만", text: "이미 비슷한 게 있으면 추천만 해줘: " },
-            { label: "새로 만들기", text: "새로 만들어줘: " },
+            { label: "전부 만들기", text: "이 에이전트에 필요한 구성요소를 전부 만들고 하나로 조립해줘: " },
           ].map((q) => (
             <button
               key={q.label}
               className="rounded-full border border-line px-2.5 py-0.5 text-xs text-muted hover:text-fg"
-              onClick={() => setInput((v) => q.text + v.replace(/^(이미 비슷한 게 있으면 추천만 해줘: |새로 만들어줘: )/, ""))}
+              onClick={() => setInput((v) => q.text + v)}
             >
               {q.label}
             </button>
@@ -292,13 +279,10 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
 
       {/* ── 작업 캔버스 ── */}
       <aside className="lg:sticky lg:top-2 lg:self-start">
-        {draft ? (
-          <DraftPanel
-            draft={draft}
-            draftType={draftType}
-            rationale={rationale}
-            overrideType={overrideType}
-            setOverrideType={setOverrideType}
+        {hasResult ? (
+          <ResultPanel
+            components={components}
+            harness={harness}
             committed={committed}
             onCommit={() => commitMut.mutate()}
             onTest={() => testMut.mutate()}
@@ -320,8 +304,8 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
           <Card>
             <h3 className="text-sm font-semibold text-fg">작업 캔버스</h3>
             <p className="mt-2 text-xs text-muted">
-              대화하면 여기에 <b className="text-fg">초안</b>이나 <b className="text-fg">추천</b>이 실시간으로 나타나요.
-              타입(Context·Skill·MCP·Hook)은 자동으로 분류됩니다.
+              대화하면 여기에 <b className="text-fg">구성요소 초안들</b>이 쌓이고, 필요하면 하나의{" "}
+              <b className="text-fg">에이전트</b>로 조립됩니다. 타입은 자동으로 분류됩니다.
             </p>
           </Card>
         )}
@@ -330,7 +314,6 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
   );
 }
 
-/** 타입별 미리보기 텍스트 — context/skill=본문, mcp=실행 스펙, hook=명령. */
 function previewText(comp: AuthoredComponent): string | null {
   if (comp.type === "mcp") {
     const m = comp.mcp;
@@ -353,27 +336,29 @@ function MessageBubble({ m }: { m: StudioMessage }) {
       </div>
     );
   }
-  // 커밋/테스트 인라인 시스템 노트
   if (m.meta?.kind === "commit" || m.meta?.kind === "test") {
     const icon = m.meta.kind === "commit" ? "✓" : "🧪";
-    const ok = m.meta.kind === "commit" ? m.meta.validation?.ok : m.meta.result?.pass;
     return (
-      <div className={`max-w-[85%] rounded-xl border px-3 py-2 text-xs ${ok ? "border-ok/40 bg-ok/5 text-ok" : "border-line bg-surface-2 text-muted"}`}>
+      <div className="max-w-[85%] rounded-xl border border-ok/40 bg-ok/5 px-3 py-2 text-xs text-ok">
         <span className="mr-1">{icon}</span>
         {m.content}
       </div>
     );
   }
-  const t = m.meta?.type as ComponentType | undefined;
+  const comps = m.meta?.components ?? [];
   return (
     <div className="max-w-[85%]">
       <div className="whitespace-pre-wrap rounded-2xl border border-line bg-surface px-3.5 py-2 text-sm text-fg/90">
         {m.content}
       </div>
-      {t && (m.meta?.intent === "author" || m.meta?.intent === "refine") && (
-        <div className="mt-1 flex items-center gap-1.5 pl-1">
-          <Chip className={TYPE_COLOR[t]}>{TYPE_LABEL[t]} 자동분류</Chip>
-          {m.meta?.rationale && <span className="text-[11px] text-muted">· {m.meta.rationale}</span>}
+      {(comps.length > 0 || m.meta?.harness) && (
+        <div className="mt-1 flex flex-wrap items-center gap-1 pl-1">
+          {comps.map((c, i) => (
+            <Chip key={i} className={TYPE_COLOR[c.type as ComponentType] ?? "bg-surface-2 text-muted"}>
+              {TYPE_LABEL[c.type as ComponentType] ?? c.type}
+            </Chip>
+          ))}
+          {m.meta?.harness && <Chip className="bg-accent/15 text-accent">🧩 {m.meta.harness}</Chip>}
         </div>
       )}
     </div>
@@ -381,7 +366,6 @@ function MessageBubble({ m }: { m: StudioMessage }) {
 }
 
 function LiveBubble({ live }: { live: LiveTurn }) {
-  const t = live.type as ComponentType | undefined;
   return (
     <>
       <div className="ml-auto max-w-[80%] whitespace-pre-wrap rounded-2xl bg-surface-2 px-3.5 py-2 text-sm text-fg/90">
@@ -398,22 +382,14 @@ function LiveBubble({ live }: { live: LiveTurn }) {
             <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-fg/40 align-middle" />
           </div>
         )}
-        {t && (live.intent === "author" || live.intent === "refine") && (
-          <div className="mt-1 flex items-center gap-1.5 pl-1">
-            <Chip className={TYPE_COLOR[t]}>{TYPE_LABEL[t]} 자동분류</Chip>
-          </div>
-        )}
       </div>
     </>
   );
 }
 
-function DraftPanel({
-  draft,
-  draftType,
-  rationale,
-  overrideType,
-  setOverrideType,
+function ResultPanel({
+  components,
+  harness,
   committed,
   onCommit,
   onTest,
@@ -421,11 +397,8 @@ function DraftPanel({
   testing,
   keySet,
 }: {
-  draft: AuthoredComponent;
-  draftType: ComponentType | undefined;
-  rationale: string;
-  overrideType: ComponentType | "";
-  setOverrideType: (t: ComponentType | "") => void;
+  components: AuthoredComponent[];
+  harness: StudioHarness | null;
   committed: boolean;
   onCommit: () => void;
   onTest: () => void;
@@ -433,64 +406,35 @@ function DraftPanel({
   testing: boolean;
   keySet: boolean;
 }) {
-  const preview = previewText(draft);
-  const effType = overrideType || draftType || draft.type;
   return (
     <Card>
       <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold text-fg">{draft.name}</span>
+        <h3 className="text-sm font-semibold text-fg">구성요소 {components.length}개</h3>
         {committed && <Badge className="bg-ok/15 text-ok">저장됨</Badge>}
       </div>
-      <p className="mt-1 text-xs text-muted">{draft.summary}</p>
 
-      {/* 자동 분류 타입 + 근거 + 오버라이드(탈출구) */}
-      <div className="mt-3 rounded-lg border border-line bg-surface-2 p-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
-            <Chip className={TYPE_COLOR[effType]}>{TYPE_LABEL[effType]}</Chip>
-            <span className="text-xs text-muted">{overrideType ? "직접 지정" : "자동 분류"}</span>
-          </div>
-          <select
-            className="h-7 rounded-md border border-line bg-surface px-2 text-xs text-fg focus:border-accent/60 focus:outline-none"
-            value={overrideType || draft.type}
-            onChange={(e) => setOverrideType(e.target.value === draft.type ? "" : (e.target.value as ComponentType))}
-            title="자동 분류가 틀리면 직접 바꾸세요"
-          >
-            {TYPES.map((t) => (
-              <option key={t} value={t}>
-                {TYPE_LABEL[t]}
-              </option>
-            ))}
-          </select>
-        </div>
-        <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-          {rationale || TYPE_MEANING[effType].blurb}
-        </p>
+      <div className="mt-3 space-y-2">
+        {components.map((c) => (
+          <ComponentDraftCard key={c.id} comp={c} />
+        ))}
       </div>
 
-      {draft.provides.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1">
-          {draft.provides.map((c) => (
-            <Badge key={c} className="bg-ok/15 text-ok">
-              {capLabel(c)}
-            </Badge>
-          ))}
+      {harness && (
+        <div className="mt-3 rounded-lg border border-accent/40 bg-accent/5 p-2.5">
+          <div className="flex items-center gap-1.5">
+            <span className="text-sm font-semibold text-fg">🧩 {harness.name}</span>
+            <Chip className="bg-accent/15 text-accent">에이전트</Chip>
+          </div>
+          <p className="mt-0.5 text-xs text-muted">
+            {(harness.component_ids?.length ?? components.length)}개 구성요소를 묶은 harness.yaml
+          </p>
+          <pre className={`mt-2 max-h-48 ${codeBlock}`}>{harness.yaml}</pre>
         </div>
       )}
-      {draft.type === "hook" && (draft.events?.length ?? 0) > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1">
-          {(draft.events ?? []).map((e) => (
-            <Badge key={e} className="bg-surface-2 text-muted">
-              {e}
-            </Badge>
-          ))}
-        </div>
-      )}
-      {preview && <pre className={`mt-2 max-h-56 ${codeBlock}`}>{preview}</pre>}
 
       <div className="mt-3 flex gap-2">
         <Button size="sm" onClick={onCommit} disabled={committing} className="flex-1">
-          {committed ? "다시 저장" : "이 구성요소 저장"}
+          {committed ? "다시 저장" : harness ? "에이전트 저장" : "모두 저장"}
         </Button>
         {committed && (
           <Button
@@ -498,14 +442,39 @@ function DraftPanel({
             variant="subtle"
             onClick={onTest}
             disabled={testing || !keySet}
-            title={!keySet ? "LLM 키를 먼저 등록하세요" : "적합성·안전 테스트(통과 시 사용가능)"}
+            title={!keySet ? "LLM 키를 먼저 등록하세요" : "저장된 구성요소를 적합성·안전 테스트"}
           >
-            테스트
+            전체 테스트
           </Button>
         )}
       </div>
-      <p className="mt-1.5 text-[11px] text-muted">저장하면 검증하고, 테스트를 통과하면 생성 위저드에서 쓸 수 있어요.</p>
+      <p className="mt-1.5 text-[11px] text-muted">
+        저장하면 각 구성요소는 카탈로그에, 에이전트는 하네스 저장소에 들어갑니다. 테스트를 통과하면 사용가능(ready)이 됩니다.
+      </p>
     </Card>
+  );
+}
+
+function ComponentDraftCard({ comp }: { comp: AuthoredComponent }) {
+  const preview = previewText(comp);
+  return (
+    <div className="rounded-lg border border-line p-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate text-sm font-medium text-fg">{comp.name}</span>
+        <Chip className={TYPE_COLOR[comp.type]}>{TYPE_LABEL[comp.type]}</Chip>
+      </div>
+      <p className="mt-1 text-xs text-muted">{comp.summary}</p>
+      {comp.provides.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {comp.provides.map((c) => (
+            <Badge key={c} className="bg-ok/15 text-ok">
+              {capLabel(c)}
+            </Badge>
+          ))}
+        </div>
+      )}
+      {preview && <pre className={`mt-2 max-h-32 ${codeBlock}`}>{preview}</pre>}
+    </div>
   );
 }
 

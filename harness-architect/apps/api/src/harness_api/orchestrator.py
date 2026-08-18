@@ -1,196 +1,253 @@
-"""스튜디오 대화 오케스트레이터 — 매 유저 턴의 의도를 분류하고 분기 실행한다.
+"""스튜디오 대화 에이전트 — 미션 고정 tool-use 챗봇.
 
-Cursor/Windsurf 식 라우터 + GPT Builder 식 되묻기 + RAG recommend-first 를 합쳤다:
+'버킷 분류 → 기계적 덤프'(구버전)를 버리고, LLM 이 매 턴 도구를 자율 호출하며 자연스럽게 대화하되
+**항상 카탈로그 구성요소 생성으로 수렴**하도록 한다:
 
-    유저 메시지 ─▶ classify(라우터, 구조화 JSON): intent + component_type(자동) + confidence + title
-                  ├─ clarify   요구가 모호 → 되묻는 질문
-                  ├─ recommend 카탈로그 RAG → 기존 매칭 제안
-                  ├─ author    RAG 먼저 → 高매칭이면 재사용 제안, 아니면 authoring.py 로 초안
-                  ├─ refine    현재 초안을 대화 맥락으로 수정
-                  └─ chitchat  잡담/안내
+    get_catalog_item(query)   특정 항목을 정확히 조회해 설명(“X가 뭐야?”에 실제로 답)
+    search_catalog(query)     관련 기존 구성요소 시맨틱 검색(점수 낮으면 '없다'고 정직하게)
+    draft_component(type,…)   요구를 파악하면 초안 생성/수정
 
-프로즈(사람이 읽는 최종 응답)는 여기서 만들지 않고 (prose_system, prose_user)만 넘긴다 — 엔드포인트가
-llm_client.stream_text 로 토큰 스트리밍한다(타이핑 느낌). 타입은 절대 사용자가 고르지 않는다(자동 추론).
+루프는 llm_client.run_tool_loop 가 돌리고, 여기선 도구 구현 + 미션 시스템 프롬프트만 조립한다.
+초안 생성은 authoring.author_component 재사용(타입은 자동, forced_type 으로 덮어쓰기 가능).
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from harness_resolver import Component
 
 from .authoring import COMPONENT_TYPES, author_component
+from .harness_build import build_harness_yaml
+from .llm_client import run_tool_loop
+from .web_search import web_search
 
 CompleteFn = Callable[[str, str, int], Any]  # (system, user, max_tokens) -> 파싱된 JSON
 
-INTENTS = ("clarify", "recommend", "author", "refine", "chitchat")
-
-# author 인데 이 점수 이상의 기존 매칭이 있으면 새로 만들기 전에 '재사용'을 먼저 제안한다(카탈로그 비대화 방지).
-# ranking.py 점수는 정규화되진 않지만 능력 일치(가중 2.5)가 지배적 — 1.2 면 최소 한 능력이 맞는 수준.
-HIGH_MATCH_SCORE = 1.2
-
-# 타입 자동 분류용 정의(authoring.py 도크스트링과 일치). 라우터에 주입해 요구에서 타입을 '추론'하게 한다.
-TYPE_MEANINGS = {
-    "context": "항상 주입되는 배경지식/규칙/프롬프트 조각(사실·정책·톤). 절차가 아니라 '지식'.",
-    "skill": "에이전트가 따를 작업 절차(단계별 how-to). 도구 접근은 requires 로 MCP 에 위임.",
-    "mcp": "실존하는 외부 도구/서버 연결(깃허브·슬랙·DB 등 API·명령 접근). '무엇에 연결'.",
-    "hook": "요청 전/후 자동 실행되는 검사·차단·기록(예: 커밋 전 린트, PR 시 알림). '자동 트리거'.",
-}
-
-
-@dataclass
-class Decision:
-    """라우터 판정 — 의도 + (자동 추론된)타입 + 확신도 + 근거 + (필요 시)대화 제목."""
-
-    intent: str
-    type: str | None
-    confidence: float
-    rationale: str
-    title: str | None = None
-
-
-@dataclass
-class TurnResult:
-    """분기 실행 산출물 — 추천 목록/초안/재사용 여부 + 프로즈 스트리밍 입력."""
-
-    decision: Decision
-    recommendations: list[dict[str, Any]] = field(default_factory=list)
-    draft: Component | None = None
-    reused: bool = False  # author 였지만 기존 재사용 제안으로 전환
-    prose_system: str = ""
-    prose_user: str = ""
-
-
-# ─────────────────────────── 1) 분류(라우터) ───────────────────────────
-
-_ROUTER_SYSTEM = (
-    "너는 '카탈로그 스튜디오'의 대화 라우터다. 사용자가 카탈로그 구성요소를 채팅으로 만들거나 추천받는다.\n"
-    "매 턴의 의도를 하나로 분류하고, 만들/고칠 것이면 타입을 **자동 추론**한다(사용자는 타입을 고르지 않는다).\n\n"
-    "의도(intent):\n"
-    "- clarify: 무엇을 만들지 너무 모호해 1~2개 되물어야 함\n"
-    "- recommend: 이미 있는 걸 찾아달라/추천해달라(만들자는 게 아님)\n"
-    "- author: 새 구성요소를 만들자(현재 초안이 없거나 다른 걸 새로)\n"
-    "- refine: 현재 초안을 고치자/바꾸자(초안이 있을 때)\n"
-    "- chitchat: 인사·잡담·사용법 질문\n\n"
-    "타입(type, author/refine 일 때만 의미):\n<types>\n\n"
-    'JSON 으로만: {"intent","type"(넷 중 하나 또는 null),"type_rationale"(한 줄),'
-    '"confidence"(0~1),"title"(대화 제목, <need_title> 일 때만 8자 내외 한국어, 아니면 "")}.'
+AGENT_SYSTEM = (
+    "너는 '카탈로그 스튜디오'의 대화형 어시스턴트다. 사용자가 자기 AI 에이전트에 넣을 **카탈로그 구성요소**"
+    "를 만들도록 돕는 게 유일한 목적이다. 구성요소 4종:\n"
+    "- context: 항상 주입되는 배경지식/규칙\n- skill: 작업 절차(how-to)\n"
+    "- mcp: 외부 도구/서버 연결\n- hook: 요청 전후 자동 실행되는 검사·동작\n\n"
+    "가장 중요한 원칙 — 되묻지 말고 만들어라(draft-first):\n"
+    "- 사용자가 대략의 목표만 말해도 곧바로 draft_component 로 구체적인 v1 초안을 만들어 보여줘라. 세부(전환 "
+    "스타일·BGM 종류·이모지 소스 등)는 네가 합리적으로 가정해 채우고, 어떻게 가정했는지 한 줄로 알린 뒤 사용자가 "
+    "고치게 하라.\n"
+    "- '먼저 ~부터 만들어볼까요?', '어떤 걸 포함할지 말씀해 주세요' 처럼 허락·정보를 구걸하지 마라. 그냥 만든다.\n"
+    "- 이미 답한 걸 또 묻지 마라. 질문은 방향 자체를 정말 못 정할 때만 딱 1개.\n\n"
+    "그 밖의 원칙:\n"
+    "1) 특정 카탈로그 항목명을 대며 '뭐야?' 라고 하면 반드시 get_catalog_item 으로 조회해서 설명하라"
+    "(추측·엉뚱한 나열 금지).\n"
+    "2) 기존에 쓸 만한 게 있는지 궁금하면 search_catalog 로 확인하라. 점수가 낮으면 솔직히 '없다' 하고 새로 "
+    "만들어라 — 무관한 목록을 주르륵 나열하지 마라.\n"
+    "3) 에이전트에 여러 구성요소(skill·context·mcp·hook)가 필요하면 draft_component 를 여러 번 불러 각각 만들어라 "
+    "— 서로 덮어쓰지 않고 세트로 쌓인다. 사용자가 '전부/다/구성해줘' 라고 하면 필요한 것들을 차례로 만든 뒤 "
+    "assemble_harness 로 하나의 에이전트(하네스)로 묶어라.\n"
+    "4) mcp/skill 을 만들 땐 web_search 로 실존하는 도구·API·서버·리소스를 먼저 확인하고 그 결과에 근거해 "
+    "구체적으로 만들어라(지어내기 금지). 마땅한 실존 mcp 가 없으면 **묻지 말고** skill/hook 으로 대체해 곧장 만들고, "
+    "'실존 mcp 가 없어 skill 로 대체했다'고 한 줄로 알려라.\n"
+    "5) 짧고 자연스러운 한국어로. 메뉴처럼 '1. 2. 3. 어떤 걸 고르시겠어요?' 로 강요하지 마라."
 )
 
 
-def _types_block() -> str:
-    return "\n".join(f"- {t}: {d}" for t, d in TYPE_MEANINGS.items())
+def _history_to_messages(history: list[dict[str, Any]], user_msg: str) -> list[dict[str, Any]]:
+    """저장된 턴 이력 + 현재 메시지를 LLM 대화로. 연속 동일 role 은 합친다(Anthropic 교대 규칙 대비)."""
+    msgs: list[dict[str, Any]] = []
+    for m in history:
+        role = "assistant" if m.get("role") == "assistant" else "user"
+        content = str(m.get("content") or "").strip()
+        if not content:
+            continue
+        if msgs and msgs[-1]["role"] == role:
+            msgs[-1]["content"] += "\n" + content
+        else:
+            msgs.append({"role": role, "content": content})
+    if msgs and msgs[-1]["role"] == "user":
+        msgs[-1]["content"] += "\n" + user_msg
+    else:
+        msgs.append({"role": "user", "content": user_msg})
+    return msgs
 
 
-def _compact_history(history: list[dict[str, Any]], limit: int = 8) -> str:
-    tail = history[-limit:]
-    lines = [f'{m.get("role", "user")}: {str(m.get("content", ""))[:400]}' for m in tail]
-    return "\n".join(lines) or "(없음)"
+# ─────────────────────────── 도구 구현 ───────────────────────────
+
+_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "get_catalog_item",
+        "description": "이름 또는 id 로 특정 카탈로그 항목을 조회해 설명(summary/description/능력)을 얻는다. "
+        "사용자가 특정 항목명을 언급하며 '뭐야?/설명해줘' 라고 하면 반드시 이걸로 조회해 답하라.",
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "항목 이름 또는 id"}},
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_catalog",
+        "description": "카탈로그에서 관련 구성요소를 시맨틱 검색. 사용자가 만들려는 것에 쓸 만한 기존 항목이 "
+        "있는지 확인용. 결과 점수가 낮으면 관련도가 약한 것이니 솔직히 '없다'고 판단하라.",
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "검색어(무엇이 필요한지)"}},
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "draft_component",
+        "description": "카탈로그 구성요소 초안을 하나 만들거나 수정한다(초안 세트에 추가/갱신 — 기존 것을 "
+        "덮어쓰지 않음). 에이전트에 여러 구성요소가 필요하면 여러 번 호출하라. type 은 요구에 맞게 고른다.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "component_type": {"type": "string", "enum": list(COMPONENT_TYPES)},
+                "instruction": {"type": "string", "description": "만들/고칠 구성요소의 구체 설명(한국어)"},
+            },
+            "required": ["component_type", "instruction"],
+        },
+    },
+    {
+        "name": "assemble_harness",
+        "description": "지금까지 만든 초안 구성요소들을 하나의 실행 가능한 에이전트(하네스)로 묶는다. "
+        "사용자가 '구성해줘/조립해줘/에이전트로 만들어줘' 라고 하거나 필요한 구성요소가 갖춰졌을 때 호출. "
+        "먼저 draft_component 로 구성요소를 만들어 둔 뒤 호출하라.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "에이전트(하네스) 이름"},
+                "description": {"type": "string", "description": "에이전트 설명(선택)"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "web_search",
+        "description": "웹에서 실존하는 도구/API/MCP 서버/리소스를 검색한다. mcp 나 skill 을 만들 때 진짜 존재하는 "
+        "것에 근거하려면 먼저 이걸로 확인하라(예: '영상 편집 API', 'MCP server video', '무료 상업용 BGM'). "
+        "지어내지 말고 검색 결과에 근거해 구체적으로 만들어라.",
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "검색어"}},
+            "required": ["query"],
+        },
+    },
+]
 
 
-def classify(
-    history: list[dict[str, Any]],
-    user_msg: str,
-    *,
-    has_draft: bool,
-    draft_type: str,
-    has_title: bool,
-    complete: CompleteFn,
-) -> Decision:
-    """라우터 호출 → Decision. 실패 시 안전 폴백(author/context)."""
-    system = _ROUTER_SYSTEM.replace("<types>", _types_block()).replace(
-        "<need_title>", "제목이 아직 없음" if not has_title else "제목이 이미 있음"
-    )
-    payload = {
-        "history": _compact_history(history),
-        "user_message": user_msg,
-        "current_draft": {"exists": has_draft, "type": draft_type or None},
-        "need_title": not has_title,
-    }
-    try:
-        data = complete(system, json.dumps(payload, ensure_ascii=False), 400)
-        if not isinstance(data, dict):
-            raise ValueError("router 응답이 JSON 오브젝트가 아님")
-        intent = str(data.get("intent") or "").strip()
-        if intent not in INTENTS:
-            intent = "refine" if has_draft else "author"
-        ctype = data.get("type")
-        ctype = ctype if ctype in COMPONENT_TYPES else (draft_type or "context")
-        title = str(data.get("title") or "").strip() or None
-        return Decision(
-            intent=intent,
-            type=ctype,
-            confidence=float(data.get("confidence") or 0.0),
-            rationale=str(data.get("type_rationale") or "")[:200],
-            title=title if not has_title else None,
-        )
-    except Exception:  # noqa: BLE001 — 라우터 실패는 안전 폴백(계속 진행)
-        return Decision(
-            intent="refine" if has_draft else "author",
-            type=draft_type or "context",
-            confidence=0.0,
-            rationale="자동 분류 실패 — 기본값 적용",
-            title=None,
-        )
-
-
-# ─────────────────────────── 2) 분기 실행 ───────────────────────────
-
-
-def execute(
-    decision: Decision,
-    history: list[dict[str, Any]],
-    user_msg: str,
-    current_draft: Component | None,
-    *,
-    complete: CompleteFn,
+def _build_tools(
     recommender: Any,
-    forced_type: str | None = None,
-) -> TurnResult:
-    """판정에 따라 추천/저작/리파인을 실행하고 프로즈 스트리밍 입력을 채운다."""
-    ctype = forced_type if forced_type in COMPONENT_TYPES else decision.type
+    registry: Any,
+    complete: CompleteFn,
+    holder: dict[str, Any],
+    forced_type: str | None,
+    search_key: str,
+) -> tuple[list[dict[str, Any]], Callable[[str, dict[str, Any]], tuple[str, list[dict[str, Any]]]]]:
+    """holder = {"components": [Component...], "harness": {...}|None} — 대화의 초안 세트(가변)."""
+
+    def dispatch(name: str, args: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+        if name == "get_catalog_item":
+            return _tool_get(registry, str(args.get("query") or ""))
+        if name == "search_catalog":
+            return _tool_search(recommender, str(args.get("query") or ""))
+        if name == "draft_component":
+            return _tool_draft(complete, holder, forced_type, args)
+        if name == "assemble_harness":
+            return _tool_assemble(holder, args)
+        if name == "web_search":
+            return (web_search(search_key, str(args.get("query") or "")), [])
+        return (f"알 수 없는 도구: {name}", [])
+
+    return _TOOLS, dispatch
+
+
+def _drafts_event(components: list[Component]) -> dict[str, Any]:
+    return {"type": "drafts", "components": [c.model_dump() for c in components]}
+
+
+def _tool_get(registry: Any, query: str) -> tuple[str, list[dict[str, Any]]]:
+    q = query.strip().lower()
+    if not q:
+        return ("(빈 조회)", [])
+    hit = registry.get(query)
+    if hit is None:
+        comps = registry.all()
+        exact = [c for c in comps if c.name.lower() == q or c.id.lower() == q]
+        if exact:
+            hit = exact[0]
+        else:
+            sub = [c for c in comps if q in c.name.lower() or q in c.id.lower()]
+            if len(sub) == 1:
+                hit = sub[0]
+            elif len(sub) > 1:
+                names = ", ".join(f"{c.name}[{c.type}]" for c in sub[:5])
+                return (f"'{query}' 후보 여러 개: {names}. 어느 것인지 사용자에게 되물어라.", [])
+    if hit is None:
+        return (f"'{query}' 을(를) 카탈로그에서 찾지 못함. 존재하지 않는 항목일 수 있음.", [])
+    info = {
+        "id": hit.id, "name": hit.name, "type": hit.type, "summary": hit.summary,
+        "description": (hit.description or "")[:600], "provides": hit.provides, "requires": hit.requires,
+    }
+    return (json.dumps(info, ensure_ascii=False), [])
+
+
+def _tool_search(recommender: Any, query: str) -> tuple[str, list[dict[str, Any]]]:
+    recs = _recommend(recommender, query, top_k=5)
+    if not recs:
+        return ("검색 결과 없음.", [{"type": "recommendations", "items": [], "reused": False}])
+    lines = [
+        f"- {r['name']} [{r['type']}] 점수={r['score']:.2f} — {(r.get('summary') or '')[:80]}"
+        for r in recs
+    ]
+    top = float(recs[0].get("score", 0.0))
+    weak = "\n(주의: 최고 점수가 낮음 — 관련도 약함. 딱 맞는 게 없을 수 있으니 새로 만들자고 제안하라.)"
+    note = "" if top >= 1.0 else weak
+    return ("\n".join(lines) + note, [{"type": "recommendations", "items": recs, "reused": False}])
+
+
+def _tool_draft(
+    complete: CompleteFn, holder: dict[str, Any], forced_type: str | None, args: dict[str, Any]
+) -> tuple[str, list[dict[str, Any]]]:
     if forced_type in COMPONENT_TYPES:
-        decision.type = forced_type
-
-    if decision.intent == "recommend":
-        recs = _recommend(recommender, user_msg)
-        return TurnResult(decision, recommendations=recs, prose_system=_PROSE_SYSTEM,
-                          prose_user=_prose("recommend", recs=recs, user_msg=user_msg))
-
-    if decision.intent == "clarify":
-        return TurnResult(decision, prose_system=_PROSE_SYSTEM,
-                          prose_user=_prose("clarify", user_msg=user_msg, rationale=decision.rationale))
-
-    if decision.intent == "chitchat":
-        return TurnResult(decision, prose_system=_PROSE_SYSTEM, prose_user=_prose("chitchat", user_msg=user_msg))
-
-    if decision.intent == "refine" and current_draft is not None:
-        draft = author_component(user_msg, current_draft.type, current_draft, complete=complete)
-        return TurnResult(decision, draft=draft, prose_system=_PROSE_SYSTEM,
-                          prose_user=_prose("refine", draft=draft, user_msg=user_msg))
-
-    # author (refine 인데 초안이 없으면 여기로 폴백)
-    recs = _recommend(recommender, user_msg, top_k=4)
-    # 재사용 제안은 '같은 타입'의 강한 매칭일 때만 — 훅을 원했는데 mcp 를 권하는 오탐을 막는다.
-    # (능력 일치가 랭킹을 지배해 타입이 달라도 점수가 높게 나오므로 타입 일치를 필수 조건으로 둔다.)
-    strong = [r for r in recs if r.get("type") == ctype and float(r.get("score", 0.0)) >= HIGH_MATCH_SCORE]
-    if strong and not _wants_new(user_msg):
-        # 高매칭 → 새로 만들기 전에 재사용 제안(카탈로그 비대화 방지). 초안은 만들지 않는다.
-        return TurnResult(decision, recommendations=strong, reused=True, prose_system=_PROSE_SYSTEM,
-                          prose_user=_prose("reuse", recs=strong, user_msg=user_msg, ctype=ctype))
-    draft = author_component(user_msg, ctype or "context", None, complete=complete)
-    related = [r for r in recs if float(r.get("score", 0.0)) >= 0.6][:3]
-    return TurnResult(decision, draft=draft, recommendations=related, prose_system=_PROSE_SYSTEM,
-                      prose_user=_prose("author", draft=draft, user_msg=user_msg, related=related))
+        ctype = forced_type
+    else:
+        raw = args.get("component_type")
+        ctype = raw if raw in COMPONENT_TYPES else "context"
+    instruction = str(args.get("instruction") or "").strip()
+    comps: list[Component] = holder["components"]
+    # 같은 id(=이름) 초안이 이미 있으면 그걸 prior 로 리파인 후 교체, 없으면 세트에 추가(멀티 초안).
+    comp = author_component(instruction, ctype, None, complete=complete)
+    replaced = False
+    for i, existing in enumerate(comps):
+        if existing.id == comp.id:
+            comps[i] = author_component(instruction, ctype, existing, complete=complete)
+            comp = comps[i]
+            replaced = True
+            break
+    if not replaced:
+        comps.append(comp)
+    listing = ", ".join(f"[{c.type}] {c.name}" for c in comps)
+    summary = (
+        f"초안 '{comp.name}' [{comp.type}] {'수정' if replaced else '추가'}됨. "
+        f"현재 초안 세트({len(comps)}개): {listing}."
+    )
+    return (summary, [_drafts_event(comps)])
 
 
-def _wants_new(user_msg: str) -> bool:
-    """사용자가 '새로/직접 만들기'를 명시하면 재사용 제안을 건너뛰고 바로 저작한다."""
-    m = user_msg.lower()
-    return any(k in m for k in ("새로", "그래도 만들", "직접 만들", "무시하고"))
+def _tool_assemble(holder: dict[str, Any], args: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    comps: list[Component] = holder["components"]
+    if not comps:
+        return ("아직 만든 구성요소가 없음 — 먼저 draft_component 로 하나 이상 만들어라.", [])
+    name = str(args.get("name") or "에이전트").strip()
+    desc = str(args.get("description") or "").strip()
+    yaml_text = build_harness_yaml(comps, name, desc)
+    harness = {"name": name, "description": desc, "yaml": yaml_text, "component_ids": [c.id for c in comps]}
+    holder["harness"] = harness
+    summary = (
+        f"'{name}' 하네스로 {len(comps)}개 구성요소를 묶었어요(harness.yaml 생성). "
+        "사용자에게 캔버스에서 확인하고 저장하라고 안내하라."
+    )
+    return (summary, [{"type": "harness", "harness": harness}])
 
 
 def _recommend(recommender: Any, query: str, top_k: int = 5) -> list[dict[str, Any]]:
@@ -198,48 +255,49 @@ def _recommend(recommender: Any, query: str, top_k: int = 5) -> list[dict[str, A
         return []
     try:
         result = recommender.recommend(query, top_k=top_k)
-    except Exception:  # noqa: BLE001 — 빈 카탈로그/임베더 문제는 추천 없음으로
+    except Exception:  # noqa: BLE001 — 빈 카탈로그/임베더 문제는 결과 없음으로
         return []
-    out: list[dict[str, Any]] = []
-    for r in result.recommendations:
-        d = r.model_dump() if hasattr(r, "model_dump") else dict(r)
-        out.append(d)
-    return out
+    return [r.model_dump() if hasattr(r, "model_dump") else dict(r) for r in result.recommendations]
 
 
-# ─────────────────────────── 3) 프로즈(스트리밍) 입력 ───────────────────────────
-
-_PROSE_SYSTEM = (
-    "너는 '카탈로그 스튜디오'의 친절한 어시스턴트다. 방금 처리한 결과를 바탕으로 사용자에게 한국어로 "
-    "자연스럽게 답한다(2~4문장, 마크다운 최소, JSON 금지).\n"
-    "- author/refine: 무슨 타입으로 무엇을 만들었/고쳤는지 한 줄로 요약하고, 오른쪽 캔버스에서 확인하고 "
-    "'저장'하거나 더 고쳐달라 하라고 안내한다.\n"
-    "- reuse: 이미 비슷한 게 있음을 알리고, 그걸 쓸지 아니면 '새로 만들기'라고 말할지 물어본다.\n"
-    "- recommend: 찾은 후보를 짧게 소개하고 고르라고 안내한다.\n"
-    "- clarify: 만들 대상을 좁히는 질문 1~2개를 던진다.\n"
-    "- chitchat: 짧게 답하고 무엇을 만들고 싶은지 유도한다.\n"
-    "과장·불필요한 사족 없이."
-)
+# ─────────────────────────── 에이전트 실행 ───────────────────────────
 
 
-def _prose(kind: str, **kw: Any) -> str:
-    """프로즈 스트리밍 호출의 user 페이로드 — 무슨 일이 있었는지 압축 전달."""
-    data: dict[str, Any] = {"kind": kind, "user_message": kw.get("user_msg", "")}
-    if kw.get("rationale"):
-        data["missing"] = kw["rationale"]
-    if kw.get("ctype"):
-        data["type"] = kw["ctype"]
-    draft = kw.get("draft")
-    if draft is not None:
-        data["draft"] = {
-            "type": draft.type, "name": draft.name, "summary": draft.summary,
-            "provides": draft.provides,
-        }
-    recs = kw.get("recs") or kw.get("related")
-    if recs:
-        data["matches"] = [
-            {"name": r.get("name"), "type": r.get("type"), "summary": r.get("summary"),
-             "score": round(float(r.get("score", 0.0)), 2)}
-            for r in recs[:5]
-        ]
-    return json.dumps(data, ensure_ascii=False, default=str)
+def run_agent(
+    history: list[dict[str, Any]],
+    user_msg: str,
+    current_components: list[Component],
+    current_harness: dict[str, Any] | None,
+    *,
+    provider: str,
+    model: str,
+    api_key: str,
+    complete: CompleteFn,
+    recommender: Any,
+    registry: Any,
+    forced_type: str | None = None,
+    search_key: str = "",
+) -> Iterator[dict[str, Any]]:
+    """한 턴 — tool-use 루프 이벤트를 그대로 흘린다(status/side/token/final).
+
+    초안 세트(구성요소들)와 하네스는 side 이벤트(type=drafts / type=harness)로 나온다.
+    """
+    holder: dict[str, Any] = {"components": list(current_components), "harness": current_harness}
+    tools, dispatch = _build_tools(recommender, registry, complete, holder, forced_type, search_key)
+    messages = _history_to_messages(history, user_msg)
+    yield from run_tool_loop(provider, model, api_key, AGENT_SYSTEM, messages, tools, dispatch)
+
+
+def suggest_title(complete: CompleteFn, first_user: str, reply: str) -> str | None:
+    """첫 턴 대화 제목 자동 생성(8자 내외). 실패하면 None(제목 없음 유지)."""
+    try:
+        data = complete(
+            '대화 제목을 8자 내외 한국어 한 개로. JSON 으로만: {"title":"..."}.',
+            json.dumps({"user": first_user[:200], "assistant": reply[:200]}, ensure_ascii=False),
+            60,
+        )
+        if isinstance(data, dict):
+            return (str(data.get("title") or "").strip() or None)
+    except Exception:  # noqa: BLE001 — 제목 실패는 치명적 아님
+        return None
+    return None

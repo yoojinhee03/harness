@@ -93,7 +93,7 @@ class ConversationStore:
                 .order_by(studio_messages.c.id.asc())
             ).mappings().all()
         doc = dict(row)
-        doc["draft_component"] = _loads(row.get("draft"))
+        doc["draft_set"] = _load_set(row.get("draft"))  # {"components":[...], "harness":{...}|None}
         doc["messages"] = [_message_doc(m) for m in msgs]
         return doc
 
@@ -121,9 +121,17 @@ class ConversationStore:
             "content": content, "meta": meta or None, "created_at": ts,
         }
 
-    def set_draft(self, scope_key: str, cid: str, draft_json: str, draft_type: str) -> int:
-        """현재 초안 교체 + 리비전(version) +1. 반환: 새 version."""
+    def save_set(
+        self, scope_key: str, cid: str, components: list[dict[str, Any]], harness: dict[str, Any] | None
+    ) -> int:
+        """초안 세트(구성요소들 + 조립된 하네스) 통째 저장 + 리비전 +1. 반환: 새 version.
+
+        구버전의 단일 draft 를 대체한다 — 여러 구성요소를 덮어쓰지 않고 함께 보관(멀티 초안).
+        `draft` 컬럼(Text)에 {"components":[...],"harness":{...}} JSON 으로 담는다(스키마 불변).
+        """
         ts = now_iso()
+        payload = json.dumps({"components": components, "harness": harness}, ensure_ascii=False, default=str)
+        types = ",".join(sorted({str(c.get("type") or "") for c in components})) if components else ""
         with self.engine.begin() as conn:
             cur = conn.execute(
                 select(studio_conversations.c.version).where(
@@ -134,7 +142,7 @@ class ConversationStore:
             conn.execute(
                 update(studio_conversations)
                 .where(and_(studio_conversations.c.scope == scope_key, studio_conversations.c.id == cid))
-                .values(draft=draft_json, draft_type=draft_type, version=version, updated_at=ts)
+                .values(draft=payload, draft_type=types, version=version, updated_at=ts)
             )
         return version
 
@@ -180,6 +188,18 @@ def _loads(raw: Any) -> Any:
         return json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return None
+
+
+def _load_set(raw: Any) -> dict[str, Any]:
+    """draft 컬럼 → {"components":[...], "harness":{...}|None}. 구버전(단일 dict)도 흡수."""
+    data = _loads(raw)
+    if isinstance(data, dict) and "components" in data:
+        return {"components": data.get("components") or [], "harness": data.get("harness")}
+    if isinstance(data, dict):  # 구버전: 단일 컴포넌트
+        return {"components": [data], "harness": None}
+    if isinstance(data, list):
+        return {"components": data, "harness": None}
+    return {"components": [], "harness": None}
 
 
 def _message_doc(row: Any) -> dict[str, Any]:

@@ -236,21 +236,30 @@ export interface StudioConversationSummary {
   updated_at: string;
 }
 
+/** 조립된 에이전트(하네스) — 초안 구성요소들을 묶은 harness.yaml. */
+export interface StudioHarness {
+  name: string;
+  description?: string;
+  yaml: string;
+  component_ids?: string[];
+}
+
+/** 대화의 초안 세트 — 여러 구성요소 + (조립됐으면) 하네스. */
+export interface StudioDraftSet {
+  components: AuthoredComponent[];
+  harness: StudioHarness | null;
+}
+
 /** 어시스턴트 메시지의 구조화 페이로드 — 프런트가 인라인 카드로 렌더. */
 export interface StudioMessageMeta {
-  intent?: string; // clarify|recommend|author|refine|chitchat
-  type?: string | null;
-  confidence?: number;
-  rationale?: string; // 타입 분류 근거
-  reused?: boolean; // 재사용 제안으로 전환
+  components?: { type: string; name: string }[] | null; // 이 턴 이후 초안 세트 요약
+  harness?: string | null; // 조립된 하네스 이름
   recommendations?: Recommendation[] | null;
-  draft?: AuthoredComponent | null;
-  draft_version?: number | null;
+  version?: number | null;
+  rationale?: string;
   kind?: string; // "commit" | "test" (인라인 시스템 메시지)
-  component_id?: string;
-  validation?: ComponentValidation;
-  status?: string;
-  result?: ComponentTestResult;
+  saved?: { id: string; type: string; name: string; status: string }[];
+  results?: { id: string; name: string; pass: boolean; risk?: string }[];
 }
 
 export interface StudioMessage {
@@ -262,22 +271,23 @@ export interface StudioMessage {
 }
 
 export interface StudioConversation extends StudioConversationSummary {
-  draft_component: AuthoredComponent | null;
+  draft_set: StudioDraftSet;
   messages: StudioMessage[];
 }
 
 export interface StudioCommitResult {
   ok: boolean;
-  component: ComponentSummary & { component: AuthoredComponent; validation: ComponentValidation };
+  saved: { id: string; type: string; name: string; status: string; validation: ComponentValidation }[];
+  harness: { id: string; name: string; version: number } | null;
   conversation_id: string;
 }
 
 /** 대화 한 턴의 SSE 이벤트(스트리밍) — 엔드포인트가 단계별로 흘린다. */
 export type StudioChatEvent =
-  | { event: "status"; data: { phase: string; label: string } }
-  | { event: "router"; data: { intent: string; type: string | null; confidence: number; rationale: string } }
+  | { event: "status"; data: { label: string } }
   | { event: "recommendations"; data: { items: Recommendation[]; reused: boolean } }
-  | { event: "draft"; data: { component: AuthoredComponent; type: ComponentType; version: number } }
+  | { event: "drafts"; data: { components: AuthoredComponent[]; version: number } }
+  | { event: "harness"; data: { harness: StudioHarness; version: number } }
   | { event: "title"; data: { title: string } }
   | { event: "token"; data: { text: string } }
   | { event: "done"; data: { message_id: number; version: number | null; title: string | null } }
@@ -290,17 +300,20 @@ export interface LlmSettingsStatus {
   provider: LlmProvider;
   llm: { set: boolean; masked: string | null }; // 선택 provider 의 LLM 키
   embedding: { set: boolean; masked: string | null }; // OpenAI 임베딩 키
+  search: { set: boolean; masked: string | null }; // 웹검색(Tavily) 키
 }
 
 export interface LlmSettingsInput {
   provider?: string;
   llm_key?: string | null; // null=유지(생략), ""=삭제, 값=교체
   embedding_key?: string | null;
+  search_key?: string | null;
 }
 
 export interface LlmVerifyResult {
   llm: string; // "ok" | "unset" | "error: X"
   embedding: string;
+  search: string;
 }
 
 export interface HarnessInput {
@@ -395,6 +408,14 @@ export const api = {
     send<HarnessDoc>("PUT", `/harnesses/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`, body),
   deleteHarness: (id: string, scope = "personal") =>
     send<{ ok: boolean }>("DELETE", `/harnesses/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`),
+  // 저장된 하네스(에이전트) 검증·내보내기 — 하네스 상세(구 생성 위저드 C·D 대체).
+  validateHarness: (id: string, scope = "personal") =>
+    post<ResolveResult>(`/harnesses/${encodeURIComponent(id)}/validate?scope=${encodeURIComponent(scope)}`, undefined),
+  ejectHarness: (id: string, scope: string, target: string) =>
+    post<EjectResult>(
+      `/harnesses/${encodeURIComponent(id)}/eject?scope=${encodeURIComponent(scope)}&target=${encodeURIComponent(target)}`,
+      undefined,
+    ),
 
   // ── 사용자별 LLM 설정 (provider·모델·키; 키는 서버에서 암호화·마스킹) ──
   getLlmSettings: () => send<LlmSettingsStatus>("GET", "/settings/llm"),
@@ -438,7 +459,7 @@ export const api = {
   commitConversation: (id: string, scope: string, body: { type?: string | null; name?: string }) =>
     post<StudioCommitResult>(`/studio/conversations/${encodeURIComponent(id)}/commit?scope=${encodeURIComponent(scope)}`, body),
   testConversation: (id: string, scope = "personal") =>
-    post<{ result: ComponentTestResult; status: ComponentStatus; message: StudioMessage }>(
+    post<{ results: { id: string; name: string; pass: boolean; risk?: string }[]; message: StudioMessage }>(
       `/studio/conversations/${encodeURIComponent(id)}/test?scope=${encodeURIComponent(scope)}`,
       undefined,
     ),

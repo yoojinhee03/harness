@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 # 모델 선택 UI 는 제거 — provider 별 기본 모델을 쓴다.
@@ -111,6 +111,137 @@ def _anthropic_stream(model: str, api_key: str, system: str, user: str, max_toke
         for text in stream.text_stream:
             if text:
                 yield text
+
+
+# dispatch(tool_name, args) -> (LLM 에게 돌려줄 결과 문자열, [부수효과 이벤트...])
+type ToolDispatch = Callable[[str, dict[str, Any]], tuple[str, list[dict[str, Any]]]]
+
+
+def run_tool_loop(
+    provider: str,
+    model: str,
+    api_key: str,
+    system: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    dispatch: ToolDispatch,
+    *,
+    max_rounds: int = 5,
+    max_tokens: int = 1500,
+) -> Iterator[dict[str, Any]]:
+    """provider 무관 tool-use 루프(동기 제너레이터) — '진짜 대화' 에이전트의 심장.
+
+    LLM 이 tool(search_catalog/get_catalog_item/draft_component 등)을 자율 호출하면 dispatch 로 실행하고
+    결과를 되먹여 다시 부른다. 도구 호출이 없어지면 그 응답이 최종 답. 이벤트를 yield:
+      {"type":"status","label"}  — 도구 실행 알림(프런트 상태줄)
+      {"type":"side","event":{}} — 도구 부수효과(초안·추천 등, 엔드포인트가 SSE 로 중계)
+      {"type":"token","text"}    — 최종 응답 청크(타이핑 느낌)
+      {"type":"final","text"}    — 최종 응답 전문(영속용)
+    tools 는 provider 무관 스펙: [{"name","description","parameters":{json schema}}].
+    """
+    if provider == "openai":
+        yield from _openai_tool_loop(model, api_key, system, messages, tools, dispatch, max_rounds, max_tokens)
+    else:
+        yield from _anthropic_tool_loop(model, api_key, system, messages, tools, dispatch, max_rounds, max_tokens)
+
+
+def _chunk_text(text: str, size: int = 3) -> Iterator[dict[str, Any]]:
+    for i in range(0, len(text), size):
+        yield {"type": "token", "text": text[i : i + size]}
+
+
+def _tool_label(name: str, args: dict[str, Any]) -> str:
+    q = str(args.get("query") or args.get("instruction") or "")[:30]
+    return {
+        "get_catalog_item": f"'{q}' 조회 중…",
+        "search_catalog": f"카탈로그 검색 중… ({q})",
+        "web_search": f"웹 검색 중… ({q})",
+        "draft_component": "초안 작성 중…",
+        "assemble_harness": "에이전트 조립 중…",
+    }.get(name, "처리 중…")
+
+
+def _openai_tool_loop(
+    model: str, api_key: str, system: str, messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]], dispatch: ToolDispatch, max_rounds: int, max_tokens: int,
+) -> Iterator[dict[str, Any]]:
+    openai = _import_openai()
+    client = openai.OpenAI(api_key=api_key)
+    oai_tools = [
+        {"type": "function", "function": {"name": t["name"], "description": t["description"],
+                                          "parameters": t["parameters"]}}
+        for t in tools
+    ]
+    convo: list[dict[str, Any]] = [{"role": "system", "content": system}, *messages]
+    for _ in range(max_rounds):
+        resp = client.chat.completions.create(
+            model=model, max_tokens=max_tokens, temperature=0.3, tools=oai_tools, messages=convo
+        )
+        msg = resp.choices[0].message
+        if msg.tool_calls:
+            convo.append({
+                "role": "assistant", "content": msg.content,
+                "tool_calls": [
+                    {"id": tc.id, "type": "function",
+                     "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                    for tc in msg.tool_calls
+                ],
+            })
+            for tc in msg.tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                yield {"type": "status", "label": _tool_label(tc.function.name, args)}
+                result, side = dispatch(tc.function.name, args)
+                for ev in side:
+                    yield {"type": "side", "event": ev}
+                convo.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+            continue
+        text = msg.content or ""
+        yield from _chunk_text(text)
+        yield {"type": "final", "text": text}
+        return
+    # 도구만 계속 부르면 강제 종료 — 도구 없이 한 번 더 답하게 한다.
+    resp = client.chat.completions.create(model=model, max_tokens=max_tokens, temperature=0.3, messages=convo)
+    text = resp.choices[0].message.content or ""
+    yield from _chunk_text(text)
+    yield {"type": "final", "text": text}
+
+
+def _anthropic_tool_loop(
+    model: str, api_key: str, system: str, messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]], dispatch: ToolDispatch, max_rounds: int, max_tokens: int,
+) -> Iterator[dict[str, Any]]:
+    anthropic = _import_anthropic()
+    client = anthropic.Anthropic(api_key=api_key)
+    a_tools = [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]} for t in tools]
+    convo: list[dict[str, Any]] = list(messages)
+    for _ in range(max_rounds):
+        resp = client.messages.create(
+            model=model, max_tokens=max_tokens, system=system, tools=a_tools, messages=convo
+        )
+        tool_uses = [b for b in resp.content if b.type == "tool_use"]
+        text = "".join(b.text for b in resp.content if b.type == "text")
+        if tool_uses:
+            convo.append({"role": "assistant", "content": [b.model_dump() for b in resp.content]})
+            results: list[dict[str, Any]] = []
+            for tu in tool_uses:
+                args = dict(tu.input) if isinstance(tu.input, dict) else {}
+                yield {"type": "status", "label": _tool_label(tu.name, args)}
+                result, side = dispatch(tu.name, args)
+                for ev in side:
+                    yield {"type": "side", "event": ev}
+                results.append({"type": "tool_result", "tool_use_id": tu.id, "content": result})
+            convo.append({"role": "user", "content": results})
+            continue
+        yield from _chunk_text(text)
+        yield {"type": "final", "text": text}
+        return
+    resp = client.messages.create(model=model, max_tokens=max_tokens, system=system, messages=convo)
+    text = "".join(b.text for b in resp.content if b.type == "text")
+    yield from _chunk_text(text)
+    yield {"type": "final", "text": text}
 
 
 def verify_key(provider: str, model: str, api_key: str) -> None:

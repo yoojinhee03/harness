@@ -163,6 +163,7 @@ app_settings = Table(
     Column("provider", String(16), nullable=False, default="anthropic"),  # LLM provider: anthropic | openai
     Column("llm_key_enc", Text, nullable=False, default=""),  # 선택 provider 의 LLM 키(Fernet 암호문)
     Column("embedding_key_enc", Text, nullable=False, default=""),  # OpenAI 임베딩 키
+    Column("search_key_enc", Text, nullable=False, default="", server_default=""),  # 웹검색(Tavily) 키
     Column("updated_at", String(40), nullable=False),
 )
 

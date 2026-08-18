@@ -182,6 +182,7 @@ function LlmSettingsSection() {
   const [provider, setProvider] = useState<LlmProvider>("anthropic");
   const [llmKey, setLlmKey] = useState("");
   const [embKey, setEmbKey] = useState("");
+  const [searchKey, setSearchKey] = useState("");
   const [initd, setInitd] = useState(false);
 
   useEffect(() => {
@@ -197,6 +198,7 @@ function LlmSettingsSection() {
       qc.invalidateQueries({ queryKey: ["llm-settings"] });
       setLlmKey("");
       setEmbKey("");
+      setSearchKey("");
       toast("저장됨");
     },
     onError: (e: Error) => toast(e.message || "저장 실패", "error"),
@@ -288,6 +290,45 @@ function LlmSettingsSection() {
             </Button>
             <Button
               onClick={() => saveM.mutate({ embedding_key: embKey.trim() ? embKey.trim() : null })}
+              disabled={saveM.isPending}
+            >
+              저장
+            </Button>
+          </div>
+        </Card>
+      </div>
+
+      {/* ③ 웹검색 키 */}
+      <div>
+        <h2 className="text-sm font-semibold text-fg">③ 웹검색 키 (Tavily)</h2>
+        <p className="mb-3 mt-0.5 text-sm text-muted">
+          스튜디오 에이전트가 <b className="text-fg">실존하는 도구·API·리소스</b>를 근거로 구성요소를 만들도록
+          하는 웹검색 키(Tavily). 없으면 검색 없이 아는 선에서 만듭니다.{" "}
+          <a href="https://tavily.com" target="_blank" rel="noreferrer" className="text-accent hover:underline">
+            tavily.com
+          </a>{" "}
+          에서 발급.
+        </p>
+        <Card className="space-y-4">
+          <KeyField
+            label="Tavily API 키"
+            current={s?.search}
+            value={searchKey}
+            onChange={setSearchKey}
+            onClear={() => saveM.mutate({ search_key: "" })}
+          />
+          <div className="flex items-center justify-end gap-2">
+            <VerifyBadge r={verify?.search} />
+            <Button
+              variant="subtle"
+              onClick={() => verifyM.mutate()}
+              disabled={verifyM.isPending || !s?.search.set}
+              title={s?.search.set ? "저장된 키로 최소 검색을 시도해 연동 확인" : "먼저 키를 저장하세요"}
+            >
+              {verifyM.isPending ? "확인 중…" : "연결 테스트"}
+            </Button>
+            <Button
+              onClick={() => saveM.mutate({ search_key: searchKey.trim() ? searchKey.trim() : null })}
               disabled={saveM.isPending}
             >
               저장
