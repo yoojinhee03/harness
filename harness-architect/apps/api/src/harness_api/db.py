@@ -120,6 +120,40 @@ user_component_versions = Table(
     Column("updated_at", String(40), nullable=False),
 )
 
+# 스튜디오 대화 — 채팅으로 카탈로그 구성요소를 만드는/추천받는 대화 스레드(1급 객체). 하네스처럼
+# 스코프(`personal:<uid>` / `team:<tid>`)로 격리한다. 대화당 산출물 1개: `draft`(현재 초안 Component
+# JSON, "" = 없음) + `draft_type`(오케스트레이터가 추론한 타입). commit 하면 user_components 로 저장하고
+# `component_id` 로 링크한다. `version` 은 초안 리비전 카운터(리파인마다 +1, diff 타임라인 근거).
+studio_conversations = Table(
+    "studio_conversations",
+    metadata,
+    Column("scope", String(160), primary_key=True),
+    Column("id", String(128), primary_key=True),
+    Column("owner_id", String(128), nullable=False),
+    Column("title", String(256), nullable=False, default=""),  # 자동 생성(첫 턴 요약)
+    Column("draft", Text, nullable=False, default=""),  # 현재 초안 Component.model_dump_json() ("" = 없음)
+    Column("draft_type", String(16), nullable=False, default=""),  # context | skill | mcp | hook (추론)
+    Column("component_id", String(128), nullable=True),  # commit 후 링크된 user_components.id
+    Column("status", String(16), nullable=False, default="active"),  # active | committed
+    Column("version", Integer, nullable=False, default=0),  # 초안 리비전(리파인 횟수)
+    Column("created_at", String(40), nullable=False),
+    Column("updated_at", String(40), nullable=False, index=True),
+)
+
+# 스튜디오 메시지 — 대화의 턴 이력. `meta` 는 구조화 페이로드 JSON(intent/type 분류·추천 목록·초안
+# 스냅샷·테스트 결과 등)이라 프런트가 인라인 카드로 렌더한다. 전역 자동증가 id 로 대화 내 순서를 잡는다.
+studio_messages = Table(
+    "studio_messages",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("scope", String(160), nullable=False, index=True),
+    Column("conversation_id", String(128), nullable=False, index=True),
+    Column("role", String(16), nullable=False),  # user | assistant
+    Column("content", Text, nullable=False, default=""),  # 사람이 읽는 텍스트
+    Column("meta", Text, nullable=False, default=""),  # 구조화 페이로드 JSON("" = 없음)
+    Column("created_at", String(40), nullable=False),
+)
+
 # 앱(인스턴스) 레벨 LLM 설정 — 화면에서 등록하는 LLM/임베딩 키(at-rest 암호화). 서버 env 키는 안 쓴다.
 # 단일 행(id='app'). 카탈로그 임베딩 인덱스가 전역이라 키도 인스턴스 단위(자체호스팅/단일조직 전제).
 app_settings = Table(
