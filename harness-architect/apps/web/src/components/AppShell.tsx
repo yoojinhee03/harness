@@ -16,7 +16,7 @@ const NAV: { key: View; label: string; icon: ReactNode }[] = [
 const TITLE: Record<View, { title: string; sub: string }> = {
   create: { title: "생성", sub: "설명 → 추천 → 검증 → harness.yaml" },
   catalog: { title: "카탈로그", sub: "추천 대상 구성요소" },
-  studio: { title: "스튜디오", sub: "채팅으로 구성요소 저작 → 검증·테스트 → 내 구성요소" },
+  studio: { title: "스튜디오", sub: "채팅으로 카탈로그 생성·추천 — 타입 자동분류, 대화별 저장" },
   harnesses: { title: "하네스", sub: "내 하네스 · 팀 공유 (실시간 동기화)" },
   settings: { title: "설정", sub: "API 키 · 품질 모드" },
   guide: { title: "사용가이드", sub: "처음 사용자를 위한 화면별 안내" },

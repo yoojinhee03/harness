@@ -222,6 +222,67 @@ export interface ComponentTestResult {
   reasons: string[];
 }
 
+// ── 스튜디오 대화 (채팅형 카탈로그 — 대화가 1급 객체) ──
+export interface StudioConversationSummary {
+  id: string;
+  scope: string;
+  owner_id: string;
+  title: string;
+  draft_type: string; // "" | context|skill|mcp|hook (자동 추론)
+  component_id: string | null; // commit 후 링크
+  status: string; // active | committed
+  version: number; // 초안 리비전
+  created_at: string;
+  updated_at: string;
+}
+
+/** 어시스턴트 메시지의 구조화 페이로드 — 프런트가 인라인 카드로 렌더. */
+export interface StudioMessageMeta {
+  intent?: string; // clarify|recommend|author|refine|chitchat
+  type?: string | null;
+  confidence?: number;
+  rationale?: string; // 타입 분류 근거
+  reused?: boolean; // 재사용 제안으로 전환
+  recommendations?: Recommendation[] | null;
+  draft?: AuthoredComponent | null;
+  draft_version?: number | null;
+  kind?: string; // "commit" | "test" (인라인 시스템 메시지)
+  component_id?: string;
+  validation?: ComponentValidation;
+  status?: string;
+  result?: ComponentTestResult;
+}
+
+export interface StudioMessage {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  meta: StudioMessageMeta | null;
+  created_at: string;
+}
+
+export interface StudioConversation extends StudioConversationSummary {
+  draft_component: AuthoredComponent | null;
+  messages: StudioMessage[];
+}
+
+export interface StudioCommitResult {
+  ok: boolean;
+  component: ComponentSummary & { component: AuthoredComponent; validation: ComponentValidation };
+  conversation_id: string;
+}
+
+/** 대화 한 턴의 SSE 이벤트(스트리밍) — 엔드포인트가 단계별로 흘린다. */
+export type StudioChatEvent =
+  | { event: "status"; data: { phase: string; label: string } }
+  | { event: "router"; data: { intent: string; type: string | null; confidence: number; rationale: string } }
+  | { event: "recommendations"; data: { items: Recommendation[]; reused: boolean } }
+  | { event: "draft"; data: { component: AuthoredComponent; type: ComponentType; version: number } }
+  | { event: "title"; data: { title: string } }
+  | { event: "token"; data: { text: string } }
+  | { event: "done"; data: { message_id: number; version: number | null; title: string | null } }
+  | { event: "error"; data: { detail: string } };
+
 // ── 앱 LLM/임베딩 키 설정 (화면 등록, 서버에서 암호화·마스킹) ──
 export type LlmProvider = "anthropic" | "openai";
 
@@ -365,7 +426,73 @@ export const api = {
     ),
   deleteComponent: (id: string, scope = "personal") =>
     send<{ ok: boolean }>("DELETE", `/components/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`),
+
+  // ── 대화형 스튜디오 (채팅 → 자동분류 → 추천/저작 → 저장/테스트) ──
+  listConversations: () => send<StudioConversationSummary[]>("GET", "/studio/conversations"),
+  createConversation: (scope = "personal") =>
+    post<StudioConversationSummary>(`/studio/conversations?scope=${encodeURIComponent(scope)}`, {}),
+  getConversation: (id: string, scope = "personal") =>
+    send<StudioConversation>("GET", `/studio/conversations/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`),
+  deleteConversation: (id: string, scope = "personal") =>
+    send<{ ok: boolean }>("DELETE", `/studio/conversations/${encodeURIComponent(id)}?scope=${encodeURIComponent(scope)}`),
+  commitConversation: (id: string, scope: string, body: { type?: string | null; name?: string }) =>
+    post<StudioCommitResult>(`/studio/conversations/${encodeURIComponent(id)}/commit?scope=${encodeURIComponent(scope)}`, body),
+  testConversation: (id: string, scope = "personal") =>
+    post<{ result: ComponentTestResult; status: ComponentStatus; message: StudioMessage }>(
+      `/studio/conversations/${encodeURIComponent(id)}/test?scope=${encodeURIComponent(scope)}`,
+      undefined,
+    ),
 };
+
+/** SSE 프레임 파싱(event/data 라인) — sse_starlette 형식. ping 코멘트 프레임은 null. */
+function parseStudioFrame(frame: string): StudioChatEvent | null {
+  let event = "message";
+  const dataLines: string[] = [];
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+  }
+  if (!dataLines.length) return null;
+  try {
+    return { event, data: JSON.parse(dataLines.join("\n")) } as StudioChatEvent;
+  } catch {
+    return null;
+  }
+}
+
+/** 대화 한 턴 — POST 후 응답 바디를 SSE 로 읽어 이벤트 콜백. EventSource(GET·헤더 불가) 대신 fetch 스트림. */
+export async function streamStudioChat(
+  id: string,
+  scope: string,
+  message: string,
+  forcedType: string | null,
+  onEvent: (ev: StudioChatEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const t = auth.token();
+  if (t) headers.authorization = `Bearer ${t}`;
+  const res = await fetch(
+    `${BASE}/studio/conversations/${encodeURIComponent(id)}/chat?scope=${encodeURIComponent(scope)}`,
+    { method: "POST", headers, body: JSON.stringify({ message, forced_type: forcedType }), signal },
+  );
+  if (res.status === 401) throw new Error("인증 필요 — 로그인하세요");
+  if (!res.ok || !res.body) throw new Error(`대화 실패: ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf = (buf + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
+    let idx: number;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const ev = parseStudioFrame(buf.slice(0, idx));
+      buf = buf.slice(idx + 2);
+      if (ev) onEvent(ev);
+    }
+  }
+}
 
 /** 저장소 변경(가시 스코프)을 SSE 로 실시간 구독. 토큰은 EventSource 제약상 쿼리로 전달. */
 export function subscribeHarnessEvents(onEvent: (type: string) => void): () => void {
@@ -383,6 +510,17 @@ export function subscribeComponentEvents(onEvent: (type: string) => void): () =>
   const t = auth.token();
   if (!t) return () => undefined;
   const es = new EventSource(`${BASE}/components/events?token=${encodeURIComponent(t)}`);
+  for (const ev of ["ready", "upsert", "delete"]) {
+    es.addEventListener(ev, () => onEvent(ev));
+  }
+  return () => es.close();
+}
+
+/** 스튜디오 대화 목록 변경(가시 스코프)을 SSE 로 구독 — 사이드바 실시간 갱신. */
+export function subscribeConversationEvents(onEvent: (type: string) => void): () => void {
+  const t = auth.token();
+  if (!t) return () => undefined;
+  const es = new EventSource(`${BASE}/studio/conversations/events?token=${encodeURIComponent(t)}`);
   for (const ev of ["ready", "upsert", "delete"]) {
     es.addEventListener(ev, () => onEvent(ev));
   }
