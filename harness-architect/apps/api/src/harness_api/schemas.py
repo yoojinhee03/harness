@@ -122,6 +122,20 @@ class ComponentAuthorBody(BaseModel):
     prior_id: str | None = None
 
 
+class StudioChatBody(BaseModel):
+    """스튜디오 대화 한 턴 — 사용자 메시지. forced_type 은 타입 자동분류를 사용자가 덮어쓸 때(탈출구)."""
+
+    message: str = Field(min_length=1)
+    forced_type: str | None = None  # context|skill|mcp|hook — 지정 시 라우터 추론을 무시
+
+
+class StudioCommitBody(BaseModel):
+    """대화의 현재 초안을 카탈로그 구성요소로 저장. type 은 분류 덮어쓰기, name 은 이름 덮어쓰기(선택)."""
+
+    type: str | None = None
+    name: str = ""
+
+
 class LlmSettingsBody(BaseModel):
     """앱 LLM/임베딩 키 저장. 키는 생략(None)=유지 · ""=삭제 · 값=교체(암호화 저장).
     provider 는 LLM provider(anthropic|openai). 임베딩은 OpenAI 고정(embedding_key)."""

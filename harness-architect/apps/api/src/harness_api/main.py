@@ -17,7 +17,7 @@ import logging
 import os
 import secrets
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any, cast
 from urllib.parse import urlencode
@@ -43,11 +43,13 @@ from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
 
 from .accounts import AccountStore
-from .authoring import author_component, test_component, validate_component
+from .authoring import COMPONENT_TYPES, author_component, test_component, validate_component
 from .catalog_store import CatalogStore, DbCatalogSource, sync_catalog
 from .component_store import ComponentStore, UserComponentSource, component_event_stream
+from .conversation_store import ConversationStore, conversation_event_stream
 from .llm_client import DEFAULT_MODEL
 from .llm_client import complete_json as _provider_complete_json
+from .llm_client import stream_text as _provider_stream_text
 from .llm_client import verify_key as _provider_verify_key
 from .llm_settings import AppSettingsStore
 from .observability import (
@@ -57,6 +59,8 @@ from .observability import (
     init_sentry,
     metrics_response,
 )
+from .orchestrator import classify as _orchestrate_classify
+from .orchestrator import execute as _orchestrate_execute
 from .schemas import (
     CatalogItem,
     ComponentAuthorBody,
@@ -69,6 +73,8 @@ from .schemas import (
     RecommendRequest,
     ResolveRequest,
     RunRequest,
+    StudioChatBody,
+    StudioCommitBody,
     TeamCreateBody,
     TokenCreateBody,
 )
@@ -95,6 +101,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.engine = engine
     app.state.store = HarnessStore(engine)
     app.state.component_store = ComponentStore(engine)  # 유저 저작 컴포넌트(스코프 격리)
+    app.state.conversation_store = ConversationStore(engine)  # 스튜디오 대화 스레드(스코프 격리)
     app.state.app_settings = AppSettingsStore(engine)  # 앱 레벨 LLM/임베딩 키(암호화, 화면 등록)
     app.state.accounts = AccountStore(engine)
     app.state.broadcaster = make_broadcaster()  # REDIS_URL 있으면 Redis(스케일아웃)
@@ -323,6 +330,10 @@ def _accounts(request: Request) -> AccountStore:
 
 def _component_store(request: Request) -> ComponentStore:
     return cast(ComponentStore, request.app.state.component_store)
+
+
+def _conversation_store(request: Request) -> ConversationStore:
+    return cast(ConversationStore, request.app.state.conversation_store)
 
 
 def _app_settings(request: Request) -> AppSettingsStore:
@@ -946,6 +957,314 @@ async def delete_component(
         raise HTTPException(status_code=404, detail=f"컴포넌트 '{cid}' 없음(scope={scope})")
     await _broadcaster(request).publish({"type": "delete", "kind": "component", "id": safe_id(cid), "scope": sk})
     return {"ok": True, "id": safe_id(cid), "scope": sk}
+
+
+# ── 스튜디오: 대화형 카탈로그 스튜디오 (채팅 → 자동분류 → 추천/저작 → 저장/테스트) ──
+# 대화가 1급 객체다. 매 턴을 오케스트레이터가 라우팅(clarify|recommend|author|refine|chitchat)하고,
+# 타입(context/skill/mcp/hook)은 자동 추론한다. 응답 프로즈는 SSE 토큰 스트리밍('진짜 챗봇' 느낌).
+
+
+def _sse(event: str, data: dict[str, Any]) -> dict[str, Any]:
+    return {"event": event, "data": json.dumps(data, ensure_ascii=False, default=str)}
+
+
+async def _astream_tokens(make_iter: Callable[[], Any]) -> AsyncIterator[str]:
+    """동기 토큰 제너레이터를 스레드로 브리지해 async 로 흘린다(이벤트 루프 블로킹 방지)."""
+    sentinel = object()
+    it = make_iter()
+
+    def _next() -> Any:
+        try:
+            return next(it)
+        except StopIteration:
+            return sentinel
+
+    while True:
+        item = await asyncio.to_thread(_next)
+        if item is sentinel:
+            break
+        yield cast(str, item)
+
+
+def _fallback_prose(intent: str, result: Any) -> str:
+    """스트리밍 프로즈 실패 시 결정적 폴백 문구(대화가 빈 응답으로 끝나지 않게)."""
+    if result.draft is not None:
+        return f"'{result.draft.name}' ({result.draft.type}) 초안을 만들었어요. 오른쪽에서 확인하고 저장하세요."
+    if result.recommendations:
+        return "관련 있어 보이는 기존 구성요소를 찾았어요. 오른쪽에서 골라보세요."
+    if intent == "clarify":
+        return "무엇을 만들고 싶은지 조금만 더 구체적으로 알려주세요."
+    return "무엇을 만들어 드릴까요? 예: '슬랙에 PR 알림 보내는 훅'."
+
+
+@app.post("/studio/conversations")
+async def create_conversation(
+    request: Request, scope: str = Query("personal"), user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    """새 대화 스레드 생성(빈 제목 — 첫 턴에서 자동 명명)."""
+    sk = _resolve_scope(request, user, scope, write=True)
+    doc = _conversation_store(request).create(sk, user["id"])
+    await _broadcaster(request).publish(
+        {"type": "upsert", "kind": "conversation", "id": doc["id"], "scope": sk, "conversation": doc}
+    )
+    return doc
+
+
+@app.get("/studio/conversations")
+def list_conversations(
+    request: Request,
+    limit: int | None = Query(default=None, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: dict[str, Any] = Depends(current_user),
+) -> list[dict[str, Any]]:
+    """내 가시 스코프의 대화 목록(최신순) — 사이드바용."""
+    scopes = sorted(_accounts(request).visible_scope_keys(user["id"]))
+    return _conversation_store(request).list_scopes(scopes, limit=limit, offset=offset)
+
+
+# ⚠ 라우트 순서: 고정 경로(/studio/conversations/events)를 {cid} 보다 먼저 선언.
+@app.get("/studio/conversations/events")
+async def conversation_events(
+    request: Request, user: dict[str, Any] = Depends(current_user)
+) -> EventSourceResponse:
+    """SSE — 내 가시 스코프의 대화 목록 변경 실시간 푸시(브로드캐스터 공유, kind=conversation)."""
+    scopes = _accounts(request).visible_scope_keys(user["id"])
+    return EventSourceResponse(
+        conversation_event_stream(_conversation_store(request), _broadcaster(request), scopes)
+    )
+
+
+@app.get("/studio/conversations/{cid}")
+def get_conversation(
+    request: Request, cid: str, scope: str = Query("personal"), user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    sk = _resolve_scope(request, user, scope)
+    doc = _conversation_store(request).get(sk, cid)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"대화 '{cid}' 없음(scope={scope})")
+    return doc
+
+
+@app.delete("/studio/conversations/{cid}")
+async def delete_conversation(
+    request: Request, cid: str, scope: str = Query("personal"), user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    sk = _resolve_scope(request, user, scope, write=True)
+    if not _conversation_store(request).delete(sk, cid):
+        raise HTTPException(status_code=404, detail=f"대화 '{cid}' 없음(scope={scope})")
+    await _broadcaster(request).publish({"type": "delete", "kind": "conversation", "id": cid, "scope": sk})
+    return {"ok": True, "id": cid, "scope": sk}
+
+
+@app.post("/studio/conversations/{cid}/chat")
+@limiter.limit("30/minute")
+async def studio_chat(
+    request: Request,
+    cid: str,
+    body: StudioChatBody,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> EventSourceResponse:
+    """대화 한 턴 — 오케스트레이터가 라우팅/실행하고 결과를 SSE 로 스트리밍한다.
+
+    이벤트: status(단계) · router(분류) · recommendations · draft(초안) · title(자동제목) ·
+    token(프로즈 토큰) · done · error. 사용자·어시스턴트 메시지와 초안은 서버에 영속한다.
+    """
+    sk = _resolve_scope(request, user, scope, write=True)
+    store = _conversation_store(request)
+    full = store.get(sk, cid)
+    if full is None:
+        raise HTTPException(status_code=404, detail=f"대화 '{cid}' 없음(scope={scope})")
+
+    res = _app_settings(request).resolve()
+    key = res["llm_key"]
+    if not key:
+        raise HTTPException(status_code=400, detail="LLM 키가 없습니다 — 설정에서 LLM 키를 등록하세요")
+    provider = res["provider"] or "anthropic"
+    model = DEFAULT_MODEL.get(provider, "")
+
+    def _complete(system: str, user_msg: str, max_tokens: int) -> Any:
+        return _provider_complete_json(provider, model, key, system, user_msg, max_tokens=max_tokens)
+
+    history = [{"role": m["role"], "content": m["content"]} for m in full["messages"]]
+    draft_type = full.get("draft_type") or ""
+    has_title = bool(full.get("title"))
+    current_draft: Component | None = None
+    if full.get("draft_component"):
+        try:
+            current_draft = Component.model_validate(full["draft_component"])
+        except Exception:  # noqa: BLE001 — 손상 초안은 없는 것으로
+            current_draft = None
+    recommender = _recommender(request)
+    broadcaster = _broadcaster(request)
+    user_msg = body.message
+    forced_type = body.forced_type if body.forced_type in COMPONENT_TYPES else None
+
+    # 사용자 메시지 먼저 영속(응답 스트림과 무관하게 남는다).
+    store.add_message(sk, cid, "user", user_msg)
+
+    async def gen() -> AsyncIterator[dict[str, Any]]:
+        try:
+            yield _sse("status", {"phase": "classify", "label": "의도 분류 중…"})
+            decision = await asyncio.to_thread(
+                _orchestrate_classify, history, user_msg,
+                has_draft=current_draft is not None, draft_type=draft_type,
+                has_title=has_title, complete=_complete,
+            )
+            yield _sse("router", {
+                "intent": decision.intent, "type": decision.type,
+                "confidence": decision.confidence, "rationale": decision.rationale,
+            })
+            phase = {
+                "recommend": "카탈로그 검색 중…", "author": "기존 확인 + 초안 작성 중…",
+                "refine": "초안 수정 중…", "clarify": "질문 준비 중…", "chitchat": "…",
+            }.get(decision.intent, "…")
+            yield _sse("status", {"phase": "work", "label": phase})
+            result = await asyncio.to_thread(
+                _orchestrate_execute, decision, history, user_msg, current_draft,
+                complete=_complete, recommender=recommender, forced_type=forced_type,
+            )
+
+            if result.recommendations:
+                yield _sse("recommendations", {"items": result.recommendations, "reused": result.reused})
+            new_version: int | None = None
+            if result.draft is not None:
+                new_version = store.set_draft(sk, cid, result.draft.model_dump_json(), result.draft.type)
+                yield _sse("draft", {
+                    "component": result.draft.model_dump(), "type": result.draft.type, "version": new_version,
+                })
+            if decision.title:
+                store.set_title(sk, cid, decision.title)
+                yield _sse("title", {"title": decision.title})
+
+            parts: list[str] = []
+            try:
+                async for tok in _astream_tokens(
+                    lambda: _provider_stream_text(
+                        provider, model, key, result.prose_system, result.prose_user, max_tokens=400
+                    )
+                ):
+                    parts.append(tok)
+                    yield _sse("token", {"text": tok})
+            except Exception:  # noqa: BLE001 — 프로즈 스트리밍 실패는 폴백 문구로(치명적 아님)
+                log.exception("스튜디오 프로즈 스트리밍 실패")
+            prose = "".join(parts).strip() or _fallback_prose(decision.intent, result)
+            if not parts:
+                yield _sse("token", {"text": prose})
+
+            meta = {
+                "intent": decision.intent, "type": decision.type, "confidence": decision.confidence,
+                "rationale": decision.rationale, "reused": result.reused,
+                "recommendations": result.recommendations or None,
+                "draft": result.draft.model_dump() if result.draft else None,
+                "draft_version": new_version,
+            }
+            amsg = store.add_message(sk, cid, "assistant", prose, meta)
+            header = store.header(sk, cid)
+            if header is not None:
+                await broadcaster.publish({
+                    "type": "upsert", "kind": "conversation", "id": cid,
+                    "scope": sk, "conversation": store.summary(header),
+                })
+            yield _sse("done", {
+                "message_id": amsg["id"], "version": new_version,
+                "title": (header or {}).get("title"),
+            })
+        except Exception as exc:  # noqa: BLE001 — 스트림 안에서 오류를 이벤트로 전달(연결은 정상 종료)
+            log.exception("스튜디오 대화 턴 실패")
+            yield _sse("error", {"detail": f"{type(exc).__name__}: {exc}"})
+
+    return EventSourceResponse(gen())
+
+
+@app.post("/studio/conversations/{cid}/commit")
+async def studio_commit(
+    request: Request,
+    cid: str,
+    body: StudioCommitBody,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """대화의 현재 초안을 카탈로그 구성요소로 저장(검증 후 valid/draft). type 은 자동분류 덮어쓰기."""
+    sk = _resolve_scope(request, user, scope, write=True)
+    cstore = _conversation_store(request)
+    conv = cstore.get(sk, cid)
+    if conv is None:
+        raise HTTPException(status_code=404, detail=f"대화 '{cid}' 없음(scope={scope})")
+    draft = conv.get("draft_component")
+    if not draft:
+        raise HTTPException(status_code=400, detail="저장할 초안이 없습니다 — 먼저 만들어 주세요")
+    try:
+        comp = Component.model_validate(draft)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"초안 형식 오류: {exc}") from exc
+    if body.type in COMPONENT_TYPES and body.type != comp.type:
+        comp = comp.model_copy(update={"type": body.type})
+    if body.name:
+        comp = comp.model_copy(update={"name": body.name})
+    val = validate_component(comp)
+    status = "valid" if val["ok"] else "draft"
+    store = _component_store(request)
+    doc = store.put(
+        sk, comp.id, user["id"], comp.name, comp.summary,
+        comp.model_dump_json(), type_=comp.type, status=status,
+    )
+    cstore.set_component(sk, cid, comp.id)
+    note = f"'{comp.name}' 을(를) {'검증 통과(valid)' if val['ok'] else '초안(draft)'} 상태로 저장했어요."
+    cstore.add_message(sk, cid, "assistant", note,
+                       {"kind": "commit", "component_id": comp.id, "validation": val, "status": status})
+    await _broadcaster(request).publish(
+        {"type": "upsert", "kind": "component", "id": doc["id"], "scope": sk, "component": store.summary(doc)}
+    )
+    header = cstore.header(sk, cid)
+    if header is not None:
+        await _broadcaster(request).publish(
+            {"type": "upsert", "kind": "conversation", "id": cid, "scope": sk, "conversation": cstore.summary(header)}
+        )
+    return {"ok": True, "component": {**_component_doc(doc), "validation": val}, "conversation_id": cid}
+
+
+@app.post("/studio/conversations/{cid}/test")
+async def studio_test(
+    request: Request, cid: str, scope: str = Query("personal"), user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    """대화에 저장된 구성요소를 인라인 테스트(LLM 심사) — 통과 시 ready. 결과를 대화 메시지로 남긴다."""
+    sk = _resolve_scope(request, user, scope, write=True)
+    cstore = _conversation_store(request)
+    conv = cstore.header(sk, cid)
+    if conv is None:
+        raise HTTPException(status_code=404, detail=f"대화 '{cid}' 없음(scope={scope})")
+    comp_id = conv.get("component_id")
+    if not comp_id:
+        raise HTTPException(status_code=400, detail="먼저 저장(commit)해야 테스트할 수 있습니다")
+    store = _component_store(request)
+    doc = store.get(sk, comp_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"컴포넌트 '{comp_id}' 없음(scope={scope})")
+    if doc["status"] == "draft":
+        raise HTTPException(status_code=400, detail="검증(valid)을 먼저 통과해야 테스트할 수 있습니다")
+    complete = _llm_complete(request)
+    if complete is None:
+        raise HTTPException(status_code=400, detail="LLM 키가 없습니다 — 설정에서 LLM 키를 등록하세요")
+    comp = Component.model_validate_json(doc["data"])
+    result = test_component(comp, complete=complete)
+    new_status = doc["status"]
+    if result.get("pass"):
+        updated = store.set_status(sk, comp_id, "ready")
+        new_status = updated["status"] if updated else "ready"
+        await _broadcaster(request).publish(
+            {"type": "upsert", "kind": "component", "id": comp_id, "scope": sk,
+             "component": store.summary(updated or doc)}
+        )
+    verdict = "통과 ✅ (ready)" if result.get("pass") else f"보류 — risk={result.get('risk')}"
+    note = f"테스트 {verdict}. " + " ".join(result.get("reasons", [])[:2])
+    msg = cstore.add_message(sk, cid, "assistant", note, {"kind": "test", "result": result, "status": new_status})
+    header = cstore.header(sk, cid)
+    if header is not None:
+        await _broadcaster(request).publish(
+            {"type": "upsert", "kind": "conversation", "id": cid, "scope": sk, "conversation": cstore.summary(header)}
+        )
+    return {"result": result, "status": new_status, "message": msg}
 
 
 # ── 사용자별 LLM 설정 (화면에서 입력·저장 · provider/모델 선택 · 키 암호화) ──
