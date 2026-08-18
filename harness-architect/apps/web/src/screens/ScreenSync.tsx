@@ -9,6 +9,11 @@ import { Badge, Button, Card, codeBlock, EmptyState, Input, Modal, PageHeader, S
  * 하네스 화면 — 현재 워크스페이스(개인/팀)의 하네스. 워크스페이스 전환은 사이드바 스위처가,
  * 여기선 그 스코프의 하네스 목록·버전·팀 관리를 다룬다. 인증은 앱 게이트에서 보장.
  */
+/** 풀 스코프("personal:<uid>" / "team:<tid>") → API 쿼리 스코프("personal" / "team:<tid>"). */
+function scopeQuery(s: string): string {
+  return s.startsWith("team:") ? s : "personal";
+}
+
 export default function ScreenSync({ onCreate, workspace }: { onCreate: () => void; workspace: string }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -37,7 +42,7 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
     const t = delFor;
     setDelFor(null);
     try {
-      await api.deleteHarness(t.id, t.scope);
+      await api.deleteHarness(t.id, scopeQuery(t.scope));
       qc.invalidateQueries({ queryKey: ["harnesses"] });
       toast(`삭제됨: ${t.name}`);
     } catch (e) {
@@ -238,7 +243,7 @@ function RoleBadge({ role }: { role: string }) {
 function HistoryPanel({ id, scope }: { id: string; scope: string }) {
   const { data: versions = [], isLoading } = useQuery({
     queryKey: ["versions", scope, id],
-    queryFn: () => api.harnessVersions(id, scope),
+    queryFn: () => api.harnessVersions(id, scopeQuery(scope)),
   });
   const [sel, setSel] = useState<number | null>(null);
 
