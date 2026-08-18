@@ -61,67 +61,23 @@ export default function ScreenGuide({
         </p>
       </section>
 
-      {/* ── 1. 생성 ── */}
-      <Section n={1} tag="Create" title="생성 — 4단계 마법사" onGo={() => onNewHarness()} goLabel="생성으로 가기">
-        <p className="mb-6 text-sm leading-relaxed text-muted">
-          왼쪽 메뉴 <NavRef>생성</NavRef> 을 누르면 시작해요. 화면 오른쪽 위에{" "}
-          <Badge className="bg-surface-2 text-muted">1 설명</Badge> <Badge className="bg-surface-2 text-muted">2 추천</Badge>{" "}
-          <Badge className="bg-surface-2 text-muted">3 검증</Badge> <Badge className="bg-surface-2 text-muted">4 yaml</Badge>{" "}
-          단계가 보이고, 순서대로 진행됩니다.
+      {/* ── 1. 스튜디오 ── */}
+      <Section n={1} tag="Studio" title="스튜디오 — 대화로 에이전트 빌드" onGo={() => onNewHarness()} goLabel="스튜디오 열기">
+        <p className="mb-4 text-sm leading-relaxed text-muted">
+          왼쪽 메뉴 <NavRef>스튜디오</NavRef> 에서 만들려는 에이전트를 채팅으로 설명하면, 필요한 구성요소
+          (<Badge className="bg-surface-2 text-muted">Context</Badge> <Badge className="bg-surface-2 text-muted">Skill</Badge>{" "}
+          <Badge className="bg-surface-2 text-muted">MCP</Badge> <Badge className="bg-surface-2 text-muted">Hook</Badge>)를{" "}
+          <b className="text-fg">자동으로 분류·생성</b>하고 하나의 에이전트(하네스)로 <b className="text-fg">조립</b>해 줍니다.
         </p>
-
-        <div className="space-y-8">
-          <Step
-            n="1"
-            title="설명 — 만들려는 걸 그냥 적기"
-            features={[
-              "만들고 싶은 걸 자연어로 입력합니다 (예: “PR을 자동 리뷰하는 봇”).",
-              "아래 예시 칩을 누르면 문장이 자동으로 채워져요.",
-              "“추천 받기 →” 를 누르면 필요한 능력을 자동으로 뽑아냅니다.",
-            ]}
-            src="/guide/01-create-describe.png"
-            caption="설명을 입력하고 예시 칩으로 빠르게 시작 — ‘추천 받기 →’ 로 다음 단계."
-            label="생성 · 1단계 설명"
-          />
-          <Step
-            n="2"
-            title="추천 — 필요한 구성요소 고르기"
-            features={[
-              "추출된 요구 능력이 상단에 배지로 표시됩니다.",
-              "MCP · Skill · Context · Hook 타입별로 추천 카드가 나와요. 카드를 눌러 선택/해제.",
-              "오른쪽 “선택 요약” 에서 컨텍스트 예산(8,000토큰)·추가 도구 수를 실시간 확인.",
-              "충돌·배타 그룹·인증 필요 항목은 배지로 경고해 줍니다.",
-            ]}
-            src="/guide/02-create-recommend.png"
-            caption="추천 카드를 골라 담으면 오른쪽 요약에 예산 게이지가 실시간으로 채워집니다."
-            label="생성 · 2단계 추천"
-          />
-          <Step
-            n="3"
-            title="검증 — 문제 없는지 자동 점검"
-            features={[
-              "참조·충돌 / 의존성(requires) 충족 / 비용 예산 / 인증·권한 4가지를 검사.",
-              "상단 배너로 통과·경고·오류를 한 줄로 요약해 줘요.",
-              "부족한 의존성(gap)이 있으면 “구성요소 추천 →” 로 돌아가 바로 보완.",
-              "오류가 0건이어야 다음 단계로 확정할 수 있습니다.",
-            ]}
-            src="/guide/03-create-validate.png"
-            caption="4가지 검사를 모두 통과하면 초록 배너 — ‘확정 → harness.yaml 생성’ 이 열립니다."
-            label="생성 · 3단계 검증"
-          />
-          <Step
-            n="4"
-            title="harness.yaml — 실행 가능한 산출물"
-            features={[
-              "검증을 통과하면 선언적 harness.yaml 이 생성됩니다. “복사” 로 바로 가져가기.",
-              "저장하면 하네스 화면과 VSCode 확장에 실시간으로 나타나요.",
-              "Eject: claude-code 등 런타임별 네이티브 설정 파일 트리로 방출합니다.",
-            ]}
-            src="/guide/04-create-yaml.png"
-            caption="생성된 harness.yaml 과 eject 패널 — 런타임(claude-code·cursor)별 설정으로 방출."
-            label="생성 · 4단계 yaml"
-          />
-        </div>
+        <ul className="space-y-2 text-sm leading-relaxed text-muted">
+          <li>• 되묻지 않고 곧바로 구체적인 초안을 만들어 오른쪽 캔버스에 보여줍니다 — “고쳐줘” 하면 다듬어요.</li>
+          <li>• 이미 있는 구성요소는 카탈로그에서 찾아 추천하고, 실존 도구는 웹검색으로 근거를 잡습니다(설정에서 키 등록 시).</li>
+          <li>• “저장” 하면 구성요소는 카탈로그에, 조립된 에이전트는 <NavRef>하네스</NavRef> 화면에 들어갑니다.</li>
+          <li>
+            • 하네스 화면에서 각 에이전트를 <b className="text-fg">검증</b>(gap·충돌 진단)하고 claude-code 등으로{" "}
+            <b className="text-fg">eject</b> 합니다.
+          </li>
+        </ul>
       </Section>
 
       {/* ── 2. 카탈로그 ── */}
@@ -268,40 +224,6 @@ function FeatureShot({
     <div className="space-y-4">
       <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
         <FeatureList items={features} />
-      </div>
-      <Shot src={src} caption={caption} label={label} />
-    </div>
-  );
-}
-
-/** 생성 4단계의 각 스텝 — 번호 + 기능 + 전체폭 스크린샷. */
-function Step({
-  n,
-  title,
-  features,
-  src,
-  caption,
-  label,
-}: {
-  n: string;
-  title: string;
-  features: ReactNode[];
-  src: string;
-  caption: string;
-  label: string;
-}) {
-  return (
-    <div className="space-y-4">
-      <div>
-        <div className="flex items-center gap-2">
-          <span className="grid h-6 w-6 place-items-center rounded-full bg-accent/15 text-xs font-semibold text-accent">
-            {n}
-          </span>
-          <h3 className="text-sm font-semibold text-fg">{title}</h3>
-        </div>
-        <div className="mt-3 grid gap-x-6 gap-y-2 sm:grid-cols-2">
-          <FeatureList items={features} />
-        </div>
       </div>
       <Shot src={src} caption={caption} label={label} />
     </div>

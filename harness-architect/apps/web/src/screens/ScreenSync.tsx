@@ -1,9 +1,9 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, subscribeHarnessEvents, type Team } from "../api/client";
 import { diffLines } from "../lib/diff";
 import { useToast } from "../lib/toast";
-import { Badge, Button, Card, codeBlock, EmptyState, Input, Modal, PageHeader, SkeletonCards } from "../lib/ui";
+import { Badge, Button, Card, codeBlock, EmptyState, Input, Modal, PageHeader, SeverityDot, SkeletonCards } from "../lib/ui";
 
 /**
  * 하네스 화면 — 현재 워크스페이스(개인/팀)의 하네스. 워크스페이스 전환은 사이드바 스위처가,
@@ -134,7 +134,12 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
                     </button>
                   </div>
                 </div>
-                {openKey === key && <HistoryPanel id={h.id} scope={h.scope} />}
+                {openKey === key && (
+                  <>
+                    <HistoryPanel id={h.id} scope={h.scope} />
+                    <HarnessActions id={h.id} scope={h.scope} />
+                  </>
+                )}
               </Card>
             );
           })}
@@ -269,6 +274,82 @@ function HistoryPanel({ id, scope }: { id: string; scope: string }) {
         </div>
       )}
       {older ? <DiffView oldText={older.yaml} newText={latest.yaml} /> : <pre className={codeBlock}>{latest.yaml}</pre>}
+    </div>
+  );
+}
+
+/** 하네스 상세 액션 — 검증(gap/충돌 진단) + eject(런타임 파일 방출). 구 '생성' 위저드 C·D 대체. */
+function HarnessActions({ id, scope }: { id: string; scope: string }) {
+  const qs = scope.startsWith("team:") ? scope : "personal";
+  const valM = useMutation({ mutationFn: () => api.validateHarness(id, qs) });
+  const targetsQ = useQuery({ queryKey: ["eject-targets"], queryFn: api.ejectTargets });
+  const targets = targetsQ.data ?? ["claude-code"];
+  const [target, setTarget] = useState("claude-code");
+  const ejM = useMutation({ mutationFn: () => api.ejectHarness(id, qs, target) });
+
+  const diag = valM.data?.diagnostics.items ?? [];
+  const errors = diag.filter((d) => d.severity === "error");
+  const gaps = diag.filter((d) => d.severity === "gap");
+  const warnings = diag.filter((d) => d.severity === "warning");
+  const files = ejM.data?.ok ? ejM.data.files : null;
+
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="subtle" onClick={() => valM.mutate()} disabled={valM.isPending}>
+          {valM.isPending ? "검증 중…" : "검증"}
+        </Button>
+        {valM.data &&
+          (errors.length ? (
+            <Badge className="bg-err/15 text-err">오류 {errors.length}</Badge>
+          ) : gaps.length ? (
+            <Badge className="bg-warn/15 text-warn">gap {gaps.length}</Badge>
+          ) : warnings.length ? (
+            <Badge className="bg-warn/15 text-warn">경고 {warnings.length}</Badge>
+          ) : (
+            <Badge className="bg-ok/15 text-ok">통과</Badge>
+          ))}
+        <span className="ml-auto flex items-center gap-1.5">
+          {targets.map((t) => (
+            <button
+              key={t}
+              onClick={() => setTarget(t)}
+              className={`rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                t === target ? "bg-surface-2 text-fg ring-1 ring-line" : "text-muted hover:text-fg"
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+          <Button size="sm" onClick={() => ejM.mutate()} disabled={ejM.isPending}>
+            {ejM.isPending ? "방출 중…" : "Eject"}
+          </Button>
+        </span>
+      </div>
+
+      {valM.data && diag.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {diag.slice(0, 8).map((d, i) => (
+            <li key={i} className="flex items-center gap-2 text-xs">
+              <SeverityDot severity={d.severity} />
+              <span className={d.severity === "error" ? "text-err" : "text-warn"}>{d.message}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {ejM.data && !ejM.data.ok && (
+        <p className="mt-2 text-xs text-warn">resolve 실패(gap·오류) — 먼저 검증에서 해소하세요.</p>
+      )}
+      {files && (
+        <div className="mt-2 space-y-2">
+          {Object.entries(files).map(([path, content]) => (
+            <div key={path}>
+              <div className="mb-1 font-mono text-[11px] text-muted">{path}</div>
+              <pre className={`max-h-40 ${codeBlock}`}>{content}</pre>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -2,22 +2,20 @@ import { useState, type ReactNode } from "react";
 import { useTheme } from "../lib/theme";
 import { IconButton, Kbd } from "../lib/ui";
 
-export type View = "create" | "catalog" | "studio" | "harnesses" | "settings" | "guide";
+export type View = "catalog" | "studio" | "harnesses" | "settings" | "guide";
 
 const NAV: { key: View; label: string; icon: ReactNode }[] = [
-  { key: "create", label: "생성", icon: <IconSparkle /> },
-  { key: "catalog", label: "카탈로그", icon: <IconGrid /> },
   { key: "studio", label: "스튜디오", icon: <IconChat /> },
+  { key: "catalog", label: "카탈로그", icon: <IconGrid /> },
   { key: "harnesses", label: "하네스", icon: <IconLayers /> },
   { key: "settings", label: "설정", icon: <IconGear /> },
   { key: "guide", label: "사용가이드", icon: <IconBook /> },
 ];
 
 const TITLE: Record<View, { title: string; sub: string }> = {
-  create: { title: "생성", sub: "설명 → 추천 → 검증 → harness.yaml" },
+  studio: { title: "스튜디오", sub: "대화로 에이전트 빌드 — 구성요소 생성·추천·조립" },
   catalog: { title: "카탈로그", sub: "추천 대상 구성요소" },
-  studio: { title: "스튜디오", sub: "채팅으로 카탈로그 생성·추천 — 타입 자동분류, 대화별 저장" },
-  harnesses: { title: "하네스", sub: "내 하네스 · 팀 공유 (실시간 동기화)" },
+  harnesses: { title: "하네스", sub: "에이전트 · 검증 · 내보내기 · 팀 공유(실시간 동기화)" },
   settings: { title: "설정", sub: "API 키 · 품질 모드" },
   guide: { title: "사용가이드", sub: "처음 사용자를 위한 화면별 안내" },
 };
@@ -184,7 +182,6 @@ export function AppShell({
 
 /* ── 인라인 아이콘(외부 의존 없음, currentColor) ── */
 const S = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
-function IconSparkle() { return <svg {...S}><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" /></svg>; }
 function IconGrid() { return <svg {...S}><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>; }
 function IconLayers() { return <svg {...S}><path d="M12 3l9 5-9 5-9-5 9-5z" /><path d="M3 13l9 5 9-5" /></svg>; }
 function IconGear() { return <svg {...S}><circle cx="12" cy="12" r="3" /><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 2h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12a7 7 0 00.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 22h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0019 12z" /></svg>; }
