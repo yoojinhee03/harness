@@ -28,7 +28,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}-api
       - name: Build & push API
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: harness-architect
           push: true
@@ -41,7 +41,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}-web
       - name: Build & push web
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: harness-architect/apps/web
           push: true
