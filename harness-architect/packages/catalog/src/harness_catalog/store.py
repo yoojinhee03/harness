@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from typing import Protocol
 
 from .embeddings import cosine
 
@@ -23,6 +24,17 @@ EmbedFn = Callable[[list[str]], list[list[float]]]
 def content_hash(doc: str) -> str:
     """임베딩 문서의 내용 해시 — 변경 감지용(같은 해시 = 재임베딩 불필요)."""
     return hashlib.sha256(doc.encode("utf-8")).hexdigest()
+
+
+class VectorStoreLike(Protocol):
+    """벡터 스토어 계약(구조적) — 인메모리 `VectorStore` 와 apps/api 의 `PgVectorStore` 가 둘 다 만족.
+
+    Recommender 가 이 Protocol 로 주입받아 인메모리/pgvector 를 갈아끼운다(catalog 는 DB 무의존 유지).
+    """
+
+    def ensure(self, entries: list[tuple[str, str, str]], embed: EmbedFn) -> None: ...
+
+    def search(self, query: list[float], top_k: int = 10) -> list[tuple[str, float]]: ...
 
 
 class VectorStore:

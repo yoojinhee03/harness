@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from .embeddings import Embedder, cosine, get_embedder
 from .ranking import RankedComponent, rank
 from .reasoning import Reasoner, get_reasoner
-from .store import VectorStore, content_hash
+from .store import VectorStore, VectorStoreLike, content_hash
 from .vocabulary import (
     extract_capabilities_heuristic,
     facet_for_capability,
@@ -116,13 +116,13 @@ class Recommender:
         registry: Registry,
         embedder: Embedder | None = None,
         reasoner: Reasoner | None = None,
-        store: VectorStore | None = None,
+        store: VectorStoreLike | None = None,
     ) -> None:
         self.registry = registry
         self.embedder = embedder or get_embedder()
         self.reasoner = reasoner or get_reasoner()
         # store: 인메모리(기본) 또는 pgvector(영속). 둘 다 ensure/search 계약을 만족한다.
-        self.store = store if store is not None else VectorStore()
+        self.store: VectorStoreLike = store if store is not None else VectorStore()
         self._by_id: dict[str, Component] = {}
         # 능력 → 그 능력을 provides/tag 하는 컴포넌트 id (strict 커버리지 판정용, gap 계산).
         self._provided_index: dict[str, list[str]] = {}
@@ -305,7 +305,7 @@ class LiveRecommender:
         registry: Registry,
         embedder: Embedder | None = None,
         reasoner: Reasoner | None = None,
-        store: VectorStore | None = None,
+        store: VectorStoreLike | None = None,
     ) -> None:
         self._registry = registry
         self._embedder = embedder
