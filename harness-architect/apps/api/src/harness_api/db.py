@@ -132,7 +132,9 @@ studio_conversations = Table(
     Column("owner_id", String(128), nullable=False),
     Column("title", String(256), nullable=False, default=""),  # 자동 생성(첫 턴 요약)
     Column("draft", Text, nullable=False, default=""),  # 현재 초안 Component.model_dump_json() ("" = 없음)
-    Column("draft_type", String(16), nullable=False, default=""),  # context | skill | mcp | hook (추론)
+    # 초안 세트의 타입들(멀티초안이면 콤마결합, 예: "context,hook,skill"). 단일은 "context" 등.
+    # SQLite 는 길이 미강제라 16 으로도 통과했지만 Postgres 는 강제 → 결합값 수용 위해 64 로.
+    Column("draft_type", String(64), nullable=False, default=""),
     Column("component_id", String(128), nullable=True),  # commit 후 링크된 user_components.id
     Column("status", String(16), nullable=False, default="active"),  # active | committed
     Column("version", Integer, nullable=False, default=0),  # 초안 리비전(리파인 횟수)
