@@ -60,6 +60,11 @@ class LocalEmbedder:
         return [v / norm for v in vec]
 
 
+# OpenAI 임베딩 API 한 요청당 input 배열 상한은 2048 — 대형 카탈로그(수천 개)는 청크로 나눠 보낸다.
+# 토큰 총량 상한도 있어 넉넉히 256 으로 잡는다(요청 수 ↔ 안전 마진 균형).
+_OPENAI_BATCH = 256
+
+
 class OpenAIEmbedder:
     """OpenAI 임베딩 — 품질 모드. OPENAI_API_KEY 필요, openai 설치 필요."""
 
@@ -73,8 +78,12 @@ class OpenAIEmbedder:
         self._client = openai.OpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"))
 
     def embed(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover - 네트워크
-        result = self._client.embeddings.create(model=self._model, input=texts)
-        return [d.embedding for d in result.data]
+        # input 배열 상한(2048)·토큰 상한 회피 — 256개씩 나눠 요청하고 순서대로 이어붙인다.
+        out: list[list[float]] = []
+        for i in range(0, len(texts), _OPENAI_BATCH):
+            result = self._client.embeddings.create(model=self._model, input=texts[i : i + _OPENAI_BATCH])
+            out.extend(d.embedding for d in sorted(result.data, key=lambda d: d.index))
+        return out
 
 
 def get_embedder(settings: object | None = None) -> Embedder:

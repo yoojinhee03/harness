@@ -143,6 +143,7 @@ class LlmSettingsBody(BaseModel):
     provider: str | None = None
     llm_key: str | None = None
     embedding_key: str | None = None
+    search_key: str | None = None  # 웹검색(Tavily) 키 — None=유지·""=삭제·값=교체
 
 
 class ComponentSaveBody(BaseModel):

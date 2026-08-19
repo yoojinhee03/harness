@@ -38,16 +38,26 @@ class RankedComponent(BaseModel):
 def rank(
     candidates: list[tuple[Component, float]],
     requirements: list[str],
+    *,
+    cap_weight: dict[str, float] | None = None,
 ) -> list[RankedComponent]:
-    """(컴포넌트, 임베딩점수) 후보를 랭킹한다. 내림차순 정렬 결과."""
+    """(컴포넌트, 임베딩점수) 후보를 랭킹한다. 내림차순 정렬 결과.
+
+    cap_weight: 능력별 신뢰 가중치(0~1). 카탈로그 전역에 과다 부여된 능력(수확 휴리스틱 오탐이 몰리는
+    태그)을 IDF 식으로 낮춰, 잡음 태그 매칭이 순위를 지배하지 못하게 한다. None 이면 전부 1.0(무가중,
+    큐레이션 시드는 능력별 df=1 이라 어차피 1.0 → 동작 불변).
+    """
     req = set(requirements)
     ranked: list[RankedComponent] = []
     for component, embed_score in candidates:
-        matched = sorted(set(component.capability_tags) & req)
+        # 요구 능력 매칭은 계약(provides)과 검색태그(capability_tags) 합집합으로 본다 — 수확된 컴포넌트는
+        # provides 만 채우기도 하는데(태그 없음), 그래도 그 능력을 '공급'하므로 매칭·그라운딩에 잡혀야 한다.
+        matched = sorted((set(component.capability_tags) | set(component.provides)) & req)
         cost = component.cost
 
+        boost = sum(cap_weight.get(c, 1.0) if cap_weight else 1.0 for c in matched)
         score = _W_EMBED * embed_score
-        score += _W_CAPABILITY * len(matched)
+        score += _W_CAPABILITY * boost
         score -= _W_TOKENS * (cost.context_tokens / 1000.0)
         score -= _W_TOOLS * cost.added_tools
         score += _W_USAGE * math.log1p(component.usage_count)

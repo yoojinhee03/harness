@@ -78,8 +78,12 @@ def recommend_harness(description: str, top_k: int = 6) -> dict[str, Any]:
     """프로젝트를 자연어로 설명하면 카탈로그에 근거해 하네스 구성요소를 추천한다.
 
     Skill·MCP·Context·Hook 중 요구 능력에 맞는 후보를 검색·랭킹한다. 반환: 추출된 요구 능력,
-    추천 목록(근거·점수·비용·충돌·auth 여부), 타입별 그룹. 자유 생성이 아니라 실제 카탈로그
-    근거이므로, 여기서 고른 id 들을 harness.yaml 의 components[].ref 로 넘기면 된다.
+    추천 목록(근거·점수·비용·충돌·auth 여부), `gaps`(카탈로그가 못 채운 요구 능력), 타입별 그룹.
+
+    추천 후보는 **실제 카탈로그 컴포넌트뿐**이다(컴포넌트를 지어내지 않는다). 여기서 고른 id 들을
+    harness.yaml 의 components[].ref 로 그대로 넘기면 된다. 카탈로그에 없는 능력은 발명하지 않고
+    `gaps` 로 나온다 — 각 gap 은 필요한 capability·이유·이를 채울 컴포넌트 타입(suggested_type)을 담는다.
+    "찾은 N개 + gap M개"의 부분 커버리지는 실패가 아니라 정상 응답이다.
     """
     result: dict[str, Any] = get_recommender().recommend(description, top_k=top_k).model_dump()
     return result

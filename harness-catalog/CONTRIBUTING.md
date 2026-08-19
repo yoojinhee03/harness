@@ -22,11 +22,15 @@
 어휘를 써야 cross-type 연결(skill → mcp)이 성립한다.
 
 - capability **추가**는 자유롭게. 가능하면 기존 도메인 아래에 넣는다(도메인 폭증 방지).
-- **도메인 추가·이름 변경은 리뷰 필수** (도메인은 척추).
+- **도메인 추가·이름 변경은 리뷰 필수** (도메인은 척추). 도메인 목록은 [DOMAINS.md](DOMAINS.md)
+  (코드 상수 `harness_catalog.vocabulary.DOMAIN_VOCAB` 와 동기). 아직 컴포넌트 없는 도메인도 등재해
+  요구가 카탈로그보다 넓게 잡히게 한다 → gap 이 표면화되고 시딩 큐로 흐른다.
 - 프로젝트마다 내용이 다른 지식은 `domain.knowledge` 예외 버킷으로.
 
 facet 분류(메타): `access`(주로 MCP) · `task`(주로 Skill) · `knowledge`(주로 Context) ·
-`lifecycle`(주로 Hook).
+`lifecycle`(주로 Hook) · `prompt`(Context 프롬프트 조각).
+
+새 컴포넌트는 [TEMPLATE.yaml](TEMPLATE.yaml) 을 복사해 시작한다(각 필드 좋은/나쁜 예 포함).
 
 ## 3. 훅 리뷰 게이트 (공급망 신뢰)
 
@@ -55,3 +59,17 @@ uv run python -m harness_catalog.loader --validate ../harness-catalog/components
 - `requires` 로 선언한 능력을 제공하는 컴포넌트가 카탈로그 어딘가에 존재하는가
   (없으면 영구 gap → 콜드스타트 큐로).
 - `conflicts_with` / `exclusive_group` 는 양방향 일관적인가.
+- hook 이면 `failure`·`timeout_ms` 가 있는가, 다른 컴포넌트 능력을 provides 로 중복 선언하지 않는가
+  (리졸버가 하드 에러로 잡는다).
+
+## 6. 카탈로그 성장 (추측 아닌 수요 데이터로)
+
+무엇을 다음에 시딩할지는 추측하지 않는다. recommender 가 남기는 gap 신호를 집계해 정한다:
+
+```bash
+# 요구됐지만 카탈로그에 없던 능력을 빈도순으로 — 콜드스타트 시딩 우선순위
+python ../harness-architect/packages/catalog/scripts/aggregate_gaps.py <서버로그…>
+```
+
+상위 항목부터 **실존 도구**(공개 API/패키지가 실제 존재)를 찾아 TEMPLATE.yaml 로 작성한다. 시드
+컴포넌트를 대량 생성하지 않는다 — 검증 불가능하면 넣지 않는다.

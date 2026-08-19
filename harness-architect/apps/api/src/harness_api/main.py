@@ -12,18 +12,18 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import secrets
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, cast
 from urllib.parse import urlencode
 
 import httpx
-import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -35,7 +35,7 @@ from harness_catalog import (
     load_settings,
     resolve_catalog_dir,
 )
-from harness_resolver import Component, HarnessConfig, InMemoryRegistry, ResolveResult, resolve
+from harness_resolver import Component, InMemoryRegistry, ResolveResult, resolve
 from harness_runtime import AnthropicRunner, available_targets, build_request, emit
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -47,9 +47,10 @@ from .authoring import COMPONENT_TYPES, author_component, test_component, valida
 from .catalog_store import CatalogStore, DbCatalogSource, sync_catalog
 from .component_store import ComponentStore, UserComponentSource, component_event_stream
 from .conversation_store import ConversationStore, conversation_event_stream
+from .gap_demand import GapDemand
+from .harness_build import parse_harness_yaml, to_harness_yaml
 from .llm_client import DEFAULT_MODEL
 from .llm_client import complete_json as _provider_complete_json
-from .llm_client import stream_text as _provider_stream_text
 from .llm_client import verify_key as _provider_verify_key
 from .llm_settings import AppSettingsStore
 from .observability import (
@@ -59,8 +60,9 @@ from .observability import (
     init_sentry,
     metrics_response,
 )
-from .orchestrator import classify as _orchestrate_classify
-from .orchestrator import execute as _orchestrate_execute
+from .orchestrator import run_agent as _run_agent
+from .orchestrator import suggest_title as _suggest_title
+from .promotion import promote_component
 from .schemas import (
     CatalogItem,
     ComponentAuthorBody,
@@ -78,6 +80,7 @@ from .schemas import (
     TeamCreateBody,
     TokenCreateBody,
 )
+from .scoped_recommender import ScopedRecommender
 from .store import (
     HarnessStore,
     SSEBroadcaster,
@@ -107,6 +110,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.broadcaster = make_broadcaster()  # REDIS_URL 있으면 Redis(스케일아웃)
     # OAuth CSRF state 임시 저장(state -> 생성 시각). 단일 인스턴스 개발용 — 멀티 인스턴스는 Redis/DB 로.
     app.state.oauth_states = {}
+    app.state.gap_demand = GapDemand()  # 인메모리 gap 수요 집계(Phase 14 — 저작 제안 신호)
     log.info("저장소 DB: %s · 스코프 격리 · OAuth 인증", engine.url)
 
     # 카탈로그 — 서빙은 **DB 만** 읽어 즉시 응답한다(네트워크 무의존). 느린 harvest(레지스트리·
@@ -126,14 +130,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.registry = registry
     # 임베더 — 앱 등록 OpenAI 임베딩 키가 있으면 OpenAI, 없으면 Local(키 없이). 전역 인덱스라
     # 시작 시 확정한다(키 변경은 재시작으로 반영). 서버 env 는 쓰지 않는다.
-    from harness_catalog import LocalEmbedder, OpenAIEmbedder
+    from harness_catalog import (
+        CapabilityEnricher,
+        LocalEmbedder,
+        OpenAIEmbedder,
+        make_classifier,
+        make_reasoner,
+    )
 
-    _emb_key = AppSettingsStore(engine).resolve()["embedding_key"]
+    _app_llm = AppSettingsStore(engine).resolve()
+    _emb_key = _app_llm["embedding_key"]
+    _provider, _llm_key = _app_llm["provider"], _app_llm["llm_key"]
     try:
         embedder = OpenAIEmbedder(api_key=_emb_key) if _emb_key else LocalEmbedder()
     except RuntimeError:  # openai 미설치 등 → 로컬 폴백
         embedder = LocalEmbedder()
-    app.state.recommender = LiveRecommender(registry, embedder=embedder)
+    # 앱 등록 LLM 키(provider+key)를 추출·근거 reasoner 와 카탈로그 enrichment 에 주입(없으면 휴리스틱/무보강).
+    # env 가 아니라 DB 등록 키를 쓰는 경로 — 키 변경은 재시작으로 반영(임베더와 동일 규약).
+    reasoner = make_reasoner(_provider, _llm_key)
+    app.state.recommender = LiveRecommender(registry, embedder=embedder, reasoner=reasoner)
+    enricher = CapabilityEnricher(
+        classifier=make_classifier(_provider, _llm_key), max_enrich=cfg.registry_enrich_max
+    )
 
     async def _sync_loop() -> None:
         # 주기적으로 하이브리드 harvest→DB(증분 또는 full). 첫 기동엔 상태가 없어 즉시 1회(full),
@@ -142,7 +160,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         while True:
             try:
                 if await asyncio.to_thread(catalog_store.due_for_sync, cfg.catalog_sync_interval):
-                    res = await asyncio.to_thread(sync_catalog, engine, cfg)
+                    res = await asyncio.to_thread(sync_catalog, engine, cfg, enricher=enricher)
                     total = await asyncio.to_thread(catalog_store.count)
                     log.info("카탈로그 sync 완료: %s (총 %s개)", res, total)
             except asyncio.CancelledError:
@@ -328,6 +346,10 @@ def _accounts(request: Request) -> AccountStore:
     return cast(AccountStore, request.app.state.accounts)
 
 
+def _gap_demand(request: Request) -> GapDemand:
+    return cast(GapDemand, request.app.state.gap_demand)
+
+
 def _component_store(request: Request) -> ComponentStore:
     return cast(ComponentStore, request.app.state.component_store)
 
@@ -404,6 +426,7 @@ def _scoped_registry(request: Request, user: dict[str, Any] | None) -> Any:
 @limiter.limit("60/minute")
 def recommend(request: Request, body: RecommendRequest) -> dict[str, Any]:
     result = _recommender(request).recommend(body.description, top_k=body.top_k)
+    _gap_demand(request).record(result.gaps)  # gap 수요 집계(저작 제안 신호)
     data = result.model_dump()
     # 추천 카드에도 프로비넌스 표시. (추천기 모델은 안 건드리고 API 에서 주입.)
     recs = data.get("recommendations", [])
@@ -412,6 +435,12 @@ def recommend(request: Request, body: RecommendRequest) -> dict[str, Any]:
     for rec in recs:
         rec["trust"] = _trust(rec.get("id", ""), curated, origins)
     return data
+
+
+@app.get("/gaps/top")
+def gaps_top(request: Request, n: int = Query(10, ge=1, le=50)) -> dict[str, Any]:
+    """자주 요청되나 카탈로그에 없는 능력 top-N(런타임 수요). 저작 제안·시딩 우선순위의 라이브 신호."""
+    return {"gaps": _gap_demand(request).top(n)}
 
 
 @app.post("/resolve", response_model=ResolveResult)
@@ -788,6 +817,49 @@ async def delete_harness(
     return {"ok": True, "id": safe_id(hid), "scope": sk}
 
 
+# 저장된 하네스(에이전트)를 검증·내보내기 — 스튜디오가 조립한 에이전트를 하네스 화면에서 점검·eject.
+# (구 '생성' 위저드 C·D 를 산출물 위로 이동: 대화가 빌드, 하네스 상세가 검증·export.)
+@app.post("/harnesses/{hid}/validate", response_model=ResolveResult)
+def validate_harness(
+    request: Request, hid: str, scope: str = Query("personal"), user: dict[str, Any] = Depends(current_user)
+) -> ResolveResult:
+    """저장된 harness.yaml 을 역파싱해 resolve — gap/충돌/인증 진단."""
+    sk = _resolve_scope(request, user, scope)
+    doc = _store(request).get(sk, hid)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음(scope={scope})")
+    try:
+        config = parse_harness_yaml(doc["yaml"])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
+    return resolve(config, _scoped_registry(request, user))
+
+
+@app.post("/harnesses/{hid}/eject")
+def eject_harness(
+    request: Request,
+    hid: str,
+    scope: str = Query("personal"),
+    target: str = Query("claude-code"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """저장된 하네스를 런타임 네이티브 파일 트리로 eject(claude-code 등)."""
+    if target not in available_targets():
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 타깃: {target} (가능: {available_targets()})")
+    sk = _resolve_scope(request, user, scope)
+    doc = _store(request).get(sk, hid)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음(scope={scope})")
+    try:
+        config = parse_harness_yaml(doc["yaml"])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
+    result = resolve(config, _scoped_registry(request, user))
+    if not result.ok or result.resolved is None:
+        return {"ok": False, "target": target, "diagnostics": result.diagnostics.model_dump(), "files": None}
+    return {"ok": True, "target": target, "files": emit(result.resolved, target)}
+
+
 # ── 유저 저작 컴포넌트 (스튜디오: 채팅 생성 → 검증 → 테스트 → 내 구성요소) ──
 
 
@@ -945,6 +1017,27 @@ async def test_component_endpoint(
     return {"result": result, "status": new_status}
 
 
+@app.post("/components/{cid}/promote")
+async def promote_component_endpoint(
+    request: Request,
+    cid: str,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """저작 컴포넌트를 공유 카탈로그로 승격(Phase 14 피드백 루프). 게이트: ready + validate 통과.
+
+    승격되면 origin='promoted' 로 모든 유저 검색에 등장(gap 을 남의 것까지 닫음). 신뢰등급은 community.
+    """
+    sk = _resolve_scope(request, user, scope, write=True)
+    catalog_store = getattr(request.app.state, "catalog_store", None)
+    if catalog_store is None:
+        raise HTTPException(status_code=503, detail="카탈로그 스토어가 없습니다(harvest off).")
+    result = promote_component(_component_store(request), catalog_store, sk, cid)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail="; ".join(result["errors"]))
+    return result
+
+
 @app.delete("/components/{cid}")
 async def delete_component(
     request: Request,
@@ -960,22 +1053,21 @@ async def delete_component(
 
 
 # ── 스튜디오: 대화형 카탈로그 스튜디오 (채팅 → 자동분류 → 추천/저작 → 저장/테스트) ──
-# 대화가 1급 객체다. 매 턴을 오케스트레이터가 라우팅(clarify|recommend|author|refine|chitchat)하고,
-# 타입(context/skill/mcp/hook)은 자동 추론한다. 응답 프로즈는 SSE 토큰 스트리밍('진짜 챗봇' 느낌).
+# 대화가 1급 객체다. 매 턴 LLM 이 도구(get_catalog_item·search_catalog·draft_component)를 자율 호출하며
+# 자연스럽게 답하되 항상 '카탈로그 구성요소 생성'으로 수렴한다. 응답은 SSE 로 스트리밍('진짜 챗봇').
 
 
 def _sse(event: str, data: dict[str, Any]) -> dict[str, Any]:
     return {"event": event, "data": json.dumps(data, ensure_ascii=False, default=str)}
 
 
-async def _astream_tokens(make_iter: Callable[[], Any]) -> AsyncIterator[str]:
-    """동기 토큰 제너레이터를 스레드로 브리지해 async 로 흘린다(이벤트 루프 블로킹 방지)."""
+async def _abridge(sync_iter: Any) -> AsyncIterator[dict[str, Any]]:
+    """블로킹 LLM 호출을 포함한 동기 제너레이터를 스레드로 브리지해 async 로 흘린다(루프 블로킹 방지)."""
     sentinel = object()
-    it = make_iter()
 
     def _next() -> Any:
         try:
-            return next(it)
+            return next(sync_iter)
         except StopIteration:
             return sentinel
 
@@ -983,18 +1075,7 @@ async def _astream_tokens(make_iter: Callable[[], Any]) -> AsyncIterator[str]:
         item = await asyncio.to_thread(_next)
         if item is sentinel:
             break
-        yield cast(str, item)
-
-
-def _fallback_prose(intent: str, result: Any) -> str:
-    """스트리밍 프로즈 실패 시 결정적 폴백 문구(대화가 빈 응답으로 끝나지 않게)."""
-    if result.draft is not None:
-        return f"'{result.draft.name}' ({result.draft.type}) 초안을 만들었어요. 오른쪽에서 확인하고 저장하세요."
-    if result.recommendations:
-        return "관련 있어 보이는 기존 구성요소를 찾았어요. 오른쪽에서 골라보세요."
-    if intent == "clarify":
-        return "무엇을 만들고 싶은지 조금만 더 구체적으로 알려주세요."
-    return "무엇을 만들어 드릴까요? 예: '슬랙에 PR 알림 보내는 훅'."
+        yield cast("dict[str, Any]", item)
 
 
 @app.post("/studio/conversations")
@@ -1065,10 +1146,10 @@ async def studio_chat(
     scope: str = Query("personal"),
     user: dict[str, Any] = Depends(current_user),
 ) -> EventSourceResponse:
-    """대화 한 턴 — 오케스트레이터가 라우팅/실행하고 결과를 SSE 로 스트리밍한다.
+    """대화 한 턴 — tool-use 에이전트가 도구를 자율 호출하며 답하고 결과를 SSE 로 스트리밍한다.
 
-    이벤트: status(단계) · router(분류) · recommendations · draft(초안) · title(자동제목) ·
-    token(프로즈 토큰) · done · error. 사용자·어시스턴트 메시지와 초안은 서버에 영속한다.
+    이벤트: status(도구 실행 알림) · recommendations(검색 결과) · draft(초안) · title(자동제목) ·
+    token(응답 청크) · done · error. 사용자·어시스턴트 메시지와 초안은 서버에 영속한다.
     """
     sk = _resolve_scope(request, user, scope, write=True)
     store = _conversation_store(request)
@@ -1087,16 +1168,25 @@ async def studio_chat(
         return _provider_complete_json(provider, model, key, system, user_msg, max_tokens=max_tokens)
 
     history = [{"role": m["role"], "content": m["content"]} for m in full["messages"]]
-    draft_type = full.get("draft_type") or ""
     has_title = bool(full.get("title"))
-    current_draft: Component | None = None
-    if full.get("draft_component"):
+    dset = full.get("draft_set") or {"components": [], "harness": None}
+    current_components: list[Component] = []
+    for cd in dset.get("components") or []:
         try:
-            current_draft = Component.model_validate(full["draft_component"])
-        except Exception:  # noqa: BLE001 — 손상 초안은 없는 것으로
-            current_draft = None
-    recommender = _recommender(request)
+            current_components.append(Component.model_validate(cd))
+        except Exception:  # noqa: BLE001 — 손상 초안은 건너뜀
+            continue
+    current_harness = dset.get("harness")
+    start_version = full.get("version")
+    # 스코프 인지(Phase 14 피드백 루프) — 유저 저작(ready) 컴포넌트를 검색·재사용에 편입한다.
+    # 추천기: 전역 결과 + 유저 컴포넌트 병합(ScopedRecommender). 레지스트리: get_catalog_item 이 유저 것도 찾게.
+    _user_scopes = _accounts(request).visible_scope_keys(user["id"])
+    _user_comps = _component_store(request).ready_components(list(_user_scopes))
+    recommender = ScopedRecommender(_recommender(request), _user_comps)
+    registry = _scoped_registry(request, user)
     broadcaster = _broadcaster(request)
+    gap_demand = _gap_demand(request)
+    hot_capabilities = gap_demand.hot_capabilities()  # 자주 요청되는 공백 → 저작 우선 제안 근거
     user_msg = body.message
     forced_type = body.forced_type if body.forced_type in COMPONENT_TYPES else None
 
@@ -1105,59 +1195,58 @@ async def studio_chat(
 
     async def gen() -> AsyncIterator[dict[str, Any]]:
         try:
-            yield _sse("status", {"phase": "classify", "label": "의도 분류 중…"})
-            decision = await asyncio.to_thread(
-                _orchestrate_classify, history, user_msg,
-                has_draft=current_draft is not None, draft_type=draft_type,
-                has_title=has_title, complete=_complete,
-            )
-            yield _sse("router", {
-                "intent": decision.intent, "type": decision.type,
-                "confidence": decision.confidence, "rationale": decision.rationale,
-            })
-            phase = {
-                "recommend": "카탈로그 검색 중…", "author": "기존 확인 + 초안 작성 중…",
-                "refine": "초안 수정 중…", "clarify": "질문 준비 중…", "chitchat": "…",
-            }.get(decision.intent, "…")
-            yield _sse("status", {"phase": "work", "label": phase})
-            result = await asyncio.to_thread(
-                _orchestrate_execute, decision, history, user_msg, current_draft,
-                complete=_complete, recommender=recommender, forced_type=forced_type,
-            )
-
-            if result.recommendations:
-                yield _sse("recommendations", {"items": result.recommendations, "reused": result.reused})
-            new_version: int | None = None
-            if result.draft is not None:
-                new_version = store.set_draft(sk, cid, result.draft.model_dump_json(), result.draft.type)
-                yield _sse("draft", {
-                    "component": result.draft.model_dump(), "type": result.draft.type, "version": new_version,
-                })
-            if decision.title:
-                store.set_title(sk, cid, decision.title)
-                yield _sse("title", {"title": decision.title})
-
+            recommendations: list[dict[str, Any]] | None = None
+            rec_gaps: list[dict[str, Any]] | None = None
+            cur_components: list[dict[str, Any]] = [c.model_dump() for c in current_components]
+            cur_harness: dict[str, Any] | None = current_harness
+            new_version: int | None = start_version
             parts: list[str] = []
-            try:
-                async for tok in _astream_tokens(
-                    lambda: _provider_stream_text(
-                        provider, model, key, result.prose_system, result.prose_user, max_tokens=400
-                    )
-                ):
-                    parts.append(tok)
-                    yield _sse("token", {"text": tok})
-            except Exception:  # noqa: BLE001 — 프로즈 스트리밍 실패는 폴백 문구로(치명적 아님)
-                log.exception("스튜디오 프로즈 스트리밍 실패")
-            prose = "".join(parts).strip() or _fallback_prose(decision.intent, result)
-            if not parts:
-                yield _sse("token", {"text": prose})
+            agent = _run_agent(
+                history, user_msg, current_components, current_harness, provider=provider, model=model,
+                api_key=key, complete=_complete, recommender=recommender, registry=registry,
+                forced_type=forced_type, search_key=res.get("search_key", ""),
+                hot_capabilities=hot_capabilities,
+            )
+            async for ev in _abridge(agent):
+                kind = ev.get("type")
+                if kind == "status":
+                    yield _sse("status", {"label": ev["label"]})
+                elif kind == "side":
+                    se = ev["event"]
+                    st = se.get("type")
+                    if st == "recommendations":
+                        recommendations = se["items"] or None
+                        rec_gaps = se.get("gaps") or None
+                        gap_demand.record(se.get("gaps") or [])  # 스튜디오 검색 gap 도 수요 집계
+                        yield _sse(
+                            "recommendations",
+                            {"items": se["items"], "gaps": se.get("gaps", []), "reused": se.get("reused", False)},
+                        )
+                    elif st == "drafts":
+                        cur_components = se["components"]
+                        new_version = store.save_set(sk, cid, cur_components, cur_harness)
+                        yield _sse("drafts", {"components": cur_components, "version": new_version})
+                    elif st == "harness":
+                        cur_harness = se["harness"]
+                        new_version = store.save_set(sk, cid, cur_components, cur_harness)
+                        yield _sse("harness", {"harness": cur_harness, "version": new_version})
+                elif kind == "token":
+                    parts.append(ev["text"])
+                    yield _sse("token", {"text": ev["text"]})
+
+            prose = "".join(parts).strip() or "무엇을 만들어 드릴까요? 예: '슬랙에 PR 알림 보내는 훅'."
+            if not has_title:
+                title = await asyncio.to_thread(_suggest_title, _complete, user_msg, prose)
+                if title:
+                    store.set_title(sk, cid, title)
+                    yield _sse("title", {"title": title})
 
             meta = {
-                "intent": decision.intent, "type": decision.type, "confidence": decision.confidence,
-                "rationale": decision.rationale, "reused": result.reused,
-                "recommendations": result.recommendations or None,
-                "draft": result.draft.model_dump() if result.draft else None,
-                "draft_version": new_version,
+                "components": [{"type": c.get("type"), "name": c.get("name")} for c in cur_components] or None,
+                "harness": (cur_harness.get("name") if cur_harness else None),
+                "recommendations": recommendations,
+                "gaps": rec_gaps,
+                "version": new_version,
             }
             amsg = store.add_message(sk, cid, "assistant", prose, meta)
             header = store.header(sk, cid)
@@ -1185,86 +1274,108 @@ async def studio_commit(
     scope: str = Query("personal"),
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
-    """대화의 현재 초안을 카탈로그 구성요소로 저장(검증 후 valid/draft). type 은 자동분류 덮어쓰기."""
+    """대화의 초안 세트를 통째로 저장 — 구성요소들은 카탈로그(user_components)에, 조립된 하네스는 하네스 저장소에."""
     sk = _resolve_scope(request, user, scope, write=True)
     cstore = _conversation_store(request)
     conv = cstore.get(sk, cid)
     if conv is None:
         raise HTTPException(status_code=404, detail=f"대화 '{cid}' 없음(scope={scope})")
-    draft = conv.get("draft_component")
-    if not draft:
-        raise HTTPException(status_code=400, detail="저장할 초안이 없습니다 — 먼저 만들어 주세요")
-    try:
-        comp = Component.model_validate(draft)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"초안 형식 오류: {exc}") from exc
-    if body.type in COMPONENT_TYPES and body.type != comp.type:
-        comp = comp.model_copy(update={"type": body.type})
-    if body.name:
-        comp = comp.model_copy(update={"name": body.name})
-    val = validate_component(comp)
-    status = "valid" if val["ok"] else "draft"
+    dset = conv.get("draft_set") or {}
+    comp_dicts = dset.get("components") or []
+    if not comp_dicts:
+        raise HTTPException(status_code=400, detail="저장할 구성요소가 없습니다 — 먼저 만들어 주세요")
+
     store = _component_store(request)
-    doc = store.put(
-        sk, comp.id, user["id"], comp.name, comp.summary,
-        comp.model_dump_json(), type_=comp.type, status=status,
-    )
-    cstore.set_component(sk, cid, comp.id)
-    note = f"'{comp.name}' 을(를) {'검증 통과(valid)' if val['ok'] else '초안(draft)'} 상태로 저장했어요."
-    cstore.add_message(sk, cid, "assistant", note,
-                       {"kind": "commit", "component_id": comp.id, "validation": val, "status": status})
-    await _broadcaster(request).publish(
-        {"type": "upsert", "kind": "component", "id": doc["id"], "scope": sk, "component": store.summary(doc)}
-    )
+    saved: list[dict[str, Any]] = []
+    for cd in comp_dicts:
+        try:
+            comp = Component.model_validate(cd)
+        except Exception:  # noqa: BLE001 — 손상 초안은 건너뜀
+            continue
+        val = validate_component(comp)
+        status = "valid" if val["ok"] else "draft"
+        doc = store.put(
+            sk, comp.id, user["id"], comp.name, comp.summary,
+            comp.model_dump_json(), type_=comp.type, status=status,
+        )
+        saved.append({"id": comp.id, "type": comp.type, "name": comp.name, "status": status, "validation": val})
+        await _broadcaster(request).publish(
+            {"type": "upsert", "kind": "component", "id": doc["id"], "scope": sk, "component": store.summary(doc)}
+        )
+
+    # 조립된 하네스가 있으면 하네스 저장소에 저장(하네스 화면에 등장 · eject/run 가능).
+    harness = dset.get("harness")
+    harness_saved: dict[str, Any] | None = None
+    if isinstance(harness, dict) and harness.get("yaml"):
+        hstore = _store(request)
+        hname = harness.get("name") or "agent"
+        hid = safe_id(hname)
+        if hid in ("harness", "agent"):  # 한글 등 비ASCII 이름은 fallback 로 뭉개짐 → 이름 해시로 고유화(충돌 방지)
+            hid = "agent-" + hashlib.sha1(hname.encode("utf-8")).hexdigest()[:8]  # noqa: S324 - id 슬러그(비암호)
+        hdoc = hstore.put(
+            sk, hid, user["id"], harness.get("name") or hid, harness.get("description") or "", harness["yaml"]
+        )
+        harness_saved = {"id": hdoc["id"], "name": hdoc["name"], "version": hdoc["version"]}
+        await _broadcaster(request).publish(
+            {"type": "upsert", "id": hdoc["id"], "scope": sk, "harness": hstore.summary(hdoc)}
+        )
+
+    cstore.set_component(sk, cid, harness_saved["id"] if harness_saved else (saved[0]["id"] if saved else ""))
+    ok_count = sum(1 for s in saved if s["validation"]["ok"])
+    note = f"{len(saved)}개 구성요소 저장(검증 통과 {ok_count}개)"
+    note += f" + 하네스 '{harness_saved['name']}' 저장" if harness_saved else ""
+    note += ". 각 구성요소는 '내 구성요소'에서 테스트하면 사용가능(ready)이 됩니다."
+    cstore.add_message(sk, cid, "assistant", note, {"kind": "commit", "saved": saved, "harness": harness_saved})
     header = cstore.header(sk, cid)
     if header is not None:
         await _broadcaster(request).publish(
             {"type": "upsert", "kind": "conversation", "id": cid, "scope": sk, "conversation": cstore.summary(header)}
         )
-    return {"ok": True, "component": {**_component_doc(doc), "validation": val}, "conversation_id": cid}
+    return {"ok": True, "saved": saved, "harness": harness_saved, "conversation_id": cid}
 
 
 @app.post("/studio/conversations/{cid}/test")
 async def studio_test(
     request: Request, cid: str, scope: str = Query("personal"), user: dict[str, Any] = Depends(current_user)
 ) -> dict[str, Any]:
-    """대화에 저장된 구성요소를 인라인 테스트(LLM 심사) — 통과 시 ready. 결과를 대화 메시지로 남긴다."""
+    """대화의 저장된 구성요소들을 인라인 테스트(LLM 심사) — 통과분은 ready 로. 결과를 대화 메시지로 남긴다."""
     sk = _resolve_scope(request, user, scope, write=True)
     cstore = _conversation_store(request)
-    conv = cstore.header(sk, cid)
+    conv = cstore.get(sk, cid)
     if conv is None:
         raise HTTPException(status_code=404, detail=f"대화 '{cid}' 없음(scope={scope})")
-    comp_id = conv.get("component_id")
-    if not comp_id:
-        raise HTTPException(status_code=400, detail="먼저 저장(commit)해야 테스트할 수 있습니다")
-    store = _component_store(request)
-    doc = store.get(sk, comp_id)
-    if doc is None:
-        raise HTTPException(status_code=404, detail=f"컴포넌트 '{comp_id}' 없음(scope={scope})")
-    if doc["status"] == "draft":
-        raise HTTPException(status_code=400, detail="검증(valid)을 먼저 통과해야 테스트할 수 있습니다")
+    comp_dicts = (conv.get("draft_set") or {}).get("components") or []
     complete = _llm_complete(request)
     if complete is None:
         raise HTTPException(status_code=400, detail="LLM 키가 없습니다 — 설정에서 LLM 키를 등록하세요")
-    comp = Component.model_validate_json(doc["data"])
-    result = test_component(comp, complete=complete)
-    new_status = doc["status"]
-    if result.get("pass"):
-        updated = store.set_status(sk, comp_id, "ready")
-        new_status = updated["status"] if updated else "ready"
-        await _broadcaster(request).publish(
-            {"type": "upsert", "kind": "component", "id": comp_id, "scope": sk,
-             "component": store.summary(updated or doc)}
-        )
-    verdict = "통과 ✅ (ready)" if result.get("pass") else f"보류 — risk={result.get('risk')}"
-    note = f"테스트 {verdict}. " + " ".join(result.get("reasons", [])[:2])
-    msg = cstore.add_message(sk, cid, "assistant", note, {"kind": "test", "result": result, "status": new_status})
+    store = _component_store(request)
+    results: list[dict[str, Any]] = []
+    for cd in comp_dicts:
+        cid_r = cd.get("id")
+        doc = store.get(sk, cid_r) if cid_r else None
+        if doc is None or doc["status"] == "draft":
+            continue  # 저장(valid) 안 된 구성요소는 스킵
+        comp = Component.model_validate_json(doc["data"])
+        result = test_component(comp, complete=complete)
+        if result.get("pass"):
+            updated = store.set_status(sk, cid_r, "ready")
+            await _broadcaster(request).publish(
+                {"type": "upsert", "kind": "component", "id": cid_r, "scope": sk,
+                 "component": store.summary(updated or doc)}
+            )
+        results.append({"id": cid_r, "name": comp.name, "pass": bool(result.get("pass")), "risk": result.get("risk")})
+    if not results:
+        raise HTTPException(status_code=400, detail="테스트할 저장된(valid) 구성요소가 없습니다 — 먼저 저장하세요")
+    passed = sum(1 for r in results if r["pass"])
+    verdicts = ", ".join(f"{r['name']}={'✅' if r['pass'] else '보류'}" for r in results)
+    note = f"테스트: {passed}/{len(results)} 통과. {verdicts}"
+    msg = cstore.add_message(sk, cid, "assistant", note, {"kind": "test", "results": results})
     header = cstore.header(sk, cid)
     if header is not None:
         await _broadcaster(request).publish(
             {"type": "upsert", "kind": "conversation", "id": cid, "scope": sk, "conversation": cstore.summary(header)}
         )
-    return {"result": result, "status": new_status, "message": msg}
+    return {"results": results, "message": msg}
 
 
 # ── 사용자별 LLM 설정 (화면에서 입력·저장 · provider/모델 선택 · 키 암호화) ──
@@ -1285,6 +1396,7 @@ def put_llm_settings(
         provider=body.provider,
         llm_key=body.llm_key,
         embedding_key=body.embedding_key,
+        search_key=body.search_key,
     )
 
 
@@ -1312,28 +1424,14 @@ def verify_llm_settings(request: Request, user: dict[str, Any] = Depends(current
             out["embedding"] = "ok"
         except Exception as exc:  # noqa: BLE001
             out["embedding"] = f"error: {type(exc).__name__}"
+    if not res.get("search_key"):
+        out["search"] = "unset"
+    else:
+        from .web_search import web_search
+
+        r = web_search(res["search_key"], "ping", max_results=1)
+        out["search"] = "error" if r.startswith(("웹검색 실패", "웹검색 미설정")) else "ok"
     return out
 
 
-def to_harness_yaml(config: HarnessConfig) -> str:
-    """HarnessConfig → harness.yaml 텍스트 (스펙 §2 구조)."""
-    doc: dict[str, Any] = {
-        "apiVersion": config.apiVersion,
-        "kind": config.kind,
-        "metadata": config.metadata.model_dump(exclude_defaults=False),
-    }
-    if config.extends:
-        doc["extends"] = config.extends
-    doc["model"] = config.model.model_dump()
-    if config.prompt is not None:
-        # 최소 표현 — 기본값/None 필드는 생략해 authored 입력에 가깝게 직렬화.
-        doc["prompt"] = config.prompt.model_dump(exclude_defaults=True, exclude_none=True)
-    if config.permissions:
-        doc["permissions"] = config.permissions
-    doc["components"] = [
-        ({"ref": s.ref, "config": s.config} if s.config else {"ref": s.ref})
-        for s in config.components
-    ]
-    if config.budget:
-        doc["budget"] = config.budget.model_dump()
-    return cast(str, yaml.safe_dump(doc, allow_unicode=True, sort_keys=False))
+# to_harness_yaml 은 harness_build 로 이동(스튜디오 하네스 조립과 공유, 순환 import 회피).

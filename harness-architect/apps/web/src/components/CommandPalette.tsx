@@ -36,7 +36,6 @@ export function CommandPalette({
   const staticCmds = useMemo<Cmd[]>(
     () => [
       { id: "new", label: "새 하네스 만들기", hint: "생성", run: () => { onNewHarness(); onClose(); } },
-      { id: "go-create", label: "이동: 생성", hint: "이동", run: () => { setView("create"); onClose(); } },
       { id: "go-catalog", label: "이동: 카탈로그", hint: "이동", run: () => { setView("catalog"); onClose(); } },
       { id: "go-studio", label: "이동: 스튜디오", hint: "이동", run: () => { setView("studio"); onClose(); } },
       { id: "go-harnesses", label: "이동: 하네스", hint: "이동", run: () => { setView("harnesses"); onClose(); } },
