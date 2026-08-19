@@ -8,7 +8,16 @@ from __future__ import annotations
 
 from .adopt import AdoptResult, adopt, adopt_dir
 from .builder import BuiltRequest, build_request
-from .emit import ClaudeCodeEmitter, CursorEmitter, Emitter, FileTree, available_targets, emit
+from .emit import (
+    ClaudeCodeEmitter,
+    CursorEmitter,
+    Emitter,
+    FileTree,
+    Loss,
+    available_targets,
+    emit,
+    target_losses,
+)
 from .eval import (
     AblationResult,
     CheckResult,
@@ -46,6 +55,7 @@ __all__ = [
     "HookEngine",
     "HookOutcome",
     "InProcessExecutor",
+    "Loss",
     "OpenHarnessRunner",
     "RunResult",
     "TimeoutBoundExecutor",
@@ -59,6 +69,7 @@ __all__ = [
     "default_executors",
     "drop_component",
     "emit",
+    "target_losses",
     "harness_span",
     "run_ablation",
     "run_eval",

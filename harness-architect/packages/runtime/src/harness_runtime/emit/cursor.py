@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from harness_resolver import ResolvedHarness
 
-from .base import FileTree, mcp_servers_json
+from .base import FileTree, Loss, mcp_servers_json
 
 
 class CursorEmitter:
@@ -28,6 +28,28 @@ class CursorEmitter:
         if mcp is not None:
             tree[".cursor/mcp.json"] = mcp
         return tree
+
+    def losses(self, resolved: ResolvedHarness) -> list[Loss]:
+        """Cursor 방출 손실 — 훅·모델·권한의 네이티브 대응이 없다(MAPPING.md, IR 기준 트리거)."""
+        out: list[Loss] = []
+        if resolved.hook_plan:
+            n = sum(len(v) for v in resolved.hook_plan.values())
+            out.append(
+                Loss(
+                    "hook_plan",
+                    "unsupported",
+                    f"Cursor 라이프사이클 훅 네이티브 대응 없음 → 훅 {n}개 전부 생략(가드레일 소실)",
+                )
+            )
+        if resolved.model.name:
+            out.append(
+                Loss("model.name", "unsupported", "Cursor 는 모델을 UI 에서 선택 → settings 필드 아님")
+            )
+        if resolved.permissions:
+            out.append(
+                Loss("permissions", "unsupported", "Cursor 도구 단위 허용 대응 없음 → 생략")
+            )
+        return out
 
     def _rule(self, resolved: ResolvedHarness) -> str:
         system = resolved.prompt.system_text if resolved.prompt is not None else ""
