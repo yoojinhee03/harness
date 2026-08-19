@@ -28,6 +28,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from harness_catalog import (
+    VOCAB_VERSION,
     FederatedRegistry,
     LiveRecommender,
     Recommender,
@@ -51,6 +52,7 @@ from .gap_demand import GapDemand
 from .harness_build import parse_harness_yaml, to_harness_yaml
 from .llm_client import DEFAULT_MODEL
 from .llm_client import complete_json as _provider_complete_json
+from .llm_client import complete_text as _provider_complete_text
 from .llm_client import verify_key as _provider_verify_key
 from .llm_settings import AppSettingsStore
 from .observability import (
@@ -61,6 +63,7 @@ from .observability import (
     metrics_response,
 )
 from .orchestrator import run_agent as _run_agent
+from .orchestrator import studio_run as _studio_run
 from .orchestrator import suggest_title as _suggest_title
 from .promotion import promote_component
 from .schemas import (
@@ -77,6 +80,7 @@ from .schemas import (
     RunRequest,
     StudioChatBody,
     StudioCommitBody,
+    StudioRunBody,
     TeamCreateBody,
     TokenCreateBody,
 )
@@ -110,7 +114,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.broadcaster = make_broadcaster()  # REDIS_URL 있으면 Redis(스케일아웃)
     # OAuth CSRF state 임시 저장(state -> 생성 시각). 단일 인스턴스 개발용 — 멀티 인스턴스는 Redis/DB 로.
     app.state.oauth_states = {}
-    app.state.gap_demand = GapDemand()  # 인메모리 gap 수요 집계(Phase 14 — 저작 제안 신호)
+    app.state.gap_demand = GapDemand(engine)  # gap 수요 집계(DB 영속) — 저작 제안 신호
     log.info("저장소 DB: %s · 스코프 격리 · OAuth 인증", engine.url)
 
     # 카탈로그 — 서빙은 **DB 만** 읽어 즉시 응답한다(네트워크 무의존). 느린 harvest(레지스트리·
@@ -176,6 +180,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     res = await asyncio.to_thread(sync_catalog, engine, cfg, enricher=enricher)
                     total = await asyncio.to_thread(catalog_store.count)
                     log.info("카탈로그 sync 완료: %s (총 %s개)", res, total)
+                    # sync 후 공급이 생긴 능력의 gap 을 resolved 로 표시(피드백 루프 — durable)
+                    try:
+                        provided: set[str] = set()
+                        for c in registry.all():
+                            provided.update(c.provides or [])
+                            provided.update(c.capability_tags or [])
+                        n_res = await asyncio.to_thread(app.state.gap_demand.mark_resolved, provided)
+                        if n_res:
+                            log.info("gap resolved 표시: %d개(공급 생김)", n_res)
+                    except Exception as exc:  # noqa: BLE001 — 비차단
+                        log.warning("gap resolved 표시 실패(무시): %s", exc)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — 실패해도 루프 유지(다음 주기 재시도)
@@ -363,6 +378,23 @@ def _gap_demand(request: Request) -> GapDemand:
     return cast(GapDemand, request.app.state.gap_demand)
 
 
+def _record_gaps(request: Request, gaps: list[Any], source: str) -> None:
+    """gap 수요를 provenance(카탈로그 상태·caps 소스)와 함께 기록. 비차단(내부에서 예외 삼킴)."""
+    cs = cast(CatalogStore, request.app.state.catalog_store)
+    try:
+        rev, cand = cs.revision(), cs.count()
+    except Exception:  # noqa: BLE001 — provenance 수집 실패해도 기록은 진행
+        rev, cand = "", 0
+    _gap_demand(request).record(
+        gaps,
+        source=source,
+        catalog_revision=rev,
+        candidate_count=cand,
+        caps_source="heuristic",  # TASK 3 에서 zeroshot 로 승격 시 이 값이 바뀐다(hot-gap 게이팅 해제 트리거)
+        vocab_version=VOCAB_VERSION,
+    )
+
+
 def _component_store(request: Request) -> ComponentStore:
     return cast(ComponentStore, request.app.state.component_store)
 
@@ -439,7 +471,7 @@ def _scoped_registry(request: Request, user: dict[str, Any] | None) -> Any:
 @limiter.limit("60/minute")
 def recommend(request: Request, body: RecommendRequest) -> dict[str, Any]:
     result = _recommender(request).recommend(body.description, top_k=body.top_k)
-    _gap_demand(request).record(result.gaps)  # gap 수요 집계(저작 제안 신호)
+    _record_gaps(request, result.gaps, "recommend")  # gap 수요 집계(provenance 포함)
     data = result.model_dump()
     # 추천 카드에도 프로비넌스 표시. (추천기 모델은 안 건드리고 API 에서 주입.)
     recs = data.get("recommendations", [])
@@ -1230,7 +1262,7 @@ async def studio_chat(
                     if st == "recommendations":
                         recommendations = se["items"] or None
                         rec_gaps = se.get("gaps") or None
-                        gap_demand.record(se.get("gaps") or [])  # 스튜디오 검색 gap 도 수요 집계
+                        _record_gaps(request, se.get("gaps") or [], "studio")  # 스튜디오 검색 gap 수요 집계
                         yield _sse(
                             "recommendations",
                             {"items": se["items"], "gaps": se.get("gaps", []), "reused": se.get("reused", False)},
@@ -1389,6 +1421,49 @@ async def studio_test(
             {"type": "upsert", "kind": "conversation", "id": cid, "scope": sk, "conversation": cstore.summary(header)}
         )
     return {"results": results, "message": msg}
+
+
+@app.post("/studio/conversations/{cid}/run")
+@limiter.limit("30/minute")
+def studio_run_endpoint(
+    request: Request,
+    cid: str,
+    body: StudioRunBody,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """조립된 에이전트를 테스트 입력으로 실행(미리보기) — build→run 루프(Phase 14 에이전트 빌더 경험).
+
+    대화의 초안들로 resolve → 합성 시스템 프롬프트를 앱 등록 키로 단일턴 실행. MCP 도구는 실행 안 함
+    (프롬프트·절차 미리보기). gap/에러를 함께 반환해 '실행하려면 뭘 더 넣어야 하나'를 보여준다.
+    """
+    sk = _resolve_scope(request, user, scope)
+    conv = _conversation_store(request).get(sk, cid)
+    if conv is None:
+        raise HTTPException(status_code=404, detail=f"대화 '{cid}' 없음(scope={scope})")
+    drafts: list[Component] = []
+    for cd in (conv.get("draft_set") or {}).get("components") or []:
+        try:
+            drafts.append(Component.model_validate(cd))
+        except Exception:  # noqa: BLE001 — 손상 초안은 스킵
+            continue
+    res = _app_settings(request).resolve()
+    key, provider = res["llm_key"], res["provider"] or "anthropic"
+    if not key:
+        raise HTTPException(status_code=400, detail="LLM 키가 없습니다 — 설정에서 LLM 키를 등록하세요")
+    model = DEFAULT_MODEL.get(provider, "")
+    messages = [{"role": m.role, "content": m.content} for m in body.messages]
+
+    def execute(built: Any, msgs: list[dict[str, Any]]) -> dict[str, Any]:
+        # Anthropic + 원격 MCP 서버가 있으면 실제 runtime 으로 도구까지 실행(커넥터). 아니면 프롬프트 미리보기.
+        if provider == "anthropic" and built.mcp_servers:
+            b = built.model_copy(update={"messages": msgs})
+            out = AnthropicRunner(api_key=key).run(b)
+            return {"output": out.text or "", "mode": "prompt" if out.dry_run else "tools"}
+        text = _provider_complete_text(provider, model, key, built.system, msgs, max_tokens=1024)
+        return {"output": text, "mode": "prompt"}
+
+    return _studio_run(drafts, messages, execute)
 
 
 # ── 사용자별 LLM 설정 (화면에서 입력·저장 · provider/모델 선택 · 키 암호화) ──

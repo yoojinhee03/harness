@@ -62,6 +62,22 @@
   /gaps/top`. 스튜디오 검색이 자주 요청되는(hot) gap 을 "★만들면 재사용됨"으로 우선 제안. durable 시딩
   집계는 `aggregate_gaps.py`(로그) 병행.
 
+## build→run 루프 (에이전트 빌더 경험 on 하네스 코어)
+
+"이건 에이전트 빌더가 아니라 하네스 빌더 아니냐"는 지적에 대한 답: **하네스를 IR 로 유지하되 위에
+실행·반복 루프를 얹는다.** 순수 에이전트 빌더로 피벗하면 이식성·감사성·그라운딩과 런타임 비소유(스코프
+절감)라는 차별점을 잃는다. 대신 기존 런타임(`build_request`·provider-agnostic `stream_text`)을 스튜디오에
+배선해 "조립 → 실행 → 관찰 → refine" 루프를 준다.
+
+- `orchestrator.studio_run(drafts, messages, execute)` — 초안들 resolve → `build_request` 로 시스템 프롬프트·
+  MCP 서버 합성 → **멀티턴** `execute(built, messages)` 실행. gap/에러·mode(tools|prompt) 동반 반환 →
+  "실행하려면 뭘 더 넣어야 하나"를 보여준다.
+- **provider 인지 실행**(둘 다): OpenAI/기본은 `llm_client.complete_text` 로 **멀티턴 프롬프트 미리보기**(지금
+  등록 키로 동작). **Anthropic + 원격 MCP** 면 실제 runtime `AnthropicRunner`(MCP 커넥터 beta)로 **도구까지
+  실행**. stdio 서버는 eject 몫. graceful degradation.
+- `POST /studio/conversations/{cid}/run`(앱 등록 키) + 프론트 `RunPreview`(멀티턴 대화·gap/mode 노트).
+- 결과: 하네스(이식·감사·그라운딩)는 코어로 남고, UX 는 에이전트 빌더처럼 조립→대화→관찰→refine. — **완료.**
+
 ## 남은 것 (후속)
 
 - 승격 거버넌스: 지금은 스코프 write 권한이면 승격 가능 + 결정적 게이트. 다인 승인 워크플로·hook `sandbox:none`

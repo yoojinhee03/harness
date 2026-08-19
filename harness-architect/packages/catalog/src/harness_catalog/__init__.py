@@ -43,6 +43,7 @@ from .store import VectorStore
 from .vocabulary import (
     CAPABILITY_VOCAB,
     DOMAIN_VOCAB,
+    VOCAB_VERSION,
     extract_capabilities_heuristic,
     facet_for_capability,
     suggested_component_type,
@@ -51,6 +52,7 @@ from .vocabulary import (
 __all__ = [
     "CAPABILITY_VOCAB",
     "DOMAIN_VOCAB",
+    "VOCAB_VERSION",
     "DEFAULT_MARKETPLACE_URL",
     "DEFAULT_REGISTRY_URL",
     "CapabilityClassifier",

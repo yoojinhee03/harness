@@ -136,6 +136,17 @@ class StudioCommitBody(BaseModel):
     name: str = ""
 
 
+class StudioRunMsg(BaseModel):
+    role: str  # user | assistant
+    content: str
+
+
+class StudioRunBody(BaseModel):
+    """조립된 에이전트를 대화로 실행(멀티턴 미리보기) — messages 마지막이 새 user 턴."""
+
+    messages: list[StudioRunMsg] = Field(min_length=1)
+
+
 class LlmSettingsBody(BaseModel):
     """앱 LLM/임베딩 키 저장. 키는 생략(None)=유지 · ""=삭제 · 값=교체(암호화 저장).
     provider 는 LLM provider(anthropic|openai). 임베딩은 OpenAI 고정(embedding_key)."""

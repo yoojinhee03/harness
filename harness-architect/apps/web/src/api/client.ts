@@ -294,6 +294,22 @@ export interface StudioCommitResult {
   conversation_id: string;
 }
 
+/** 조립된 에이전트 실행(미리보기) 결과 — 합성 시스템 프롬프트로 멀티턴 응답. */
+export interface StudioRunResult {
+  ok: boolean;
+  errors: string[];
+  gaps: string[]; // 미충족 능력(실행엔 실존 MCP 필요) — 프롬프트 미리보기
+  output: string | null;
+  mode?: "tools" | "prompt" | null; // tools=실제 원격 MCP 실행 / prompt=프롬프트 미리보기
+  mcp_declared?: string[];
+  note?: string;
+}
+
+export interface RunTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
 /** 대화 한 턴의 SSE 이벤트(스트리밍) — 엔드포인트가 단계별로 흘린다. */
 export type StudioChatEvent =
   | { event: "status"; data: { label: string } }
@@ -474,6 +490,11 @@ export const api = {
     post<{ results: { id: string; name: string; pass: boolean; risk?: string }[]; message: StudioMessage }>(
       `/studio/conversations/${encodeURIComponent(id)}/test?scope=${encodeURIComponent(scope)}`,
       undefined,
+    ),
+  runConversation: (id: string, scope: string, messages: RunTurn[]) =>
+    post<StudioRunResult>(
+      `/studio/conversations/${encodeURIComponent(id)}/run?scope=${encodeURIComponent(scope)}`,
+      { messages },
     ),
 };
 

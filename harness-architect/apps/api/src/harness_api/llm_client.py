@@ -74,6 +74,34 @@ def _openai_json(model: str, api_key: str, system: str, user: str, max_tokens: i
     return json.loads(_strip_fence(text))
 
 
+def complete_text(
+    provider: str,
+    model: str,
+    api_key: str,
+    system: str,
+    messages: list[dict[str, Any]],
+    *,
+    max_tokens: int = 1024,
+) -> str:
+    """provider 무관 멀티턴 텍스트 완성(버퍼) — 조립된 에이전트와 대화 미리보기용.
+
+    messages=[{role,content}](마지막이 새 user). 도구 실행은 안 함(프롬프트·절차 미리보기). 도구까지 실행은
+    호출부가 Anthropic 원격 MCP 커넥터 경로(runtime AnthropicRunner)로 분기한다.
+    """
+    if provider == "openai":
+        client = _import_openai().OpenAI(api_key=api_key)
+        resp = client.chat.completions.create(
+            model=model, max_tokens=max_tokens, temperature=0.4,
+            messages=[{"role": "system", "content": system}, *messages],
+        )
+        return resp.choices[0].message.content or ""
+    client = _import_anthropic().Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model=model, max_tokens=max_tokens, temperature=0.4, system=system, messages=messages
+    )
+    return "".join(b.text for b in resp.content if b.type == "text")
+
+
 def stream_text(
     provider: str, model: str, api_key: str, system: str, user: str, *, max_tokens: int = 1024
 ) -> Iterator[str]:

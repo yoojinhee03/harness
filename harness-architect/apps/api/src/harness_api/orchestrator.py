@@ -18,8 +18,9 @@ from collections.abc import Callable, Iterator
 from collections.abc import Set as AbstractSet
 from typing import Any
 
-from harness_catalog import facet_for_capability
+from harness_catalog import extract_capabilities_heuristic, facet_for_capability
 from harness_resolver import Component, InMemoryRegistry, resolve
+from harness_runtime import build_request
 
 from .authoring import COMPONENT_TYPES, author_component
 from .harness_build import build_harness_yaml, parse_harness_yaml
@@ -277,19 +278,92 @@ def _tool_draft(
     return (summary, [_drafts_event(comps)])
 
 
+def _execution_coverage_missing(comps: list[Component]) -> set[str]:
+    """선언을 믿지 않는 독립 실행가능성 검사(Fix B) — 조립된 skill/context 텍스트가 실행(access)을
+    암시하는데 그 능력을 provides 하는 **mcp** 가 세트에 없으면 그 능력들을 돌려준다.
+
+    access 는 오직 실존 mcp 만 채운다(skill/context 는 프롬프트). Fix A(requires 자동 주입)를 우회하거나
+    skill 이 access 를 스스로 provides 한다고 (잘못) 주장해 requires-gap 을 가리는 경우까지 잡는 안전망.
+    """
+    mcp_provided = {cap for c in comps if c.type == "mcp" for cap in (*c.provides, *c.capability_tags)}
+    implied: set[str] = set()
+    for c in comps:
+        if c.type == "mcp":
+            continue
+        text = " ".join(x for x in (c.name, c.summary, c.description, c.body) if x)
+        implied.update(
+            cap for cap in extract_capabilities_heuristic(text) if facet_for_capability(cap) == "access"
+        )
+    return implied - mcp_provided
+
+
 def _validate_assembly(comps: list[Component], yaml_text: str) -> dict[str, list[str]]:
-    """조립된 에이전트를 초안들만으로 resolve — 미충족 능력(gap)·에러를 낸다(실행가능성 게이트).
+    """조립된 에이전트를 초안들만으로 resolve — 미충족 능력(gap)·에러·실행 커버리지 경고(실행가능성 게이트).
 
     초안 집합만으로 requires 가 안 풀리면 gap 이다: 예) 편집 skill 이 media 접근을 requires 하는데 그 접근을
     제공하는 실존 MCP 를 안 넣었으면 gap → "지어낸 껍데기"가 저장되기 전에 표면화된다(불변식 1: 실행가능성).
+    거기에 더해, 선언(requires/provides)을 믿지 않는 텍스트 기반 커버리지 검사(_execution_coverage_missing)로
+    requires 를 안 붙였거나 access 를 스스로 provides 한다고 주장해 gap 을 가린 껍데기까지 warnings 로 잡는다.
     """
+    missing_exec = _execution_coverage_missing(comps)  # 선언 무관 텍스트 기반 커버리지(Fix B)
     try:
         res = resolve(parse_harness_yaml(yaml_text), InMemoryRegistry(list(comps)))
     except Exception:  # noqa: BLE001 — 검증 실패는 조립 자체를 막지 않는다(정보 제공용)
-        return {"gaps": [], "errors": []}
+        gaps, errors = [], []
+    else:
+        gaps = sorted({g.capability for g in res.diagnostics.gaps if g.capability})
+        errors = [e.message for e in res.diagnostics.errors]
+    # resolver 가 이미 requires-gap 으로 낸 능력은 중복 경고하지 않는다(넷-신규만).
+    net = sorted(missing_exec - set(gaps))
+    warnings = (
+        [
+            f"실행 능력({', '.join(net)})을 제공하는 MCP 가 조립에 없음 — skill/context 는 프롬프트라 "
+            "실제 실행(영상 컷·오디오 믹싱·외부 API 호출 등)을 못 한다. 실존 MCP 를 넣거나, 없으면 이 능력을 "
+            "gap 으로 사용자에게 정직하게 알려라(있는 척 금지)."
+        ]
+        if net
+        else []
+    )
+    return {"gaps": gaps, "errors": errors, "warnings": warnings}
+
+
+def studio_run(
+    drafts: list[Component],
+    messages: list[dict[str, Any]],
+    execute: Callable[[Any, list[dict[str, Any]]], dict[str, Any]],
+) -> dict[str, Any]:
+    """조립된 에이전트를 대화로 실행(멀티턴 미리보기) — build→run 루프로 스튜디오를 에이전트 빌더로.
+
+    초안들로 resolve → build_request 로 시스템 프롬프트·MCP 서버 합성 → execute(built, messages) 실행.
+    execute 는 provider 인지: Anthropic+원격 MCP 면 실제 도구 실행(runtime), 아니면 프롬프트 미리보기.
+    반환에 gap/에러·mode(tools|prompt)·선언 MCP 를 실어 "실행하려면 뭘 더 넣어야 하나"를 보여준다.
+    messages: [{role, content}] 대화 히스토리(마지막이 새 user).
+    """
+    if not drafts:
+        return {"ok": False, "errors": ["구성요소가 없음 — 먼저 만들어라"], "gaps": [], "output": None, "mode": None}
+    yaml_text = build_harness_yaml(drafts, "미리보기")
+    res = resolve(parse_harness_yaml(yaml_text), InMemoryRegistry(list(drafts)))
+    gaps = sorted({g.capability for g in res.diagnostics.gaps if g.capability})
+    errors = [e.message for e in res.diagnostics.errors]
+    if not res.ok or res.resolved is None:
+        return {"ok": False, "errors": errors, "gaps": gaps, "output": None, "mode": None}
+    last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+    built = build_request(res.resolved, last_user)
+    ex = execute(built, messages)
+    mode = ex.get("mode", "prompt")
+    note = (
+        "실제 원격 MCP 도구를 실행했습니다(runtime)."
+        if mode == "tools"
+        else "프롬프트·절차 미리보기 — MCP 도구는 실행하지 않음(연결은 eject 후 런타임에서)."
+    )
     return {
-        "gaps": sorted({g.capability for g in res.diagnostics.gaps if g.capability}),
-        "errors": [e.message for e in res.diagnostics.errors],
+        "ok": True,
+        "errors": [],
+        "gaps": gaps,
+        "output": ex.get("output", ""),
+        "mode": mode,
+        "mcp_declared": [m.get("name") for m in built.mcp_servers],
+        "note": note,
     }
 
 
@@ -301,9 +375,11 @@ def _tool_assemble(holder: dict[str, Any], args: dict[str, Any]) -> tuple[str, l
     desc = str(args.get("description") or "").strip()
     yaml_text = build_harness_yaml(comps, name, desc)
     val = _validate_assembly(comps, yaml_text)
+    warnings = val.get("warnings", [])
     harness = {
         "name": name, "description": desc, "yaml": yaml_text,
         "component_ids": [c.id for c in comps], "gaps": val["gaps"], "errors": val["errors"],
+        "warnings": warnings,
     }
     holder["harness"] = harness
     parts = [f"'{name}' 하네스로 {len(comps)}개 구성요소를 묶었어요(harness.yaml 생성). "]
@@ -314,7 +390,9 @@ def _tool_assemble(holder: dict[str, Any], args: dict[str, Any]) -> tuple[str, l
             f"⚠️ 미충족 능력(gap): {', '.join(val['gaps'])} — 이 능력을 제공하는 **실존 MCP** 를 "
             "search_catalog 로 찾아 넣어야 실제로 동작한다(지어내지 말 것). 사용자에게 이 공백을 알려라. "
         )
-    if not val["errors"] and not val["gaps"]:
+    if warnings:
+        parts.append("⚠️ " + " ".join(warnings) + " ")
+    if not val["errors"] and not val["gaps"] and not warnings:
         parts.append("실행가능성 검증 통과. ")
     parts.append("사용자에게 캔버스에서 확인하고 저장하라고 안내하라.")
     return ("".join(parts), [{"type": "harness", "harness": harness}])

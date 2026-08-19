@@ -8,10 +8,12 @@ import {
   type CapabilityGap,
   type ComponentType,
   type Recommendation,
+  type RunTurn,
   type StudioConversation,
   type StudioConversationSummary,
   type StudioHarness,
   type StudioMessage,
+  type StudioRunResult,
 } from "../api/client";
 import { capLabel } from "../lib/catalog";
 import { useToast } from "../lib/toast";
@@ -289,6 +291,7 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
             committed={committed}
             onCommit={() => commitMut.mutate()}
             onTest={() => testMut.mutate()}
+            onRun={(turns) => api.runConversation(active!.id, active!.scope, turns)}
             committing={commitMut.isPending}
             testing={testMut.isPending}
             keySet={keySet}
@@ -411,6 +414,7 @@ function ResultPanel({
   committed,
   onCommit,
   onTest,
+  onRun,
   committing,
   testing,
   keySet,
@@ -420,6 +424,7 @@ function ResultPanel({
   committed: boolean;
   onCommit: () => void;
   onTest: () => void;
+  onRun: (turns: RunTurn[]) => Promise<StudioRunResult>;
   committing: boolean;
   testing: boolean;
   keySet: boolean;
@@ -480,7 +485,96 @@ function ResultPanel({
       <p className="mt-1.5 text-[11px] text-muted">
         저장하면 각 구성요소는 카탈로그에, 에이전트는 하네스 저장소에 들어갑니다. 테스트를 통과하면 사용가능(ready)이 됩니다.
       </p>
+
+      <RunPreview onRun={onRun} keySet={keySet} />
     </Card>
+  );
+}
+
+/** 실행 미리보기 — 조립된 에이전트와 멀티턴 대화로 돌려본다(build→run 루프). */
+function RunPreview({ onRun, keySet }: { onRun: (turns: RunTurn[]) => Promise<StudioRunResult>; keySet: boolean }) {
+  const toast = useToast();
+  const [input, setInput] = useState("");
+  const [turns, setTurns] = useState<RunTurn[]>([]);
+  const [meta, setMeta] = useState<StudioRunResult | null>(null);
+  const [running, setRunning] = useState(false);
+
+  async function go() {
+    const msg = input.trim();
+    if (!msg || running || !keySet) return;
+    const next: RunTurn[] = [...turns, { role: "user", content: msg }];
+    setTurns(next);
+    setInput("");
+    setRunning(true);
+    try {
+      const r = await onRun(next);
+      setMeta(r);
+      if (r.output != null) setTurns([...next, { role: "assistant", content: r.output }]);
+    } catch (e) {
+      toast((e as Error).message || "실행 실패", "error");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-semibold text-fg">▶ 실행 미리보기</h4>
+        {turns.length > 0 && (
+          <button className="text-[11px] text-muted hover:text-err" onClick={() => { setTurns([]); setMeta(null); }}>
+            초기화
+          </button>
+        )}
+      </div>
+      <p className="mt-0.5 text-[11px] text-muted">
+        조립한 에이전트와 대화해 봅니다(합성 시스템 프롬프트로 멀티턴).{" "}
+        {meta?.mode === "tools" ? "원격 MCP 도구까지 실제 실행." : "도구 실행 없이 프롬프트·절차 확인."}
+      </p>
+      {turns.length > 0 && (
+        <div className="mt-2 space-y-1.5">
+          {turns.map((t, i) => (
+            <div
+              key={i}
+              className={
+                t.role === "user"
+                  ? "ml-6 rounded-lg bg-accent/10 p-2 text-sm text-fg"
+                  : "mr-6 rounded-lg border border-line bg-surface-2 p-2 text-sm text-fg whitespace-pre-wrap"
+              }
+            >
+              {t.content}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="mt-2 flex gap-2">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && go()}
+          placeholder={turns.length ? "이어서 말하기…" : "예: 이 PR diff 리뷰해줘"}
+          className="flex-1 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-sm text-fg"
+        />
+        <Button size="sm" onClick={go} disabled={running || !keySet} title={!keySet ? "LLM 키를 먼저 등록하세요" : ""}>
+          {running ? <Spinner /> : turns.length ? "전송" : "실행"}
+        </Button>
+      </div>
+      {meta && (
+        <div className="mt-2 space-y-2">
+          {meta.gaps.length > 0 && (
+            <div className="rounded-md border border-warn/40 bg-warn/10 p-2 text-[11px] text-warn">
+              미충족 능력(gap): {meta.gaps.join(", ")} — 실제 도구 실행엔 실존 MCP 연결이 필요합니다.
+            </div>
+          )}
+          {meta.errors.length > 0 && (
+            <div className="rounded-md border border-err/40 bg-err/10 p-2 text-[11px] text-err">
+              {meta.errors.join("; ")}
+            </div>
+          )}
+          {meta.note && <p className="text-[11px] text-muted">{meta.note}</p>}
+        </div>
+      )}
+    </div>
   );
 }
 

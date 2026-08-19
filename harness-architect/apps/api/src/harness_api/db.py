@@ -197,6 +197,27 @@ catalog_sync_state = Table(
 )
 
 
+# Gap 수요 집계(durable) — '자주 요청되나 카탈로그가 못 채운 능력'을 센다(TASK 2, 구 인메모리 대체).
+# grain = capability 단일 행(요청 누적). source/provenance 는 최근값(last-write) — 재평가로 거짓 gap
+# (빈 caps 탓 오탐)을 나중에 정화한다. resolved_at: 이후 카탈로그에 공급이 생긴 시점(sync 후 표시).
+gap_demand = Table(
+    "gap_demand",
+    metadata,
+    Column("capability", String(128), primary_key=True),  # 통제어휘 domain.capability
+    Column("requested_count", Integer, nullable=False, default=0),
+    Column("first_seen_at", String(40), nullable=False),
+    Column("last_seen_at", String(40), nullable=False),
+    Column("suggested_type", String(16), nullable=False, default=""),  # skill|mcp|context|hook
+    Column("resolved_at", String(40), nullable=True),  # 공급 생긴 시점(nullable = 미해결)
+    # provenance(재평가용) — 판정 당시 카탈로그/파이프라인 상태
+    Column("source", String(16), nullable=False, default=""),  # recommend | studio | verify
+    Column("catalog_revision", String(64), nullable=False, default=""),
+    Column("caps_source", String(16), nullable=False, default=""),  # heuristic | enricher | zeroshot
+    Column("vocab_version", String(16), nullable=False, default=""),
+    Column("candidate_count", Integer, nullable=False, default=0),
+)
+
+
 def resolve_database_url(store_dir: Path) -> str:
     """`DATABASE_URL`(프로덕션 Postgres) 또는 기본 SQLite(store 폴더 밑)."""
     env = os.environ.get("DATABASE_URL")
