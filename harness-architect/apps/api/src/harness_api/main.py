@@ -148,7 +148,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 앱 등록 LLM 키(provider+key)를 추출·근거 reasoner 와 카탈로그 enrichment 에 주입(없으면 휴리스틱/무보강).
     # env 가 아니라 DB 등록 키를 쓰는 경로 — 키 변경은 재시작으로 반영(임베더와 동일 규약).
     reasoner = make_reasoner(_provider, _llm_key)
-    app.state.recommender = LiveRecommender(registry, embedder=embedder, reasoner=reasoner)
+    # 벡터 스토어 — Postgres 면 pgvector 로 임베딩 영속(재시작 시 변경분만 재임베딩), 아니면 인메모리.
+    vector_store = None
+    if engine.dialect.name == "postgresql":
+        from .pgvector_store import PgVectorStore
+
+        try:
+            vector_store = PgVectorStore(engine, getattr(embedder, "name", type(embedder).__name__))
+            log.info("pgvector 임베딩 스토어 활성(model=%s)", getattr(embedder, "name", "?"))
+        except Exception as exc:  # noqa: BLE001 — pgvector 미가용 시 인메모리로 폴백(서비스 지속)
+            log.warning("pgvector 스토어 초기화 실패 — 인메모리 폴백: %s", exc)
+            vector_store = None
+    app.state.recommender = LiveRecommender(
+        registry, embedder=embedder, reasoner=reasoner, store=vector_store
+    )
     enricher = CapabilityEnricher(
         classifier=make_classifier(_provider, _llm_key), max_enrich=cfg.registry_enrich_max
     )
