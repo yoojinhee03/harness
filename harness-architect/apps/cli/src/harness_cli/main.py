@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from harness_catalog import build_registry
+from harness_catalog import build_registry, facet_for_capability, suggested_component_type
 from harness_resolver import HarnessConfig, InMemoryRegistry, Registry, ResolveResult, resolve
 from harness_runtime import (
     EvalCase,
@@ -269,6 +269,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
     violations = [cat for cat, items in findings.items() if items and sev(cat) == "violation"]
     exit_code = 1 if violations else 0
 
+    if args.record:  # 5e: 옵트인 데이터 수집(로컬 로그 신호 — aggregate_*.py 가 durable 집계)
+        _emit_signals(findings, result.resolved)
+
     report: dict[str, Any] = {
         "repo": str(repo),
         "target": args.target,
@@ -306,6 +309,32 @@ def _print_verify_text(report: dict[str, Any], sev: Any) -> None:
             desc = it.get("message") or it.get("detail") or it.get("capability") or str(it)
             extra = f" [{it['fidelity']}]" if it.get("fidelity") else ""
             print(f"      - {desc}{extra}", file=sys.stderr)
+
+
+def _emit_signals(findings: dict[str, list[dict[str, Any]]], resolved: object) -> None:
+    """5e 옵트인 신호(stderr, 마커 라인) — GAP_SIGNAL(source=verify) + COOCCUR_SIGNAL(공출현).
+
+    기존 aggregate_gaps.py(GAP_SIGNAL)·aggregate_cooccurrence.py(COOCCUR_SIGNAL)가 durable 집계한다.
+    로컬 전용(전송 아님). env/시크릿은 담지 않는다(5b — 능력·컴포넌트 id 만).
+    """
+    seen: set[str] = set()
+    for cat in ("capability_gap", "required_missing"):
+        for item in findings.get(cat, []):
+            cap = item.get("capability")
+            if not cap or cap in seen:
+                continue
+            seen.add(cap)
+            payload = {
+                "capability": cap,
+                "suggested_type": suggested_component_type(cap),
+                "facet": facet_for_capability(cap) or "",
+                "source": "verify",
+            }
+            print(f"GAP_SIGNAL {json.dumps(payload, ensure_ascii=False, sort_keys=True)}", file=sys.stderr)
+    ids = sorted({rc.id for rc in getattr(resolved, "components", []) or []})
+    if len(ids) >= 2:  # 공출현은 2개 이상 함께 등장할 때만 의미가 있다
+        payload = {"components": ids, "source": "verify"}
+        print(f"COOCCUR_SIGNAL {json.dumps(payload, ensure_ascii=False, sort_keys=True)}", file=sys.stderr)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -356,6 +385,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument("--require", default="", help="쉼표구분 요구 능력(예: vcs.code-review,comms.messaging)")
     p_verify.add_argument("--target", default=None, choices=available_targets(), help="이식 손실을 잴 타깃")
     p_verify.add_argument("--format", choices=["json", "text"], default="json", help="출력(기본 json — CI)")
+    p_verify.add_argument(
+        "--record",
+        action="store_true",
+        help="옵트인 데이터 수집 — gap/공출현을 로그 신호로 방출(로컬, 2>signals.log 로 수집)",
+    )
     p_verify.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
     p_verify.set_defaults(func=cmd_verify)
 
