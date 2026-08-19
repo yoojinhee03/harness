@@ -401,7 +401,16 @@ non-lifecycle 능력을 제공하는 경우.
 
 ---
 
-## TASK 6 — MCP in-process 경로의 TTL/인덱스 분리
+## TASK 6 — MCP in-process 경로의 TTL/인덱스 분리 — 📋 백로그 강등(게이트 미통과)
+
+> **상태(2026-08-19)**: 착수 전 실효성 게이트 **미통과 → 백로그 강등.** 실측 근거:
+> - MCP 서버는 `LiveRecommender(get_registry())` 로 **임베더 미지정 → LocalEmbedder(값쌈)** 재색인
+>   (`apps/mcp/.../server.py`, OpenAI 키 경로 없음).
+> - 재색인은 레지스트리 **generation(id-set) 변경 시에만** 발생 — 공식 레지스트리는 서버 목록을
+>   5분마다 바꾸지 않는다. 게다가 pgvector(TASK 7 완료)의 content_hash 증분 캐시로 비용이 더 낮아짐.
+> → 값싼 로컬 재색인을 최적화하는 이득이 미미하므로 **착수하지 않는다.** 아래는 원안(참고).
+
+<details><summary>원안(참고용, 착수 보류)</summary>
 
 ### 배경 — v1 정정
 
@@ -435,6 +444,8 @@ TTL 라이브 소스가 직접 federate되어 generation을 흔들고 재색인�
 - (착수 시) 실효성 게이트를 통과했다 — 실측 근거가 문서로 남는다. 미통과면 백로그로 강등하고 종료.
 - MCP 경로에서 TTL refresh가 재임베딩을 유발하지 않는 테스트.
 - API 백엔드 동작에 변화가 없다.
+
+</details>
 
 ---
 
