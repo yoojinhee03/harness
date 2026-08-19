@@ -254,6 +254,19 @@ TASK 1의 실측 결과, 특히 **빈 caps 원인 분류**에 따라 해법을 �
 
 ## TASK 4 — IR 파일명·스키마 충돌 해소 (구 TASK 1)
 
+> **상태(2026-08-19)**: ✅ **핵심 완료(스코프 정정).** 코드 조사 결과 이 프로젝트에서 harness.yaml 은
+> **고정 경로의 파일이 아니라 텍스트 포맷**이다(`to_harness_yaml`/`parse_harness_yaml` + DB 저장 +
+> CLI 경로인자 + MCP 텍스트인자). eject 는 `.claude/`·`.cursor/` 를 쓰고 harness.yaml 파일을 유저
+> 레포에 쓰지 않는다 → **".harness/ 이동"은 해당 없음**. 대신 실질 방어를 구현:
+> - 산출물 최상단 `$schema: urn:harness-architect:harness:v1`(자기식별, HP v1 harnessprotocol.io 와 구별).
+> - `parse_harness_yaml` 이 **HP v1 을 설명적 에러로 거부**($schema=harnessprotocol.io, 또는 version만 있고
+>   apiVersion/kind 없음). apiVersion/kind 는 이미 있어 구조적 구별도 유지.
+> - **하위호환**: $schema 없는 구 문서(apiVersion/kind 보유)도 정상 파싱 → 저장 데이터 마이그레이션 불필요.
+> - 테스트: emit·라운드트립·HP v1 거부·version-only 거부·하위호환. 전체 295 통과.
+>
+> **후속(저우선)**: 웹의 harness.yaml 다운로드 *파일명* 은 여전히 harness.yaml 일 수 있다(내용은 $schema 로
+> 자기식별되므로 충돌해도 판별 가능). 필요 시 다운로드명을 source.yaml 로. HP v1 이미터는 백로그.
+
 ### 배경
 
 `harnessprotocol/harness-kit`가 구현하는 **Harness Protocol v1**이 동일 파일명 `harness.yaml`을
