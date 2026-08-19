@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator
+from collections.abc import Set as AbstractSet
 from typing import Any
 
-from harness_resolver import Component
+from harness_catalog import facet_for_capability
+from harness_resolver import Component, InMemoryRegistry, resolve
 
 from .authoring import COMPONENT_TYPES, author_component
-from .harness_build import build_harness_yaml
+from .harness_build import build_harness_yaml, parse_harness_yaml
 from .llm_client import run_tool_loop
 from .web_search import web_search
 
@@ -31,11 +33,13 @@ AGENT_SYSTEM = (
     "를 만들도록 돕는 게 유일한 목적이다. 구성요소 4종:\n"
     "- context: 항상 주입되는 배경지식/규칙\n- skill: 작업 절차(how-to)\n"
     "- mcp: 외부 도구/서버 연결\n- hook: 요청 전후 자동 실행되는 검사·동작\n\n"
-    "가장 중요한 원칙 — 되묻지 말고 만들어라(draft-first):\n"
-    "- 사용자가 대략의 목표만 말해도 곧바로 draft_component 로 구체적인 v1 초안을 만들어 보여줘라. 세부(전환 "
-    "스타일·BGM 종류·이모지 소스 등)는 네가 합리적으로 가정해 채우고, 어떻게 가정했는지 한 줄로 알린 뒤 사용자가 "
-    "고치게 하라.\n"
-    "- '먼저 ~부터 만들어볼까요?', '어떤 걸 포함할지 말씀해 주세요' 처럼 허락·정보를 구걸하지 마라. 그냥 만든다.\n"
+    "가장 중요한 원칙 — 재사용 우선, 그다음 되묻지 말고 진행(reuse-first, then act):\n"
+    "- 무언가 필요하면 **먼저 search_catalog 로 실존 구성요소를 찾는다.** 쓸 만한 게 있으면 재사용하고, "
+    "없거나 약하면(gap) 그때 draft_component 로 만든다. 카탈로그엔 실존 MCP 수천 개가 있으니 접근·도구는 "
+    "특히 지어내기 전에 반드시 검색하라(발명 금지 — 재사용 > gap > 저작 순).\n"
+    "- 만들기로 정했으면 되묻지 말고 곧바로 구체적 v1 초안을 낸다. 세부(전환 스타일·BGM 종류 등)는 합리적으로 "
+    "가정해 채우고 한 줄로 알린 뒤 사용자가 고치게 하라. '먼저 ~부터 만들어볼까요?' 처럼 허락을 구걸하지 마라 "
+    "— 재사용 확인은 하되, 만들기로 정했으면 그냥 만든다.\n"
     "- 이미 답한 걸 또 묻지 마라. 질문은 방향 자체를 정말 못 정할 때만 딱 1개.\n\n"
     "그 밖의 원칙:\n"
     "1) 특정 카탈로그 항목명을 대며 '뭐야?' 라고 하면 반드시 get_catalog_item 으로 조회해서 설명하라"
@@ -47,9 +51,17 @@ AGENT_SYSTEM = (
     "assemble_harness 로 하나의 에이전트(하네스)로 묶어라.\n"
     "4) mcp 를 만들기 전 반드시 search_catalog(그리고 가능하면 web_search)로 **실존 서버**를 먼저 찾아라. "
     "mcp 는 찾은 실존 서버만 기술한다(그 서버의 실제 id·이름·실행 스펙 그대로). 카탈로그에 관련 mcp 가 있으면 "
-    "그걸 재사용하라. **찾지 못하면 mcp 를 만들지 말고** skill/hook 으로 대체하라 — 'OO API Connector' 같은 "
-    "이름을 지어내는 것은 절대 금지. 대체했으면 '실존 mcp 를 못 찾아 skill 로 대체했다'고 한 줄로 알려라.\n"
-    "5) 짧고 자연스러운 한국어로. 메뉴처럼 '1. 2. 3. 어떤 걸 고르시겠어요?' 로 강요하지 마라."
+    "그걸 재사용하라. 'OO API Connector' 같은 이름을 지어내는 것은 절대 금지.\n"
+    "5) 실존 도구를 못 찾았을 때 — 그 능력이 **절차·지식**(프롬프트로 표현 가능: 리뷰 기준·작성 규칙·톤 등)이면 "
+    "skill/context 로 만들면 된다. 하지만 그 능력이 **실제 실행**을 요구하면(영상 컷·트랜스코딩·오디오 믹싱·"
+    "이미지/파일 변환·외부 API 호출 등) skill 이나 hook 으로 '대체'하지 마라 — skill 은 프롬프트라 실제로 "
+    "실행하지 못한다(대체하면 '조립해도 실제로 안 돌아가는' 껍데기가 된다). 그런 능력은 **정직하게 gap 으로 "
+    "남겨라**: 만들 수 있는 절차 skill 은 만들되, '○○(실행)은 카탈로그에 실행 도구가 없어 지금은 gap 이다. "
+    "실존 MCP(예: ffmpeg 기반)를 찾아 연결하거나 이 능력을 카탈로그에 시딩해야 실제로 동작한다'고 사용자에게 "
+    "분명히 구분해서 알려라. 없는 실행을 있는 척하지 마라.\n"
+    "6) hook 은 요청 전후 **lifecycle 부수효과**(검사·차단·마스킹·알림·로깅)만 한다. 파이프라인 본작업(장면 "
+    "감지·편집·요약·분류 등)을 hook 에 넣지 마라 — 그건 skill 의 일이고, hook 에 넣으면 조립 시 검증 실패한다.\n"
+    "7) 짧고 자연스러운 한국어로. 메뉴처럼 '1. 2. 3. 어떤 걸 고르시겠어요?' 로 강요하지 마라."
 )
 
 
@@ -143,6 +155,7 @@ def _build_tools(
     holder: dict[str, Any],
     forced_type: str | None,
     search_key: str,
+    hot_capabilities: AbstractSet[str],
 ) -> tuple[list[dict[str, Any]], Callable[[str, dict[str, Any]], tuple[str, list[dict[str, Any]]]]]:
     """holder = {"components": [Component...], "harness": {...}|None} — 대화의 초안 세트(가변)."""
 
@@ -150,7 +163,7 @@ def _build_tools(
         if name == "get_catalog_item":
             return _tool_get(registry, str(args.get("query") or ""))
         if name == "search_catalog":
-            return _tool_search(recommender, str(args.get("query") or ""))
+            return _tool_search(recommender, str(args.get("query") or ""), hot_capabilities)
         if name == "draft_component":
             return _tool_draft(complete, holder, forced_type, args)
         if name == "assemble_harness":
@@ -192,18 +205,44 @@ def _tool_get(registry: Any, query: str) -> tuple[str, list[dict[str, Any]]]:
     return (json.dumps(info, ensure_ascii=False), [])
 
 
-def _tool_search(recommender: Any, query: str) -> tuple[str, list[dict[str, Any]]]:
-    recs = _recommend(recommender, query, top_k=5)
-    if not recs:
-        return ("검색 결과 없음.", [{"type": "recommendations", "items": [], "reused": False}])
+def _tool_search(
+    recommender: Any, query: str, hot_capabilities: AbstractSet[str] = frozenset()
+) -> tuple[str, list[dict[str, Any]]]:
+    recs, gaps = _recommend_full(recommender, query, top_k=5)
+    event = {"type": "recommendations", "items": recs, "gaps": gaps, "reused": False}
+    if not recs and not gaps:
+        return ("검색 결과 없음.", [event])
     lines = [
         f"- {r['name']} [{r['type']}] 점수={r['score']:.2f} — {(r.get('summary') or '')[:80]}"
         for r in recs
     ]
-    top = float(recs[0].get("score", 0.0))
+    if gaps:
+        # 그라운딩: 카탈로그가 못 채우는 능력은 정직하게 gap 으로 알린다 — 지어내지 말고 draft_component 로 만들라.
+        # 자주 요청되는(hot) 공백은 만들면 카탈로그에 남아 다른 곳에도 재사용되므로 우선 제안하라.
+        def _line(g: dict[str, Any]) -> str:
+            hot = " ★자주 요청됨 — 만들면 재사용됨(우선 제안)" if g["capability"] in hot_capabilities else ""
+            return f"- {g['capability']} → {g['suggested_type']} (카탈로그에 없음){hot}"
+
+        gl = "\n".join(_line(g) for g in gaps)
+        lines.append(f"\n[카탈로그 공백(gap) — 지어내지 말고 draft_component 로 만들 후보]\n{gl}")
+    top = float(recs[0].get("score", 0.0)) if recs else 0.0
     weak = "\n(주의: 최고 점수가 낮음 — 관련도 약함. 딱 맞는 게 없을 수 있으니 새로 만들자고 제안하라.)"
     note = "" if top >= 1.0 else weak
-    return ("\n".join(lines) + note, [{"type": "recommendations", "items": recs, "reused": False}])
+    return ("\n".join(lines) + note, [event])
+
+
+def _hook_misuse_warning(comp: Component) -> str | None:
+    """훅이 lifecycle 밖 능력을 provides 하면(파이프라인 본작업 위장) 경고 — 조립 시 리졸버가 검증 실패시킨다."""
+    if comp.type != "hook":
+        return None
+    off = [c for c in comp.provides if facet_for_capability(c) not in (None, "lifecycle")]
+    if not off:
+        return None
+    return (
+        f"⚠️ 이 hook 이 lifecycle 밖 능력({', '.join(off)})을 provides 한다 — 파이프라인 본작업을 hook 으로 "
+        "위장한 것이라 조립 시 검증 실패한다. 그 작업은 skill 로 옮기고 hook 은 검사·알림 같은 부수효과만 남겨라. "
+        "실행이 필요한데 실존 도구가 없으면 gap 으로 남기고 사용자에게 알려라."
+    )
 
 
 def _tool_draft(
@@ -232,7 +271,26 @@ def _tool_draft(
         f"초안 '{comp.name}' [{comp.type}] {'수정' if replaced else '추가'}됨. "
         f"현재 초안 세트({len(comps)}개): {listing}."
     )
+    warn = _hook_misuse_warning(comp)
+    if warn:  # 훅 오용을 draft 단계에서 즉시 피드백(조립까지 가지 않게)
+        summary = warn + "\n" + summary
     return (summary, [_drafts_event(comps)])
+
+
+def _validate_assembly(comps: list[Component], yaml_text: str) -> dict[str, list[str]]:
+    """조립된 에이전트를 초안들만으로 resolve — 미충족 능력(gap)·에러를 낸다(실행가능성 게이트).
+
+    초안 집합만으로 requires 가 안 풀리면 gap 이다: 예) 편집 skill 이 media 접근을 requires 하는데 그 접근을
+    제공하는 실존 MCP 를 안 넣었으면 gap → "지어낸 껍데기"가 저장되기 전에 표면화된다(불변식 1: 실행가능성).
+    """
+    try:
+        res = resolve(parse_harness_yaml(yaml_text), InMemoryRegistry(list(comps)))
+    except Exception:  # noqa: BLE001 — 검증 실패는 조립 자체를 막지 않는다(정보 제공용)
+        return {"gaps": [], "errors": []}
+    return {
+        "gaps": sorted({g.capability for g in res.diagnostics.gaps if g.capability}),
+        "errors": [e.message for e in res.diagnostics.errors],
+    }
 
 
 def _tool_assemble(holder: dict[str, Any], args: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
@@ -242,23 +300,45 @@ def _tool_assemble(holder: dict[str, Any], args: dict[str, Any]) -> tuple[str, l
     name = str(args.get("name") or "에이전트").strip()
     desc = str(args.get("description") or "").strip()
     yaml_text = build_harness_yaml(comps, name, desc)
-    harness = {"name": name, "description": desc, "yaml": yaml_text, "component_ids": [c.id for c in comps]}
+    val = _validate_assembly(comps, yaml_text)
+    harness = {
+        "name": name, "description": desc, "yaml": yaml_text,
+        "component_ids": [c.id for c in comps], "gaps": val["gaps"], "errors": val["errors"],
+    }
     holder["harness"] = harness
-    summary = (
-        f"'{name}' 하네스로 {len(comps)}개 구성요소를 묶었어요(harness.yaml 생성). "
-        "사용자에게 캔버스에서 확인하고 저장하라고 안내하라."
-    )
-    return (summary, [{"type": "harness", "harness": harness}])
+    parts = [f"'{name}' 하네스로 {len(comps)}개 구성요소를 묶었어요(harness.yaml 생성). "]
+    if val["errors"]:
+        parts.append(f"⚠️ 검증 에러: {'; '.join(val['errors'][:3])}. ")
+    if val["gaps"]:
+        parts.append(
+            f"⚠️ 미충족 능력(gap): {', '.join(val['gaps'])} — 이 능력을 제공하는 **실존 MCP** 를 "
+            "search_catalog 로 찾아 넣어야 실제로 동작한다(지어내지 말 것). 사용자에게 이 공백을 알려라. "
+        )
+    if not val["errors"] and not val["gaps"]:
+        parts.append("실행가능성 검증 통과. ")
+    parts.append("사용자에게 캔버스에서 확인하고 저장하라고 안내하라.")
+    return ("".join(parts), [{"type": "harness", "harness": harness}])
 
 
-def _recommend(recommender: Any, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+def _dump_list(items: Any) -> list[dict[str, Any]]:
+    return [x.model_dump() if hasattr(x, "model_dump") else dict(x) for x in (items or [])]
+
+
+def _recommend_full(
+    recommender: Any, query: str, top_k: int = 5
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """검색 → (재사용 후보 recommendations, 카탈로그 공백 gaps). 둘 다 정직하게 돌려준다."""
     if not query.strip():
-        return []
+        return [], []
     try:
         result = recommender.recommend(query, top_k=top_k)
     except Exception:  # noqa: BLE001 — 빈 카탈로그/임베더 문제는 결과 없음으로
-        return []
-    return [r.model_dump() if hasattr(r, "model_dump") else dict(r) for r in result.recommendations]
+        return [], []
+    return _dump_list(result.recommendations), _dump_list(getattr(result, "gaps", []))
+
+
+def _recommend(recommender: Any, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+    return _recommend_full(recommender, query, top_k=top_k)[0]
 
 
 # ─────────────────────────── 에이전트 실행 ───────────────────────────
@@ -278,13 +358,17 @@ def run_agent(
     registry: Any,
     forced_type: str | None = None,
     search_key: str = "",
+    hot_capabilities: AbstractSet[str] = frozenset(),
 ) -> Iterator[dict[str, Any]]:
     """한 턴 — tool-use 루프 이벤트를 그대로 흘린다(status/side/token/final).
 
     초안 세트(구성요소들)와 하네스는 side 이벤트(type=drafts / type=harness)로 나온다.
+    hot_capabilities: 자주 요청되는 gap 능력(저작 우선 제안 근거) — 검색 결과 gap 주석에 반영.
     """
     holder: dict[str, Any] = {"components": list(current_components), "harness": current_harness}
-    tools, dispatch = _build_tools(recommender, registry, complete, holder, forced_type, search_key)
+    tools, dispatch = _build_tools(
+        recommender, registry, complete, holder, forced_type, search_key, hot_capabilities
+    )
     messages = _history_to_messages(history, user_msg)
     yield from run_tool_loop(provider, model, api_key, AGENT_SYSTEM, messages, tools, dispatch)
 

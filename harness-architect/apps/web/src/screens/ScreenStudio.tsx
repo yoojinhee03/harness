@@ -5,6 +5,7 @@ import {
   streamStudioChat,
   subscribeConversationEvents,
   type AuthoredComponent,
+  type CapabilityGap,
   type ComponentType,
   type Recommendation,
   type StudioConversation,
@@ -35,6 +36,7 @@ interface LiveTurn {
   phase: string; // status 라벨(도구 실행 알림)
   prose: string; // 누적 토큰
   recommendations?: Recommendation[];
+  gaps?: CapabilityGap[]; // 카탈로그 공백 — 재사용 후보와 동등하게 렌더
   components?: AuthoredComponent[]; // 초안 세트(갱신되면 통째로 들어옴)
   harness?: StudioHarness;
 }
@@ -144,7 +146,7 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
             case "status":
               return { ...prev, phase: ev.data.label };
             case "recommendations":
-              return { ...prev, recommendations: ev.data.items };
+              return { ...prev, recommendations: ev.data.items, gaps: ev.data.gaps ?? [] };
             case "drafts":
               return { ...prev, components: ev.data.components };
             case "harness":
@@ -173,8 +175,9 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
   const components = live?.components ?? dset.components ?? [];
   const harness = live?.harness ?? dset.harness ?? null;
   const recs = live?.recommendations ?? lastMeta(conv, (m) => m.meta?.recommendations) ?? null;
+  const gaps = live?.gaps ?? lastMeta(conv, (m) => m.meta?.gaps) ?? null;
   const hasResult = components.length > 0 || !!harness;
-  const showRecs = !hasResult && !!recs && recs.length > 0;
+  const showRecs = !hasResult && ((!!recs && recs.length > 0) || (!!gaps && gaps.length > 0));
   const committed = !!conv?.component_id;
 
   return (
@@ -292,13 +295,28 @@ export default function ScreenStudio({ workspace }: { workspace: string }) {
           />
         ) : showRecs ? (
           <Card>
-            <h3 className="text-sm font-semibold text-fg">이미 있는 구성요소</h3>
-            <p className="mt-0.5 text-xs text-muted">새로 만들기 전에 재사용을 확인하세요.</p>
-            <div className="mt-3 space-y-2">
-              {recs!.map((r) => (
-                <RecommendationCard key={r.id} r={r} />
-              ))}
-            </div>
+            <h3 className="text-sm font-semibold text-fg">카탈로그 조회</h3>
+            <p className="mt-0.5 text-xs text-muted">
+              재사용할 기존 구성요소와, 카탈로그에 <b className="text-fg">없는 능력(공백)</b>을 함께 보여줍니다.
+            </p>
+            {recs && recs.length > 0 && (
+              <div className="mt-3 space-y-2">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-muted">재사용 후보</div>
+                {recs.map((r) => (
+                  <RecommendationCard key={r.id} r={r} />
+                ))}
+              </div>
+            )}
+            {gaps && gaps.length > 0 && (
+              <div className="mt-3 space-y-2">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-muted">
+                  카탈로그 공백 — 새로 만들 후보
+                </div>
+                {gaps.map((g) => (
+                  <GapCard key={g.capability} g={g} />
+                ))}
+              </div>
+            )}
           </Card>
         ) : (
           <Card>
@@ -428,6 +446,17 @@ function ResultPanel({
           <p className="mt-0.5 text-xs text-muted">
             {(harness.component_ids?.length ?? components.length)}개 구성요소를 묶은 harness.yaml
           </p>
+          {harness.errors && harness.errors.length > 0 && (
+            <div className="mt-2 rounded-md border border-err/40 bg-err/10 p-2 text-[11px] text-err">
+              검증 에러: {harness.errors.join("; ")}
+            </div>
+          )}
+          {harness.gaps && harness.gaps.length > 0 && (
+            <div className="mt-2 rounded-md border border-warn/40 bg-warn/10 p-2 text-[11px] text-warn">
+              ⚠️ 미충족 능력(gap): {harness.gaps.join(", ")} — 이 능력을 제공하는 <b>실존 MCP</b>를 추가해야 실제로
+              동작합니다(지어내지 않음).
+            </div>
+          )}
           <pre className={`mt-2 max-h-48 ${codeBlock}`}>{harness.yaml}</pre>
         </div>
       )}
@@ -495,6 +524,23 @@ function RecommendationCard({ r }: { r: Recommendation }) {
         ))}
       </div>
       {r.reason && <p className="mt-1.5 text-[11px] leading-relaxed text-muted">{r.reason}</p>}
+    </div>
+  );
+}
+
+/** 카탈로그가 못 채운 요구 능력 — 추천 카드와 동등한 비중으로 렌더(발명 대신 정직한 결핍). */
+function GapCard({ g }: { g: CapabilityGap }) {
+  return (
+    <div className="rounded-lg border border-dashed border-warn/50 p-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate text-sm font-medium text-fg">{capLabel(g.capability)}</span>
+        <Chip className={TYPE_COLOR[g.suggested_type]}>{TYPE_LABEL[g.suggested_type]} 필요</Chip>
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+        <Badge className="bg-warn/15 text-warn">카탈로그 공백</Badge>
+        <Badge className="bg-surface-2 text-muted">{g.capability}</Badge>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-relaxed text-muted">{g.reason}</p>
     </div>
   );
 }

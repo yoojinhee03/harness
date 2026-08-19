@@ -6,12 +6,24 @@ RAG 엔진 *코드* 는 백엔드에 잔류하고, 컴포넌트 *데이터* 는 
 from __future__ import annotations
 
 from .embeddings import Embedder, LocalEmbedder, OpenAIEmbedder, get_embedder
-from .enrichment import CapabilityClassifier, CapabilityEnricher, claude_classifier, get_classifier
+from .enrichment import (
+    CapabilityClassifier,
+    CapabilityEnricher,
+    claude_classifier,
+    get_classifier,
+    make_classifier,
+)
 from .harvest import ServerDescriptor, component_to_yaml, harvest, harvest_component, uncovered
 from .loader import build_registry, load_components, resolve_catalog_dir
 from .ranking import RankedComponent, rank
-from .reasoning import ClaudeReasoner, NullReasoner, Reasoner, get_reasoner
-from .recommender import LiveRecommender, Recommendation, Recommender, RecommendResult
+from .reasoning import ClaudeReasoner, NullReasoner, Reasoner, get_reasoner, make_reasoner
+from .recommender import (
+    CapabilityGap,
+    LiveRecommender,
+    Recommendation,
+    Recommender,
+    RecommendResult,
+)
 from .registry_source import (
     DEFAULT_MARKETPLACE_URL,
     DEFAULT_REGISTRY_URL,
@@ -28,14 +40,22 @@ from .registry_source import (
 )
 from .settings import Settings, load_settings
 from .store import VectorStore
-from .vocabulary import CAPABILITY_VOCAB, extract_capabilities_heuristic
+from .vocabulary import (
+    CAPABILITY_VOCAB,
+    DOMAIN_VOCAB,
+    extract_capabilities_heuristic,
+    facet_for_capability,
+    suggested_component_type,
+)
 
 __all__ = [
     "CAPABILITY_VOCAB",
+    "DOMAIN_VOCAB",
     "DEFAULT_MARKETPLACE_URL",
     "DEFAULT_REGISTRY_URL",
     "CapabilityClassifier",
     "CapabilityEnricher",
+    "CapabilityGap",
     "ClaudeReasoner",
     "Embedder",
     "FederatedRegistry",
@@ -61,6 +81,7 @@ __all__ = [
     "component_to_yaml",
     "descriptor_from_entry",
     "extract_capabilities_heuristic",
+    "facet_for_capability",
     "federate",
     "get_classifier",
     "get_embedder",
@@ -70,8 +91,11 @@ __all__ = [
     "harvest_component",
     "load_components",
     "load_settings",
+    "make_classifier",
+    "make_reasoner",
     "rank",
     "resolve_catalog_dir",
+    "suggested_component_type",
     "uncovered",
     "urllib_fetcher",
 ]

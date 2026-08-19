@@ -262,6 +262,7 @@ def test_config_schema_violation(registry: InMemoryRegistry) -> None:
 
 
 def test_hook_ordering_depends_on_and_blocking() -> None:
+    # failure/timeout_ms 는 훅 계약 필수(작업 4 검증) — 순서 테스트지만 계약 준수 상태로 둔다.
     log_hook = Component(
         id="log-hook",
         type="hook",
@@ -271,6 +272,7 @@ def test_hook_ordering_depends_on_and_blocking() -> None:
         events=["before_tool_call"],
         blocking=False,
         failure="fail_open",
+        timeout_ms=1000,
         depends_on=[],
     )
     guard = Component(
@@ -282,6 +284,7 @@ def test_hook_ordering_depends_on_and_blocking() -> None:
         events=["before_tool_call"],
         blocking=True,
         failure="fail_closed",
+        timeout_ms=2000,
         depends_on=[],
     )
     dependent = Component(
@@ -292,6 +295,8 @@ def test_hook_ordering_depends_on_and_blocking() -> None:
         provides=["lifecycle.transform"],
         events=["before_tool_call"],
         blocking=False,
+        failure="fail_closed",
+        timeout_ms=1500,
         depends_on=["guard-hook"],  # guard 뒤에 와야 함
     )
     reg = InMemoryRegistry([log_hook, guard, dependent])
@@ -309,6 +314,57 @@ def test_hook_ordering_depends_on_and_blocking() -> None:
     # blocking(guard) 우선, log 는 등록 순, after-guard 는 guard 뒤(위상정렬)
     assert order.index("guard-hook") < order.index("after-guard")
     assert order.index("guard-hook") < order.index("log-hook")  # blocking 우선
+
+
+# ─────────────────────────── 훅 오용 검증 (작업 4) ───────────────────────────
+
+
+def _hook(hid: str, *, provides: list[str], failure=None, timeout_ms=None) -> Component:
+    return Component(
+        id=hid, type="hook", name=hid, version="1.0.0",
+        provides=provides, events=["before_tool_call"], sandbox="restricted",
+        failure=failure, timeout_ms=timeout_ms,
+    )
+
+
+def _resolve_one(comp: Component, *, extra: list[Component] | None = None):
+    reg = InMemoryRegistry([comp, *(extra or [])])
+    config = HarnessConfig(
+        metadata=HarnessMetadata(id="h"),
+        components=[ComponentSelection(ref=f"{c.id}@{c.version}") for c in [comp, *(extra or [])]],
+    )
+    return resolve(config, reg)
+
+
+def test_hook_missing_timeout_errors() -> None:
+    result = _resolve_one(_hook("bad-hook", provides=["lifecycle.logging"], failure="fail_open"))
+    assert result.ok is False
+    assert any(d.code == "hook_missing_timeout" for d in result.diagnostics.errors)
+
+
+def test_hook_missing_failure_errors() -> None:
+    result = _resolve_one(_hook("bad-hook", provides=["lifecycle.logging"], timeout_ms=1000))
+    assert result.ok is False
+    assert any(d.code == "hook_missing_failure" for d in result.diagnostics.errors)
+
+
+def test_hook_provides_collision_with_pipeline_component_errors() -> None:
+    """훅이 스킬의 능력(review.code)을 provides 로 위장하면 검증 실패."""
+    disguised = _hook("fake-review-hook", provides=["review.code"], failure="fail_open", timeout_ms=500)
+    result = _resolve_one(disguised, extra=[pr_review_skill()])
+    assert result.ok is False
+    codes = {d.code for d in result.diagnostics.errors}
+    assert "hook_provides_collision" in codes
+    collision = next(d for d in result.diagnostics.errors if d.code == "hook_provides_collision")
+    assert collision.detail["collides_with"] == "pr-review-skill"
+
+
+def test_two_hooks_sharing_lifecycle_capability_is_allowed() -> None:
+    """훅끼리 같은 lifecycle 능력 공유는 정상(비-훅과의 충돌만 잡는다)."""
+    a = _hook("guard-a", provides=["lifecycle.guardrail"], failure="fail_closed", timeout_ms=1000)
+    b = _hook("guard-b", provides=["lifecycle.guardrail"], failure="fail_closed", timeout_ms=1000)
+    result = _resolve_one(a, extra=[b])
+    assert not any(d.code == "hook_provides_collision" for d in result.diagnostics.errors)
 
 
 # ─────────────────────────── extends 병합 ───────────────────────────

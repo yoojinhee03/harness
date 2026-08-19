@@ -47,6 +47,7 @@ from .authoring import COMPONENT_TYPES, author_component, test_component, valida
 from .catalog_store import CatalogStore, DbCatalogSource, sync_catalog
 from .component_store import ComponentStore, UserComponentSource, component_event_stream
 from .conversation_store import ConversationStore, conversation_event_stream
+from .gap_demand import GapDemand
 from .harness_build import parse_harness_yaml, to_harness_yaml
 from .llm_client import DEFAULT_MODEL
 from .llm_client import complete_json as _provider_complete_json
@@ -61,6 +62,7 @@ from .observability import (
 )
 from .orchestrator import run_agent as _run_agent
 from .orchestrator import suggest_title as _suggest_title
+from .promotion import promote_component
 from .schemas import (
     CatalogItem,
     ComponentAuthorBody,
@@ -78,6 +80,7 @@ from .schemas import (
     TeamCreateBody,
     TokenCreateBody,
 )
+from .scoped_recommender import ScopedRecommender
 from .store import (
     HarnessStore,
     SSEBroadcaster,
@@ -107,6 +110,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.broadcaster = make_broadcaster()  # REDIS_URL 있으면 Redis(스케일아웃)
     # OAuth CSRF state 임시 저장(state -> 생성 시각). 단일 인스턴스 개발용 — 멀티 인스턴스는 Redis/DB 로.
     app.state.oauth_states = {}
+    app.state.gap_demand = GapDemand()  # 인메모리 gap 수요 집계(Phase 14 — 저작 제안 신호)
     log.info("저장소 DB: %s · 스코프 격리 · OAuth 인증", engine.url)
 
     # 카탈로그 — 서빙은 **DB 만** 읽어 즉시 응답한다(네트워크 무의존). 느린 harvest(레지스트리·
@@ -126,14 +130,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.registry = registry
     # 임베더 — 앱 등록 OpenAI 임베딩 키가 있으면 OpenAI, 없으면 Local(키 없이). 전역 인덱스라
     # 시작 시 확정한다(키 변경은 재시작으로 반영). 서버 env 는 쓰지 않는다.
-    from harness_catalog import LocalEmbedder, OpenAIEmbedder
+    from harness_catalog import (
+        CapabilityEnricher,
+        LocalEmbedder,
+        OpenAIEmbedder,
+        make_classifier,
+        make_reasoner,
+    )
 
-    _emb_key = AppSettingsStore(engine).resolve()["embedding_key"]
+    _app_llm = AppSettingsStore(engine).resolve()
+    _emb_key = _app_llm["embedding_key"]
+    _provider, _llm_key = _app_llm["provider"], _app_llm["llm_key"]
     try:
         embedder = OpenAIEmbedder(api_key=_emb_key) if _emb_key else LocalEmbedder()
     except RuntimeError:  # openai 미설치 등 → 로컬 폴백
         embedder = LocalEmbedder()
-    app.state.recommender = LiveRecommender(registry, embedder=embedder)
+    # 앱 등록 LLM 키(provider+key)를 추출·근거 reasoner 와 카탈로그 enrichment 에 주입(없으면 휴리스틱/무보강).
+    # env 가 아니라 DB 등록 키를 쓰는 경로 — 키 변경은 재시작으로 반영(임베더와 동일 규약).
+    reasoner = make_reasoner(_provider, _llm_key)
+    app.state.recommender = LiveRecommender(registry, embedder=embedder, reasoner=reasoner)
+    enricher = CapabilityEnricher(
+        classifier=make_classifier(_provider, _llm_key), max_enrich=cfg.registry_enrich_max
+    )
 
     async def _sync_loop() -> None:
         # 주기적으로 하이브리드 harvest→DB(증분 또는 full). 첫 기동엔 상태가 없어 즉시 1회(full),
@@ -142,7 +160,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         while True:
             try:
                 if await asyncio.to_thread(catalog_store.due_for_sync, cfg.catalog_sync_interval):
-                    res = await asyncio.to_thread(sync_catalog, engine, cfg)
+                    res = await asyncio.to_thread(sync_catalog, engine, cfg, enricher=enricher)
                     total = await asyncio.to_thread(catalog_store.count)
                     log.info("카탈로그 sync 완료: %s (총 %s개)", res, total)
             except asyncio.CancelledError:
@@ -328,6 +346,10 @@ def _accounts(request: Request) -> AccountStore:
     return cast(AccountStore, request.app.state.accounts)
 
 
+def _gap_demand(request: Request) -> GapDemand:
+    return cast(GapDemand, request.app.state.gap_demand)
+
+
 def _component_store(request: Request) -> ComponentStore:
     return cast(ComponentStore, request.app.state.component_store)
 
@@ -404,6 +426,7 @@ def _scoped_registry(request: Request, user: dict[str, Any] | None) -> Any:
 @limiter.limit("60/minute")
 def recommend(request: Request, body: RecommendRequest) -> dict[str, Any]:
     result = _recommender(request).recommend(body.description, top_k=body.top_k)
+    _gap_demand(request).record(result.gaps)  # gap 수요 집계(저작 제안 신호)
     data = result.model_dump()
     # 추천 카드에도 프로비넌스 표시. (추천기 모델은 안 건드리고 API 에서 주입.)
     recs = data.get("recommendations", [])
@@ -412,6 +435,12 @@ def recommend(request: Request, body: RecommendRequest) -> dict[str, Any]:
     for rec in recs:
         rec["trust"] = _trust(rec.get("id", ""), curated, origins)
     return data
+
+
+@app.get("/gaps/top")
+def gaps_top(request: Request, n: int = Query(10, ge=1, le=50)) -> dict[str, Any]:
+    """자주 요청되나 카탈로그에 없는 능력 top-N(런타임 수요). 저작 제안·시딩 우선순위의 라이브 신호."""
+    return {"gaps": _gap_demand(request).top(n)}
 
 
 @app.post("/resolve", response_model=ResolveResult)
@@ -988,6 +1017,27 @@ async def test_component_endpoint(
     return {"result": result, "status": new_status}
 
 
+@app.post("/components/{cid}/promote")
+async def promote_component_endpoint(
+    request: Request,
+    cid: str,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """저작 컴포넌트를 공유 카탈로그로 승격(Phase 14 피드백 루프). 게이트: ready + validate 통과.
+
+    승격되면 origin='promoted' 로 모든 유저 검색에 등장(gap 을 남의 것까지 닫음). 신뢰등급은 community.
+    """
+    sk = _resolve_scope(request, user, scope, write=True)
+    catalog_store = getattr(request.app.state, "catalog_store", None)
+    if catalog_store is None:
+        raise HTTPException(status_code=503, detail="카탈로그 스토어가 없습니다(harvest off).")
+    result = promote_component(_component_store(request), catalog_store, sk, cid)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail="; ".join(result["errors"]))
+    return result
+
+
 @app.delete("/components/{cid}")
 async def delete_component(
     request: Request,
@@ -1128,9 +1178,15 @@ async def studio_chat(
             continue
     current_harness = dset.get("harness")
     start_version = full.get("version")
-    recommender = _recommender(request)
-    registry = _registry(request)
+    # 스코프 인지(Phase 14 피드백 루프) — 유저 저작(ready) 컴포넌트를 검색·재사용에 편입한다.
+    # 추천기: 전역 결과 + 유저 컴포넌트 병합(ScopedRecommender). 레지스트리: get_catalog_item 이 유저 것도 찾게.
+    _user_scopes = _accounts(request).visible_scope_keys(user["id"])
+    _user_comps = _component_store(request).ready_components(list(_user_scopes))
+    recommender = ScopedRecommender(_recommender(request), _user_comps)
+    registry = _scoped_registry(request, user)
     broadcaster = _broadcaster(request)
+    gap_demand = _gap_demand(request)
+    hot_capabilities = gap_demand.hot_capabilities()  # 자주 요청되는 공백 → 저작 우선 제안 근거
     user_msg = body.message
     forced_type = body.forced_type if body.forced_type in COMPONENT_TYPES else None
 
@@ -1140,6 +1196,7 @@ async def studio_chat(
     async def gen() -> AsyncIterator[dict[str, Any]]:
         try:
             recommendations: list[dict[str, Any]] | None = None
+            rec_gaps: list[dict[str, Any]] | None = None
             cur_components: list[dict[str, Any]] = [c.model_dump() for c in current_components]
             cur_harness: dict[str, Any] | None = current_harness
             new_version: int | None = start_version
@@ -1148,6 +1205,7 @@ async def studio_chat(
                 history, user_msg, current_components, current_harness, provider=provider, model=model,
                 api_key=key, complete=_complete, recommender=recommender, registry=registry,
                 forced_type=forced_type, search_key=res.get("search_key", ""),
+                hot_capabilities=hot_capabilities,
             )
             async for ev in _abridge(agent):
                 kind = ev.get("type")
@@ -1158,7 +1216,12 @@ async def studio_chat(
                     st = se.get("type")
                     if st == "recommendations":
                         recommendations = se["items"] or None
-                        yield _sse("recommendations", {"items": se["items"], "reused": se.get("reused", False)})
+                        rec_gaps = se.get("gaps") or None
+                        gap_demand.record(se.get("gaps") or [])  # 스튜디오 검색 gap 도 수요 집계
+                        yield _sse(
+                            "recommendations",
+                            {"items": se["items"], "gaps": se.get("gaps", []), "reused": se.get("reused", False)},
+                        )
                     elif st == "drafts":
                         cur_components = se["components"]
                         new_version = store.save_set(sk, cid, cur_components, cur_harness)
@@ -1182,6 +1245,7 @@ async def studio_chat(
                 "components": [{"type": c.get("type"), "name": c.get("name")} for c in cur_components] or None,
                 "harness": (cur_harness.get("name") if cur_harness else None),
                 "recommendations": recommendations,
+                "gaps": rec_gaps,
                 "version": new_version,
             }
             amsg = store.add_message(sk, cid, "assistant", prose, meta)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import Any
 
 from harness_catalog import Fetcher, Settings, build_live_sources, load_settings
 from harness_resolver import Component
@@ -198,7 +199,11 @@ class DbCatalogSource:
 
 
 def sync_catalog(
-    engine: Engine, settings: Settings | None = None, fetcher: Fetcher | None = None
+    engine: Engine,
+    settings: Settings | None = None,
+    fetcher: Fetcher | None = None,
+    *,
+    enricher: Any = None,
 ) -> dict[str, dict[str, object]]:
     """하이브리드 harvest → DB. 반환: {origin: {mode, upsert, delete}}.
 
@@ -211,7 +216,7 @@ def sync_catalog(
     cfg = settings or load_settings()
     store = CatalogStore(engine)
     result: dict[str, dict[str, object]] = {}
-    for source in build_live_sources(cfg, fetcher):
+    for source in build_live_sources(cfg, fetcher, enricher=enricher):
         origin = getattr(source, "origin", "live")
         watermark, last_full = store.get_state(origin)
         full_due = last_full is None or seconds_since(last_full) >= cfg.catalog_full_interval

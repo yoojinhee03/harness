@@ -98,6 +98,9 @@ def resolve(config: HarnessConfig, registry: Registry) -> ResolveResult:
             if cap not in provided:
                 diag.gap(c.id, cap)
 
+    # ── 4.5 훅 오용 검증 (공급망 신뢰; CONTRIBUTING §3) ──
+    _validate_hooks(diag, comps)
+
     # ── 5. 충돌 감지 (exclusive_group 중복 · conflicts_with 쌍) ──
     groups: dict[str, list[str]] = defaultdict(list)
     for c in comps:
@@ -210,6 +213,44 @@ def _resolve_subagents(effective: HarnessConfig, registry: Registry, diag: Diagn
             )
         )
     return out
+
+
+def _validate_hooks(diag: Diagnostics, comps: list[Component]) -> None:
+    """훅 오용을 하드 에러로 잡는다(작업 4). 훅은 라이프사이클 시점에 임의 로직을 실행하므로 계약이 엄격하다.
+
+    1) `failure` / `timeout_ms` 누락 — 격리 런타임이 실패 정책·타임아웃을 강제하는데, 없으면 강제할
+       상한이 없다(CONTRIBUTING §3: `timeout_ms` 필수, `failure` 는 guardrail/logging 성격에 맞게 필수).
+    2) 다른 컴포넌트(skill/mcp/context)가 제공하는 능력을 훅이 provides 로 중복 선언 — 파이프라인 본
+       작업을 훅으로 위장하는 실관찰 패턴. 훅끼리의 동일 lifecycle 능력 공유는 정상이라 제외(비-훅과의
+       충돌만 잡는다).
+    """
+    non_hook_provides: dict[str, str] = {}
+    for c in comps:
+        if c.type != "hook":
+            for cap in c.provides:
+                non_hook_provides.setdefault(cap, c.id)
+
+    for h in comps:
+        if h.type != "hook":
+            continue
+        if h.timeout_ms is None:
+            diag.error("hook_missing_timeout", f"훅 '{h.id}' 에 timeout_ms 가 없음(격리 런타임 강제 대상)", id=h.id)
+        if h.failure is None:
+            diag.error(
+                "hook_missing_failure",
+                f"훅 '{h.id}' 에 failure(fail_open|fail_closed)가 없음",
+                id=h.id,
+            )
+        disguised = sorted(cap for cap in h.provides if cap in non_hook_provides)
+        for cap in disguised:
+            diag.error(
+                "hook_provides_collision",
+                f"훅 '{h.id}' 가 '{non_hook_provides[cap]}' 의 능력 '{cap}' 를 중복 provides "
+                f"— 파이프라인 본작업을 훅으로 위장(훅은 lifecycle 부수효과만 provides 해야 함)",
+                id=h.id,
+                capability=cap,
+                collides_with=non_hook_provides[cap],
+            )
 
 
 def _validate_config(

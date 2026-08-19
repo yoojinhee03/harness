@@ -56,7 +56,9 @@ _SYSTEM: dict[str, str] = {
     "hook": "너는 하네스 'hook' 저작기다. 요청 전후 자동 실행되는 검사/차단 스펙을 만든다(여기서 실행하진 않음).\n"
     '델타: {"events":["before_request|after_request|before_tool_call|after_tool_call|after_response",...],'
     '"emit_command":"실행 셸 명령(파괴적/위험 금지)","sandbox":"none|restricted|external","blocking":bool,'
-    '"failure":"fail_open|fail_closed"}.\n' + _COMMON,
+    '"failure":"fail_open|fail_closed","timeout_ms":정수(ms)}. '
+    "guardrail/validation 은 fail_closed, 관찰(logging)은 fail_open. failure·timeout_ms 는 필수.\n"
+    "훅은 lifecycle 부수효과만 provides 한다(다른 컴포넌트의 능력을 provides 로 위장 금지).\n" + _COMMON,
 }
 
 
@@ -96,12 +98,21 @@ def _from_llm(type_: str, data: dict[str, Any], prompt: str) -> Component:
             auth=_auth(data.get("auth")),
         )
     elif type_ == "hook":
+        blocking = bool(data.get("blocking"))
+        # failure·timeout_ms 는 훅 계약 필수(리졸버 강제) — LLM 이 빠뜨리면 안전한 기본값으로 채운다.
+        failure = data.get("failure") if data.get("failure") in ("fail_open", "fail_closed") else None
+        if failure is None:
+            failure = "fail_closed" if blocking else "fail_open"  # 차단 훅은 보수적으로 닫힘
+        raw_timeout = data.get("timeout_ms")
+        timeout_ms = int(raw_timeout) if isinstance(raw_timeout, int | float) and raw_timeout > 0 else 2000
+        sandbox = data.get("sandbox") if data.get("sandbox") in ("none", "restricted", "external") else "restricted"
         base.update(
             events=[e for e in (data.get("events") or []) if e in _HOOK_EVENTS],
             emit_command=str(data.get("emit_command") or "") or None,
-            sandbox=(data.get("sandbox") if data.get("sandbox") in ("none", "restricted", "external") else None),
-            blocking=bool(data.get("blocking")),
-            failure=(data.get("failure") if data.get("failure") in ("fail_open", "fail_closed") else None),
+            sandbox=sandbox,
+            blocking=blocking,
+            failure=failure,
+            timeout_ms=timeout_ms,
         )
     return Component(**base)
 

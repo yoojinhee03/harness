@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from harness_catalog import CapabilityEnricher, MCPRegistrySource
+from harness_catalog import CapabilityEnricher, MCPRegistrySource, make_classifier
+from harness_catalog.reasoning import NullReasoner, make_reasoner
 from harness_resolver import Component
 
 
@@ -72,6 +73,35 @@ def test_failed_classifier_keeps_original():
     comps = [_comp("a/x", "X")]
     CapabilityEnricher(classifier=dead).enrich(comps)
     assert comps[0].capability_tags == []  # 실패 → 원본 유지, 크래시 없음
+
+
+def test_retag_reclassifies_already_tagged():
+    """retag=True 면 이미(오탐) 태그가 있어도 재분류로 갈아끼운다 — 오프라인 오탐 정리 패스."""
+    clf = RecordingClassifier({"a/x": ["media.video"]})
+    c = _comp("a/x", "AI Media Studio", caps=["vcs.code-review"])  # 초기 휴리스틱 오탐
+    out = CapabilityEnricher(classifier=clf, retag=True).enrich([c])
+    assert out[0].capability_tags == ["media.video"]
+    assert out[0].provides == ["media.video"]
+
+
+def test_domain_guided_new_caps_are_kept():
+    """vocab 에 없어도 형태(domain.capability)만 맞으면 유지 — 범용(신규 도메인 태깅). 형태 위반만 제거."""
+    clf = RecordingClassifier({"a/x": ["finance.trading", "not a cap", "media.video", "too.many.dots"]})
+    out = CapabilityEnricher(classifier=clf).enrich([_comp("a/x", "X")])
+    assert out[0].capability_tags == ["finance.trading", "media.video"]
+
+
+def test_make_classifier_gated_by_key():
+    """앱 키 주입 경로 — 키 없으면 None(무보강), 키 있으면 분류기 반환(네트워크 호출은 안 함)."""
+    assert make_classifier("openai", None) is None
+    assert make_classifier("anthropic", "") is None
+    assert make_classifier("openai", "sk-test") is not None  # 키 있으면 분류기 생성(호출 전까진 무네트워크)
+
+
+def test_make_reasoner_gated_by_key():
+    assert isinstance(make_reasoner("openai", None), NullReasoner)
+    r = make_reasoner("openai", "sk-test")
+    assert r.name == "claude" and r._provider == "openai"  # provider 주입 반영
 
 
 def test_registry_source_applies_enricher():

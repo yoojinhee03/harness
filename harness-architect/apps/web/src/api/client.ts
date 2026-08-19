@@ -43,12 +43,21 @@ export interface Recommendation {
   trust?: Trust; // API 가 주입
 }
 
+/** 카탈로그가 못 채운 요구 능력 — 추천 카드와 동등하게 렌더되는 정직한 결핍 신호. */
+export interface CapabilityGap {
+  capability: string;
+  reason: string;
+  suggested_type: ComponentType;
+  facet: string | null;
+}
+
 export interface RecommendResult {
   description: string;
   requirements: string[];
   extraction_mode: string;
   ranking_mode: string;
   recommendations: Recommendation[];
+  gaps: CapabilityGap[];
   groups: Record<string, string[]>;
 }
 
@@ -242,6 +251,8 @@ export interface StudioHarness {
   description?: string;
   yaml: string;
   component_ids?: string[];
+  gaps?: string[]; // 조립 시 미충족 능력(실행가능성 게이트) — 실존 MCP 로 채워야 실제 동작
+  errors?: string[]; // 조립 검증 에러
 }
 
 /** 대화의 초안 세트 — 여러 구성요소 + (조립됐으면) 하네스. */
@@ -255,6 +266,7 @@ export interface StudioMessageMeta {
   components?: { type: string; name: string }[] | null; // 이 턴 이후 초안 세트 요약
   harness?: string | null; // 조립된 하네스 이름
   recommendations?: Recommendation[] | null;
+  gaps?: CapabilityGap[] | null;
   version?: number | null;
   rationale?: string;
   kind?: string; // "commit" | "test" (인라인 시스템 메시지)
@@ -285,7 +297,7 @@ export interface StudioCommitResult {
 /** 대화 한 턴의 SSE 이벤트(스트리밍) — 엔드포인트가 단계별로 흘린다. */
 export type StudioChatEvent =
   | { event: "status"; data: { label: string } }
-  | { event: "recommendations"; data: { items: Recommendation[]; reused: boolean } }
+  | { event: "recommendations"; data: { items: Recommendation[]; gaps?: CapabilityGap[]; reused: boolean } }
   | { event: "drafts"; data: { components: AuthoredComponent[]; version: number } }
   | { event: "harness"; data: { harness: StudioHarness; version: number } }
   | { event: "title"; data: { title: string } }

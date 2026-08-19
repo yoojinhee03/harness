@@ -465,15 +465,20 @@ class FederatedRegistry:
 
 
 def build_live_sources(
-    settings: Settings | None = None, fetcher: Fetcher | None = None
+    settings: Settings | None = None,
+    fetcher: Fetcher | None = None,
+    *,
+    enricher: CapabilityEnricher | None = None,
 ) -> list[LiveSource]:
     """설정에 따라 라이브 소스 리스트를 만든다(공식 MCP 레지스트리 · 플러그인 마켓플레이스).
 
     둘 다 독립 옵트인(`HARNESS_LIVE_REGISTRY`·`HARNESS_MARKETPLACE`). 모두 off면 빈 리스트.
+    enricher 를 주면 그걸 쓰고(앱 등록 키 주입 경로), 없으면 env 설정에서 만든다(무키면 무보강).
     """
     cfg = settings or load_settings()
     # 키가 있으면 caps 빈 컴포넌트를 LLM 으로 보강(없으면 enricher.active=False → 무보강). 두 소스가 공유.
-    enricher = CapabilityEnricher(settings=cfg, max_enrich=cfg.registry_enrich_max)
+    if enricher is None:
+        enricher = CapabilityEnricher(settings=cfg, max_enrich=cfg.registry_enrich_max)
     sources: list[LiveSource] = []
     if cfg.use_live_registry:
         sources.append(
