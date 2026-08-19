@@ -18,6 +18,9 @@ services:
     build:
       context: ./harness-architect
       dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
       # 마운트한 카탈로그 컴포넌트 폴더를 직접 가리킨다(loader 의 CATALOG_DIR 계약).
       CATALOG_DIR: /catalog
@@ -25,7 +28,7 @@ services:
       HARNESS_STORE_DIR: /store
       # 저장소 DB — 비우면 /store 밑 SQLite(단일 인스턴스). 스케일아웃/프로덕션은 Postgres URL 지정
       # (예: postgresql+psycopg://harness:harness@db:5432/harness — pgvector 프로파일과 함께).
-      DATABASE_URL: ${DATABASE_URL:-}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://harness:harness@db:5432/harness}
       # SSE 스케일아웃 — 비우면 인메모리(단일 프로세스). 워커·레플리카를 늘리면 Redis 지정(redis://redis:6379).
       REDIS_URL: ${REDIS_URL:-}
       # 없으면 빈 값 → 자동으로 로컬 폴백. 있으면 품질 모드 자동 활성.
@@ -84,16 +87,17 @@ services:
       timeout: 3s
       retries: 5
 
-  # pgvector — MVP 는 인메모리라 기본 미기동. `--profile pgvector` 로만 올린다.
+  # pgvector(Postgres) — 저장소 기본 DB(2026-08 SQLite 에서 전환). api 가 depends_on 으로 healthy 대기.
+  # 호스트 포트는 55432(로컬 5432 를 다른 스택이 점유해 충돌 회피). 컨테이너 간은 db:5432 내부 네트워크.
+  # SQLite 로 되돌리려면 DATABASE_URL= (빈 값) 로 오버라이드.
   db:
     image: pgvector/pgvector:pg16
-    profiles: ["pgvector"]
     environment:
       POSTGRES_USER: harness
       POSTGRES_PASSWORD: harness
       POSTGRES_DB: harness
     ports:
-      - "5432:5432"
+      - "55432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

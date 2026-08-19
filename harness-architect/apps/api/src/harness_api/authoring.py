@@ -16,7 +16,7 @@ import json
 from collections.abc import Callable
 from typing import Any, Literal, cast
 
-from harness_catalog import CAPABILITY_VOCAB, extract_capabilities_heuristic
+from harness_catalog import CAPABILITY_VOCAB, extract_capabilities_heuristic, facet_for_capability
 from harness_resolver import (
     Component,
     ComponentSelection,
@@ -73,6 +73,26 @@ def _caps(raw: Any) -> list[str]:
     return [c for c in (raw or []) if isinstance(c, str) and c in _VOCAB]
 
 
+def _execution_requires(
+    prompt: str, body: str, access_in_provides: list[str], declared: list[str]
+) -> list[str]:
+    """skill 이 위임해야 할 실행(access) 능력을 requires 로 모은다 — 발명이 아니라 통제어휘 매칭.
+
+    skill 은 프롬프트라 영상 컷·오디오 믹싱·외부 API 호출 같은 실제 실행을 못 한다. 그런 access 능력은
+    반드시 MCP 에 위임(requires)해야 조립 때 '실존 MCP 없음'이 gap 으로 뜬다. LLM 이 requires 를 빠뜨리거나
+    access 를 provides 에 잘못 넣어도, 절차 텍스트에서 access 능력을 추출해 requires 로 강제한다 — 그래야
+    '조립돼도 안 도는 껍데기'가 조용히 통과하지 않는다(불변식 1: 실행가능성).
+    """
+    implied = [
+        c for c in extract_capabilities_heuristic(f"{prompt}\n{body}") if facet_for_capability(c) == "access"
+    ]
+    merged = list(declared)
+    for cap in [*access_in_provides, *implied]:
+        if cap not in merged:
+            merged.append(cap)
+    return merged
+
+
 def _from_llm(type_: str, data: dict[str, Any], prompt: str) -> Component:
     name = str(data.get("name") or prompt.strip().splitlines()[0][:60] or "새 구성요소")
     cid = f"u-{_slug(name)}"
@@ -86,10 +106,17 @@ def _from_llm(type_: str, data: dict[str, Any], prompt: str) -> Component:
     if type_ == "context":
         base.update(body=str(data.get("body") or ""), source="inline")
     elif type_ == "skill":
+        body = str(data.get("body") or "")
+        # skill 은 프롬프트라 실행(access)을 스스로 못 한다 — access 능력은 provides 에서 빼 requires 로
+        # 위임하고, 절차 텍스트가 암시하는 access 도 requires 로 채운다(조립 때 gap 으로 표면화).
+        access_in_provides = [c for c in provides if facet_for_capability(c) == "access"]
+        task_provides = [c for c in provides if facet_for_capability(c) != "access"]
+        base["provides"] = task_provides
+        base["capability_tags"] = task_provides
         base.update(
-            body=str(data.get("body") or ""),
+            body=body,
             entrypoint=f"skills/{cid}/SKILL.md",
-            requires=_caps(data.get("requires")),
+            requires=_execution_requires(prompt, body, access_in_provides, _caps(data.get("requires"))),
         )
     elif type_ == "mcp":
         base.update(

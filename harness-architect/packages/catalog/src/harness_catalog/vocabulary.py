@@ -63,6 +63,9 @@ FACET_TO_TYPE: dict[Facet, str] = {
     "prompt": "context",
 }
 
+# 통제어휘 버전 — 어휘를 바꾸면 올린다. gap provenance·caps 분류 재현성 태그로 쓰인다(TASK 2·3).
+VOCAB_VERSION = "1"
+
 # capability → (facet, [추출 키워드])
 CAPABILITY_VOCAB: dict[str, tuple[Facet, list[str]]] = {
     # facet: access — 외부 시스템·데이터 접근 (주로 MCP)

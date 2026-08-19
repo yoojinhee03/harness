@@ -119,6 +119,22 @@ def test_author_component_heuristic_offline(monkeypatch):
     assert m.type == "mcp" and validate_component(m)["ok"] is False  # mcp 스펙 없음
 
 
+def test_author_skill_delegates_execution_to_requires(monkeypatch):
+    """Fix A — 실행형 절차 skill 은 access 능력을 provides 로 지어내지 않고 requires 로 위임한다.
+
+    브이로그 자동편집처럼 실제 실행(영상 컷·bgm)이 필요한 절차는, skill 이 스스로 못 하므로 그 access 능력을
+    requires 에 실어 조립 때 gap(=실존 MCP 필요)으로 표면화되게 해야 한다(껍데기 방지)."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    from harness_api.authoring import author_component
+
+    sk = author_component("브이로그 영상을 자동 편집하는 절차 — 컷·전환·bgm 삽입", "skill")
+    assert sk.type == "skill"
+    assert "media.edit" in sk.requires  # 편집 실행은 MCP 에 위임(requires)
+    assert any(c in sk.requires for c in ("media.video", "media.audio"))
+    # skill 은 실행(access)을 스스로 provides 한다고 주장하지 않는다
+    assert all(c not in sk.provides for c in ("media.edit", "media.video", "media.audio"))
+
+
 def test_author_all_types_via_llm():
     from harness_api.authoring import author_component, validate_component
 

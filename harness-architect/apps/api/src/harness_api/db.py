@@ -132,7 +132,9 @@ studio_conversations = Table(
     Column("owner_id", String(128), nullable=False),
     Column("title", String(256), nullable=False, default=""),  # 자동 생성(첫 턴 요약)
     Column("draft", Text, nullable=False, default=""),  # 현재 초안 Component.model_dump_json() ("" = 없음)
-    Column("draft_type", String(16), nullable=False, default=""),  # context | skill | mcp | hook (추론)
+    # 초안 세트의 타입들(멀티초안이면 콤마결합, 예: "context,hook,skill"). 단일은 "context" 등.
+    # SQLite 는 길이 미강제라 16 으로도 통과했지만 Postgres 는 강제 → 결합값 수용 위해 64 로.
+    Column("draft_type", String(64), nullable=False, default=""),
     Column("component_id", String(128), nullable=True),  # commit 후 링크된 user_components.id
     Column("status", String(16), nullable=False, default="active"),  # active | committed
     Column("version", Integer, nullable=False, default=0),  # 초안 리비전(리파인 횟수)
@@ -192,6 +194,27 @@ catalog_sync_state = Table(
     Column("watermark", String(40), nullable=True),
     Column("last_full_at", String(40), nullable=True),
     Column("last_sync_at", String(40), nullable=True),
+)
+
+
+# Gap 수요 집계(durable) — '자주 요청되나 카탈로그가 못 채운 능력'을 센다(TASK 2, 구 인메모리 대체).
+# grain = capability 단일 행(요청 누적). source/provenance 는 최근값(last-write) — 재평가로 거짓 gap
+# (빈 caps 탓 오탐)을 나중에 정화한다. resolved_at: 이후 카탈로그에 공급이 생긴 시점(sync 후 표시).
+gap_demand = Table(
+    "gap_demand",
+    metadata,
+    Column("capability", String(128), primary_key=True),  # 통제어휘 domain.capability
+    Column("requested_count", Integer, nullable=False, default=0),
+    Column("first_seen_at", String(40), nullable=False),
+    Column("last_seen_at", String(40), nullable=False),
+    Column("suggested_type", String(16), nullable=False, default=""),  # skill|mcp|context|hook
+    Column("resolved_at", String(40), nullable=True),  # 공급 생긴 시점(nullable = 미해결)
+    # provenance(재평가용) — 판정 당시 카탈로그/파이프라인 상태
+    Column("source", String(16), nullable=False, default=""),  # recommend | studio | verify
+    Column("catalog_revision", String(64), nullable=False, default=""),
+    Column("caps_source", String(16), nullable=False, default=""),  # heuristic | enricher | zeroshot
+    Column("vocab_version", String(16), nullable=False, default=""),
+    Column("candidate_count", Integer, nullable=False, default=0),
 )
 
 

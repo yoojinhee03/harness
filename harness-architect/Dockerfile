@@ -22,12 +22,12 @@ COPY packages/catalog/pyproject.toml packages/catalog/pyproject.toml
 COPY packages/runtime/pyproject.toml packages/runtime/pyproject.toml
 COPY apps/api/pyproject.toml apps/api/pyproject.toml
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --all-packages --no-dev --no-install-workspace --extra llm
+    uv sync --frozen --all-packages --no-dev --no-install-workspace --extra llm --extra postgres
 
 # ── 2) 소스 레이어: 실제 코드 복사 후 워크스페이스 패키지까지 설치 ──
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --all-packages --no-dev --extra llm
+    uv sync --frozen --all-packages --no-dev --extra llm --extra postgres
 
 # venv 를 PATH 앞에 둬서 uvicorn 을 바로 실행.
 ENV PATH="/app/.venv/bin:$PATH"

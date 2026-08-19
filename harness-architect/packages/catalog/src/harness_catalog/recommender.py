@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from .embeddings import Embedder, cosine, get_embedder
 from .ranking import RankedComponent, rank
 from .reasoning import Reasoner, get_reasoner
-from .store import VectorStore
+from .store import VectorStore, VectorStoreLike, content_hash
 from .vocabulary import (
     extract_capabilities_heuristic,
     facet_for_capability,
@@ -116,11 +116,13 @@ class Recommender:
         registry: Registry,
         embedder: Embedder | None = None,
         reasoner: Reasoner | None = None,
+        store: VectorStoreLike | None = None,
     ) -> None:
         self.registry = registry
         self.embedder = embedder or get_embedder()
         self.reasoner = reasoner or get_reasoner()
-        self.store = VectorStore()
+        # store: 인메모리(기본) 또는 pgvector(영속). 둘 다 ensure/search 계약을 만족한다.
+        self.store: VectorStoreLike = store if store is not None else VectorStore()
         self._by_id: dict[str, Component] = {}
         # 능력 → 그 능력을 provides/tag 하는 컴포넌트 id (strict 커버리지 판정용, gap 계산).
         self._provided_index: dict[str, list[str]] = {}
@@ -135,9 +137,10 @@ class Recommender:
                 self._provided_index.setdefault(cap, []).append(c.id)
         if not comps:
             return
-        vectors = self.embedder.embed([c.embedding_document() for c in comps])
-        for c, v in zip(comps, vectors, strict=True):
-            self.store.add(c.id, v)
+        # 스토어가 임베딩을 소유·회수한다. 영속 스토어(pgvector)는 (id, content_hash) 가 그대로면
+        # 재임베딩을 건너뛴다 → 재시작마다 카탈로그 전량 재임베딩하던 비용/지연 제거.
+        entries = [(c.id, content_hash(doc := c.embedding_document()), doc) for c in comps]
+        self.store.ensure(entries, self.embedder.embed)
 
     # ── ① 요구 능력 추출 (카탈로그 무관 — 카탈로그보다 넓어야 gap 이 난다, 작업 2) ──
     def extract_requirements(self, description: str) -> tuple[list[str], str]:
@@ -302,10 +305,12 @@ class LiveRecommender:
         registry: Registry,
         embedder: Embedder | None = None,
         reasoner: Reasoner | None = None,
+        store: VectorStoreLike | None = None,
     ) -> None:
         self._registry = registry
         self._embedder = embedder
         self._reasoner = reasoner
+        self._store = store  # pgvector 등 영속 스토어(재구성 간 공유 → 영속·재임베딩 회피). None 이면 인메모리.
         self._rec: Recommender | None = None
         self._gen: int | None = None
 
@@ -317,6 +322,8 @@ class LiveRecommender:
         """현재 레지스트리 상태에 맞는 Recommender. generation 이 바뀌었으면 재구성."""
         gen = self._generation()
         if self._rec is None or gen != self._gen:
-            self._rec = Recommender(self._registry, embedder=self._embedder, reasoner=self._reasoner)
+            self._rec = Recommender(
+                self._registry, embedder=self._embedder, reasoner=self._reasoner, store=self._store
+            )
             self._gen = gen
         return self._rec
