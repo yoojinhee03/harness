@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import yaml
 from harness_resolver.models import (
     CostTotals,
     HarnessMetadata,
@@ -19,7 +20,7 @@ from harness_resolver.models import (
     ResolvedHarness,
     ResolvedPrompt,
 )
-from harness_runtime import ClaudeCodeEmitter, available_targets, emit
+from harness_runtime import ClaudeCodeEmitter, available_targets, emit, target_losses
 
 
 def make_resolved() -> ResolvedHarness:
@@ -250,3 +251,25 @@ def test_cursor_omits_mcp_when_none() -> None:
     tree = emit(r, "cursor")
     assert ".cursor/mcp.json" not in tree
     assert ".cursor/rules/harness.mdc" in tree
+
+
+# ── Harness Protocol v1 이미터 (후속 #3 — 상호운용) ──
+
+
+def test_harness_protocol_emit_valid_v1() -> None:
+    doc = yaml.safe_load(emit(make_resolved(), "harness-protocol")["harness.yaml"])
+    assert doc["version"] == "1"
+    assert doc["$schema"].startswith("https://harnessprotocol.io")
+    assert doc["metadata"]["name"] == "pr-bot"
+    gh = doc["mcp-servers"]["github-mcp"]  # McpServerSpec → HP mcp-servers(stdio)
+    assert gh["transport"] == "stdio" and gh["command"] == "npx"
+    assert doc["instructions"]["operational"].startswith("너는 시니어 리뷰어")
+
+
+def test_harness_protocol_declares_losses() -> None:
+    feats = {lo.feature for lo in target_losses(make_resolved(), "harness-protocol")}
+    assert "model" in feats and "hook_plan" in feats  # HP 에 없는 것 정직 선언
+
+
+def test_available_targets_includes_harness_protocol() -> None:
+    assert "harness-protocol" in available_targets()

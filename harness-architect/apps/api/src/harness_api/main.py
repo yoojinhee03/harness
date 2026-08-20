@@ -37,7 +37,15 @@ from harness_catalog import (
     resolve_catalog_dir,
 )
 from harness_resolver import Component, InMemoryRegistry, ResolveResult, resolve
-from harness_runtime import AnthropicRunner, available_targets, build_request, emit
+from harness_runtime import (
+    DEFAULT_SEVERITY,
+    AnthropicRunner,
+    available_targets,
+    build_request,
+    emit,
+)
+from harness_runtime import verify as run_verify
+from harness_runtime import violations as compute_violations
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -48,6 +56,7 @@ from .authoring import COMPONENT_TYPES, author_component, test_component, valida
 from .catalog_store import CatalogStore, DbCatalogSource, sync_catalog
 from .component_store import ComponentStore, UserComponentSource, component_event_stream
 from .conversation_store import ConversationStore, conversation_event_stream
+from .cooccurrence import CooccurrenceStore
 from .gap_demand import GapDemand
 from .harness_build import parse_harness_yaml, to_harness_yaml
 from .llm_client import DEFAULT_MODEL
@@ -83,6 +92,7 @@ from .schemas import (
     StudioRunBody,
     TeamCreateBody,
     TokenCreateBody,
+    VerifyBody,
 )
 from .scoped_recommender import ScopedRecommender
 from .store import (
@@ -136,10 +146,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 시작 시 확정한다(키 변경은 재시작으로 반영). 서버 env 는 쓰지 않는다.
     from harness_catalog import (
         CapabilityEnricher,
+        ChainEnricher,
         LocalEmbedder,
         OpenAIEmbedder,
         make_classifier,
         make_reasoner,
+        zeroshot_classifier,
     )
 
     _app_llm = AppSettingsStore(engine).resolve()
@@ -166,9 +178,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.recommender = LiveRecommender(
         registry, embedder=embedder, reasoner=reasoner, store=vector_store
     )
-    enricher = CapabilityEnricher(
+    enricher: Any = CapabilityEnricher(
         classifier=make_classifier(_provider, _llm_key), max_enrich=cfg.registry_enrich_max
     )
+    # TASK 3: 제로샷 caps 태깅(옵트인). semantic 임베더(OpenAI 키)가 있을 때만 활성 — LocalEmbedder 는
+    # 정밀도 부족(baseline §6)이라 켜지 않는다. caps 임베더는 서빙과 **분리·고정**(결정성). 제로샷(전량,
+    # 결정적) → LLM(모호한 잔여만) 순으로 체인. threshold 는 활성화 전 eval_zeroshot.py 로 재보정할 것.
+    if cfg.use_caps_zeroshot and _emb_key:
+        zs = CapabilityEnricher(
+            classifier=zeroshot_classifier(
+                threshold=cfg.caps_zeroshot_threshold, embedder=OpenAIEmbedder(api_key=_emb_key)
+            ),
+            max_enrich=1_000_000,
+        )
+        enricher = ChainEnricher([zs, enricher])
+        log.info("caps 제로샷 활성(threshold=%.2f, semantic 임베더)", cfg.caps_zeroshot_threshold)
+    elif cfg.use_caps_zeroshot:
+        log.warning("caps 제로샷 요청됐으나 embedding 키 없음 — 정밀도 부족이라 스킵(무보강 유지)")
 
     async def _sync_loop() -> None:
         # 주기적으로 하이브리드 harvest→DB(증분 또는 full). 첫 기동엔 상태가 없어 즉시 1회(full),
@@ -486,6 +512,43 @@ def recommend(request: Request, body: RecommendRequest) -> dict[str, Any]:
 def gaps_top(request: Request, n: int = Query(10, ge=1, le=50)) -> dict[str, Any]:
     """자주 요청되나 카탈로그에 없는 능력 top-N(런타임 수요). 저작 제안·시딩 우선순위의 라이브 신호."""
     return {"gaps": _gap_demand(request).top(n)}
+
+
+@app.post("/verify")
+@limiter.limit("30/minute")
+def verify_endpoint(
+    request: Request, body: VerifyBody, user: dict[str, Any] | None = Depends(optional_user)
+) -> dict[str, Any]:
+    """업로드된 .claude/.cursor 트리를 adopt→resolve 로 정적 검증(CLI `harness verify` 의 API 판).
+
+    판정은 CLI 와 동일한 `harness_runtime.verify` 코어(드리프트 방지). gap→GapDemand(source=verify) +
+    컴포넌트 공출현을 DB 에 durable 기록(TASK 5e) — 기록은 **비차단**(실패해도 검증 응답은 정상).
+    caps 판정은 TASK 3 완료 전 잠정이라 기본 warning(policy 로 오버라이드 가능).
+    """
+    registry = _scoped_registry(request, user)
+    try:
+        report = run_verify(body.files, registry, require=body.require, target=body.target)
+    except ValueError as exc:  # 미지원 타깃 등
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    severity = {**DEFAULT_SEVERITY, **(body.policy or {})}
+    viols = compute_violations(report.findings, severity)
+    # 데이터 수집(비차단) — gap 수요(source=verify) + 컴포넌트 공출현
+    _record_gaps(request, [{"capability": c} for c in report.gap_capabilities], "verify")
+    try:
+        CooccurrenceStore(request.app.state.engine).record(report.component_ids)
+    except Exception as exc:  # noqa: BLE001 — 비차단
+        log.warning("공출현 기록 실패(무시): %s", exc)
+    return {
+        "ok": not viols,
+        "violations": viols,
+        "findings": {c: v for c, v in report.findings.items() if v and severity.get(c) != "ignore"},
+        "adopt": {
+            "unknown_mcp": report.unknown_mcp,
+            "unknown_skills": report.unknown_skills,
+            "hooks": report.hooks,
+        },
+        "note": "capability 판정은 TASK 3(caps 커버리지) 완료 전 잠정 — 거짓 gap 가능(기본 warning)",
+    }
 
 
 @app.post("/resolve", response_model=ResolveResult)
@@ -1067,6 +1130,7 @@ async def promote_component_endpoint(
     request: Request,
     cid: str,
     scope: str = Query("personal"),
+    allow_unsandboxed: bool = Query(False),  # sandbox=none 훅 추가 심사(거버넌스 게이트)
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
     """저작 컴포넌트를 공유 카탈로그로 승격(Phase 14 피드백 루프). 게이트: ready + validate 통과.
@@ -1077,7 +1141,9 @@ async def promote_component_endpoint(
     catalog_store = getattr(request.app.state, "catalog_store", None)
     if catalog_store is None:
         raise HTTPException(status_code=503, detail="카탈로그 스토어가 없습니다(harvest off).")
-    result = promote_component(_component_store(request), catalog_store, sk, cid)
+    result = promote_component(
+        _component_store(request), catalog_store, sk, cid, allow_unsandboxed=allow_unsandboxed
+    )
     if not result["ok"]:
         raise HTTPException(status_code=400, detail="; ".join(result["errors"]))
     return result

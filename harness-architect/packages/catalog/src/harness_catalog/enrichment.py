@@ -97,6 +97,26 @@ def get_classifier(settings: Settings | None = None) -> CapabilityClassifier | N
     return None
 
 
+class ChainEnricher:
+    """여러 enricher 를 순서대로 적용한다 — 예: 제로샷(결정적·전량) → LLM(모호한 잔여만).
+
+    caps 흐름을 하나의 enricher 슬롯(sync_catalog)에 담기 위한 합성기. 각 단계는 빈 caps 만 채우므로
+    앞 단계가 채운 건 뒤 단계가 건드리지 않는다(휴리스틱 정밀도 보존 규약과 정합).
+    """
+
+    def __init__(self, enrichers: list[CapabilityEnricher]) -> None:
+        self._enrichers = enrichers
+
+    @property
+    def active(self) -> bool:
+        return any(e.active for e in self._enrichers)
+
+    def enrich(self, components: list[Component]) -> list[Component]:
+        for e in self._enrichers:
+            components = e.enrich(components)
+        return components
+
+
 class CapabilityEnricher:
     """수확 컴포넌트의 caps 를 배치 LLM 분류로 보강한다. 분류기 없으면 무보강(원본 그대로).
 

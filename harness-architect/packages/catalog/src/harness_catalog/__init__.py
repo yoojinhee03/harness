@@ -5,10 +5,12 @@ RAG 엔진 *코드* 는 백엔드에 잔류하고, 컴포넌트 *데이터* 는 
 
 from __future__ import annotations
 
+from .caps_zeroshot import zeroshot_classifier
 from .embeddings import Embedder, LocalEmbedder, OpenAIEmbedder, get_embedder
 from .enrichment import (
     CapabilityClassifier,
     CapabilityEnricher,
+    ChainEnricher,
     claude_classifier,
     get_classifier,
     make_classifier,
@@ -58,6 +60,7 @@ __all__ = [
     "CapabilityClassifier",
     "CapabilityEnricher",
     "CapabilityGap",
+    "ChainEnricher",
     "ClaudeReasoner",
     "Embedder",
     "FederatedRegistry",
@@ -100,4 +103,5 @@ __all__ = [
     "suggested_component_type",
     "uncovered",
     "urllib_fetcher",
+    "zeroshot_classifier",
 ]

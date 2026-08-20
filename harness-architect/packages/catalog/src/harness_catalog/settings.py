@@ -41,6 +41,10 @@ class Settings:
     marketplace_url: str = ""  # 빈 값이면 소스 기본(anthropics/claude-plugins-official)
     catalog_sync_interval: int = 3600  # harvest→DB 주기(초, 기본 1h). 증분이 싸서 자주 돌려 신선도↑
     catalog_full_interval: int = 86400  # 전체 대조(full reconcile) 주기(초, 기본 24h). 드리프트 정리
+    # 제로샷 caps 태깅(TASK 3) — 기본 off. 켜려면 **semantic 임베더(OpenAI 키)** 필요(LocalEmbedder 는
+    # 정밀도 부족으로 스킵). 활성화 전 eval_zeroshot.py 로 threshold 를 재보정할 것.
+    caps_zeroshot_mode: str = "off"  # off | on
+    caps_zeroshot_threshold: float = 0.35
 
     @property
     def use_live_registry(self) -> bool:
@@ -49,6 +53,10 @@ class Settings:
     @property
     def use_marketplace(self) -> bool:
         return self.marketplace_mode == "on"
+
+    @property
+    def use_caps_zeroshot(self) -> bool:
+        return self.caps_zeroshot_mode == "on"
 
     @property
     def embedder_choice(self) -> str:
@@ -85,4 +93,6 @@ def load_settings() -> Settings:
         marketplace_url=os.environ.get("HARNESS_MARKETPLACE_URL", ""),
         catalog_sync_interval=int(os.environ.get("HARNESS_CATALOG_SYNC_INTERVAL", "3600")),
         catalog_full_interval=int(os.environ.get("HARNESS_CATALOG_FULL_INTERVAL", "86400")),
+        caps_zeroshot_mode=os.environ.get("HARNESS_CAPS_ZEROSHOT", "off"),
+        caps_zeroshot_threshold=float(os.environ.get("HARNESS_CAPS_ZEROSHOT_THRESHOLD", "0.35")),
     )

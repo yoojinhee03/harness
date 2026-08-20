@@ -11,20 +11,26 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import yaml
-from harness_catalog import build_registry
+from harness_catalog import build_registry, facet_for_capability, suggested_component_type
 from harness_resolver import HarnessConfig, InMemoryRegistry, Registry, ResolveResult, resolve
 from harness_runtime import (
+    DEFAULT_SEVERITY,
     EvalCase,
     adopt_dir,
     available_targets,
     drop_component,
     emit,
+    read_native_tree,
     run_ablation,
     run_eval,
+    verify,
+    violations,
 )
 
 
@@ -175,6 +181,113 @@ def cmd_harvest(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── verify — 기존 레포(.claude/.cursor)를 adopt→resolve 로 정적 검증(CI 게이트) ──
+def _load_policy(repo: Path) -> dict[str, str]:
+    """`.harness/policy.yaml` 의 severity 오버라이드 — {category: violation|warning|ignore}."""
+    p = repo / ".harness" / "policy.yaml"
+    if not p.is_file():
+        return {}
+    try:
+        doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError):
+        return {}
+    sev = doc.get("severity", {}) if isinstance(doc, dict) else {}
+    return {str(k): str(v) for k, v in sev.items()} if isinstance(sev, dict) else {}
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    """레포를 adopt→resolve 로 검증 — ①능력 미충족 ②이식 손실 ③리졸버 에러. CI 게이트(종료코드).
+
+    판정은 `harness_runtime.verify`(코어, CLI/API 공용 — 드리프트 방지). CLI 는 심각도/정책/종료코드/
+    출력·옵트인 신호만 담당. caps 판정은 TASK 3 완료 전 잠정(거짓 gap 가능)이라 기본 warning.
+    """
+    repo = Path(args.repo)
+    if not repo.is_dir():
+        print(f"✗ 레포 디렉터리 없음: {repo}", file=sys.stderr)
+        return 2
+    registry = _registry(args.catalog)
+    require = [c.strip() for c in (args.require or "").split(",") if c.strip()]
+    try:
+        report = verify(read_native_tree(repo), registry, require=require, target=args.target)
+    except ValueError as exc:  # 미지원 타깃 등
+        print(f"✗ {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 — 실행 오류는 종료코드 2(위반 1 과 구분)
+        print(f"✗ 실행 오류: {exc}", file=sys.stderr)
+        return 2
+
+    severity = {**DEFAULT_SEVERITY, **_load_policy(repo)}
+    viols = violations(report.findings, severity)
+    exit_code = 1 if viols else 0
+
+    if args.record:  # 5e: 옵트인 데이터 수집(로컬 로그 신호 — aggregate_*.py 가 durable 집계)
+        _emit_signals(report.findings, report.component_ids)
+
+    out: dict[str, Any] = {
+        "repo": str(repo),
+        "target": args.target,
+        "ok": exit_code == 0,
+        "violations": viols,
+        "findings": {c: v for c, v in report.findings.items() if v and severity.get(c) != "ignore"},
+        "adopt": {
+            "unknown_mcp": report.unknown_mcp,
+            "unknown_skills": report.unknown_skills,
+            "hooks": report.hooks,
+        },
+        "note": "capability 판정은 TASK 3(caps 커버리지) 완료 전 잠정 — 거짓 gap 가능(기본 warning)",
+    }
+    if args.format == "json":
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+    else:
+        _print_verify_text(out, severity.get)
+    return exit_code
+
+
+def _print_verify_text(report: dict[str, Any], sev: Any) -> None:
+    mark = "✓ 통과" if report["ok"] else "✗ 위반"
+    print(f"{mark} — {report['repo']}" + (f" (target={report['target']})" if report["target"] else ""))
+    labels = {
+        "resolve_error": "리졸버 에러(훅 계약 등)",
+        "required_missing": "요구 능력 미충족(--require)",
+        "capability_gap": "능력 gap(잠정)",
+        "portability_loss": "이식 손실",
+        "resolve_warning": "경고",
+    }
+    for cat, items in report["findings"].items():
+        badge = "✗" if sev(cat) == "violation" else "!"
+        print(f"  {badge} [{sev(cat)}] {labels.get(cat, cat)} ({len(items)})", file=sys.stderr)
+        for it in items:
+            desc = it.get("message") or it.get("detail") or it.get("capability") or str(it)
+            extra = f" [{it['fidelity']}]" if it.get("fidelity") else ""
+            print(f"      - {desc}{extra}", file=sys.stderr)
+
+
+def _emit_signals(findings: dict[str, list[dict[str, Any]]], component_ids: list[str]) -> None:
+    """5e 옵트인 신호(stderr, 마커 라인) — GAP_SIGNAL(source=verify) + COOCCUR_SIGNAL(공출현).
+
+    기존 aggregate_gaps.py(GAP_SIGNAL)·aggregate_cooccurrence.py(COOCCUR_SIGNAL)가 durable 집계한다.
+    로컬 전용(전송 아님). env/시크릿은 담지 않는다(5b — 능력·컴포넌트 id 만).
+    """
+    seen: set[str] = set()
+    for cat in ("capability_gap", "required_missing"):
+        for item in findings.get(cat, []):
+            cap = item.get("capability")
+            if not cap or cap in seen:
+                continue
+            seen.add(cap)
+            payload = {
+                "capability": cap,
+                "suggested_type": suggested_component_type(cap),
+                "facet": facet_for_capability(cap) or "",
+                "source": "verify",
+            }
+            print(f"GAP_SIGNAL {json.dumps(payload, ensure_ascii=False, sort_keys=True)}", file=sys.stderr)
+    ids = sorted(set(component_ids))
+    if len(ids) >= 2:  # 공출현은 2개 이상 함께 등장할 때만 의미가 있다
+        payload = {"components": ids, "source": "verify"}
+        print(f"COOCCUR_SIGNAL {json.dumps(payload, ensure_ascii=False, sort_keys=True)}", file=sys.stderr)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="harness", description="harness.yaml 을 resolve/eject 한다.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -215,6 +328,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_ablate.add_argument("--drop", required=True, help="빼서 기여도를 잴 컴포넌트 id")
     p_ablate.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
     p_ablate.set_defaults(func=cmd_ablate)
+
+    p_verify = sub.add_parser(
+        "verify", help="기존 레포(.claude/.cursor)를 adopt→resolve 로 정적 검증(CI 게이트)."
+    )
+    p_verify.add_argument("repo", help="검증할 레포 디렉터리(.claude/·.cursor/ 포함)")
+    p_verify.add_argument("--require", default="", help="쉼표구분 요구 능력(예: vcs.code-review,comms.messaging)")
+    p_verify.add_argument("--target", default=None, choices=available_targets(), help="이식 손실을 잴 타깃")
+    p_verify.add_argument("--format", choices=["json", "text"], default="json", help="출력(기본 json — CI)")
+    p_verify.add_argument(
+        "--record",
+        action="store_true",
+        help="옵트인 데이터 수집 — gap/공출현을 로그 신호로 방출(로컬, 2>signals.log 로 수집)",
+    )
+    p_verify.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
+    p_verify.set_defaults(func=cmd_verify)
 
     return parser
 

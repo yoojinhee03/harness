@@ -173,6 +173,17 @@ TASK 3의 스코핑 근거를 먼저 만든다.
 
 ## TASK 3 — 능력 태깅 커버리지 (구 TASK 4)
 
+> **상태(2026-08-20)**: 🚧 **인프라+배선 완료 · 활성화(켜기)만 semantic 키 대기.**
+> 제로샷 분류기(`caps_zeroshot.py`, 고정 임베더=결정성) + 보정 하네스(`eval_zeroshot.py`) + **sync
+> 배선**(`main.py`: `ChainEnricher([제로샷, LLM])`, 옵트인·키게이트·튜너블) 구현. 라이브 스냅샷 측정상
+> **LocalEmbedder 제로샷은 정밀도 부족**(0.35 에서도 `aiven`(DB)→`web.search`)이라, 배선은 **OpenAI
+> embedding 키가 있을 때만** 활성(키 없으면 경고+스킵 — LocalEmbedder 로는 절대 켜지 않음, 거짓 충족 방지).
+>
+> **활성화 레시피(키 확보 시)**: ① 앱에 OpenAI embedding 키 등록 → ② `eval_zeroshot.py --from-snapshot`
+> 을 **OpenAI 임베더로** 재실행해 threshold 확정(`HARNESS_CAPS_ZEROSHOT_THRESHOLD`) → ③ `HARNESS_CAPS_ZEROSHOT=on`
+> → ④ 재시작(재색인) → ⑤ IDF `cap_weight`·`RELEVANCE_FLOOR` 재보정 → ⑥ `reeval_gaps.py` 로 과거 거짓 gap 정화.
+> 배선·게이트는 준비 완료라 ②③만 하면 켜진다. ⑤⑥은 켠 뒤 후처리([baseline](../caps-coverage-baseline.md) §6).
+
 ### 배경 — v1의 메커니즘 서술은 틀렸다
 
 **v1이 말한 "상한 150 때문에 상위 150개만 정상이고 나머지 1900개가 비어 있다"는 부정확하다.**
@@ -246,6 +257,19 @@ TASK 1의 실측 결과, 특히 **빈 caps 원인 분류**에 따라 해법을 �
 ---
 
 ## TASK 4 — IR 파일명·스키마 충돌 해소 (구 TASK 1)
+
+> **상태(2026-08-19)**: ✅ **핵심 완료(스코프 정정).** 코드 조사 결과 이 프로젝트에서 harness.yaml 은
+> **고정 경로의 파일이 아니라 텍스트 포맷**이다(`to_harness_yaml`/`parse_harness_yaml` + DB 저장 +
+> CLI 경로인자 + MCP 텍스트인자). eject 는 `.claude/`·`.cursor/` 를 쓰고 harness.yaml 파일을 유저
+> 레포에 쓰지 않는다 → **".harness/ 이동"은 해당 없음**. 대신 실질 방어를 구현:
+> - 산출물 최상단 `$schema: urn:harness-architect:harness:v1`(자기식별, HP v1 harnessprotocol.io 와 구별).
+> - `parse_harness_yaml` 이 **HP v1 을 설명적 에러로 거부**($schema=harnessprotocol.io, 또는 version만 있고
+>   apiVersion/kind 없음). apiVersion/kind 는 이미 있어 구조적 구별도 유지.
+> - **하위호환**: $schema 없는 구 문서(apiVersion/kind 보유)도 정상 파싱 → 저장 데이터 마이그레이션 불필요.
+> - 테스트: emit·라운드트립·HP v1 거부·version-only 거부·하위호환. 전체 295 통과.
+>
+> **후속(저우선)**: 웹의 harness.yaml 다운로드 *파일명* 은 여전히 harness.yaml 일 수 있다(내용은 $schema 로
+> 자기식별되므로 충돌해도 판별 가능). 필요 시 다운로드명을 source.yaml 로. HP v1 이미터는 백로그.
 
 ### 배경
 
@@ -381,7 +405,16 @@ non-lifecycle 능력을 제공하는 경우.
 
 ---
 
-## TASK 6 — MCP in-process 경로의 TTL/인덱스 분리
+## TASK 6 — MCP in-process 경로의 TTL/인덱스 분리 — 📋 백로그 강등(게이트 미통과)
+
+> **상태(2026-08-19)**: 착수 전 실효성 게이트 **미통과 → 백로그 강등.** 실측 근거:
+> - MCP 서버는 `LiveRecommender(get_registry())` 로 **임베더 미지정 → LocalEmbedder(값쌈)** 재색인
+>   (`apps/mcp/.../server.py`, OpenAI 키 경로 없음).
+> - 재색인은 레지스트리 **generation(id-set) 변경 시에만** 발생 — 공식 레지스트리는 서버 목록을
+>   5분마다 바꾸지 않는다. 게다가 pgvector(TASK 7 완료)의 content_hash 증분 캐시로 비용이 더 낮아짐.
+> → 값싼 로컬 재색인을 최적화하는 이득이 미미하므로 **착수하지 않는다.** 아래는 원안(참고).
+
+<details><summary>원안(참고용, 착수 보류)</summary>
 
 ### 배경 — v1 정정
 
@@ -416,6 +449,8 @@ TTL 라이브 소스가 직접 federate되어 generation을 흔들고 재색인�
 - MCP 경로에서 TTL refresh가 재임베딩을 유발하지 않는 테스트.
 - API 백엔드 동작에 변화가 없다.
 
+</details>
+
 ---
 
 ## TASK 7 — pgvector + 증분 임베딩 — ✅ 동시 작업으로 완료(중복)
@@ -447,15 +482,24 @@ TTL 라이브 소스가 직접 federate되어 generation을 흔들고 재색인�
 
 ---
 
+## 후속(follow-up) 진행 결과 (2026-08-20)
+
+- ✅ **#1 verify gap→GapDemand DB** — `POST /verify`(공용 `harness_runtime.verify` 코어로 CLI/API 공유) +
+  gap(source=verify)·공출현을 DB 에 durable 기록.
+- ✅ **#3 Harness Protocol v1 이미터** — `HarnessProtocolEmitter`(target=harness-protocol). 충돌을 상호운용으로.
+- ✅ **#5(일부) 승격 거버넌스** — `sandbox=none` 훅 승격 차단 게이트(`allow_unsandboxed` 심사). 다인 승인은 아래 백로그.
+- 🔸 **#4 웹 다운로드 파일명 — N/A**: 웹은 harness.yaml 을 파일로 내려받지 않고 UI 에 텍스트로 표시만 한다
+  (Blob/다운로드 링크 없음). 내용이 `$schema` 로 자기식별되므로 충돌 위험 없음 → 조치 불필요.
+- ⚙️ **머지 충돌 재발 방지(영구)** — 레포 머지 방식을 **merge-commit 전용**으로(squash·rebase off).
+  squash 는 장수 feat 브랜치와 매 머지 재충돌을 유발한다(#20·#21·#22 패턴). 되돌리려면 GitHub
+  Settings→Pull Requests 에서 재활성화.
+
 ## 백로그 (기록만, 착수하지 마라)
 
-- **Harness Protocol v1 이미터** — 세 번째 이미터. 남의 배포 인프라를 얻으면서 파일명 충돌에서도
-  벗어난다. TASK 4 완료 후 검토.
-- **skillsmp 소스 추가** — 주석의 Smithery/Glama/mcp.so는 전부 MCP라서 공식 레지스트리와 겹친다.
-  실제 공백은 non-mcp 타입이고 마켓플레이스 단일 파일 500개 상한이 병목이다. skillsmp가 SKILL.md를
-  REST API로 열어두고 있어 델타가 훨씬 크다.
-- **승격 거버넌스** — 현재 스코프 write 권한만으로 공유 카탈로그 승격이 가능하다. 다인 승인 +
-  `sandbox:none` 훅 추가 심사.
-- **공출현 신호를 랭킹에 투입** — TASK 5에서 데이터가 쌓인 뒤. 작동하면 임베딩은 콜드스타트
-  폴백으로만 남는다.
-- **`verify --fix`** — gap을 스튜디오 저작 루프로 연결. verify 판정이 안정된 뒤에.
+- **#2 공출현 신호를 랭킹에 투입** — 🚫 데이터+eval 선행. 핵심 `ranking.py`(추천 품질)를 바꾸는데
+  (1) 공출현 테이블이 verify --record/`POST /verify` 실사용으로 쌓여야 신호가 되고 (2) 회귀를 볼 eval
+  세트가 없으면 검증 불가. 투기적 코어 변경 금지 — 데이터 축적 + eval 확보 후 착수. 작동하면 임베딩은 콜드스타트 폴백.
+- **다인 승인 워크플로** — sandbox 게이트는 완료. 다인 승인은 durable 승인 테이블(alembic)+엔드포인트 필요(중간 규모).
+- **skillsmp 소스 추가** — 주석의 Smithery/Glama/mcp.so는 전부 MCP라 공식 레지스트리와 겹친다.
+  실제 공백은 non-mcp 타입이고 마켓플레이스 단일 파일 500개 상한이 병목. skillsmp 가 SKILL.md 를 REST 로 열어 델타가 크다.
+- **`verify --fix`** — gap 을 스튜디오 저작 루프로 연결. verify 판정이 안정된 뒤에.

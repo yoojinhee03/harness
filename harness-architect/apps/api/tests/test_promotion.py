@@ -71,3 +71,30 @@ def test_promote_missing_component(stores):
     cstore, catalog = stores
     result = promote_component(cstore, catalog, "personal:u1", "nope")
     assert result["ok"] is False and result["promoted"] is None
+
+
+def _hook(cid: str, sandbox: str) -> Component:
+    return Component(
+        id=cid, type="hook", name=cid, version="1.0.0", summary="guard",
+        provides=["lifecycle.guardrail"], capability_tags=["lifecycle.guardrail"],
+        events=["before_tool_call"], sandbox=sandbox, blocking=True,
+        failure="fail_closed", timeout_ms=2000, emit_command="grep -q x || exit 0",
+    )
+
+
+def test_promote_blocks_unsandboxed_hook(stores):
+    # 거버넌스 게이트: sandbox=none 훅은 추가 심사 없이 승격 불가(공급망 위험)
+    cstore, catalog = stores
+    _put(cstore, _hook("u-hook-none", "none"), status="ready")
+    r = promote_component(cstore, catalog, "personal:u1", "u-hook-none")
+    assert r["ok"] is False and catalog.get("u-hook-none") is None
+    # 명시 승인(allow_unsandboxed)하면 통과
+    r2 = promote_component(cstore, catalog, "personal:u1", "u-hook-none", allow_unsandboxed=True)
+    assert r2["ok"] is True and catalog.get("u-hook-none") is not None
+
+
+def test_promote_allows_restricted_hook(stores):
+    cstore, catalog = stores
+    _put(cstore, _hook("u-hook-ok", "restricted"), status="ready")
+    r = promote_component(cstore, catalog, "personal:u1", "u-hook-ok")
+    assert r["ok"] is True and catalog.get("u-hook-ok") is not None

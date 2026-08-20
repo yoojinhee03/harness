@@ -262,3 +262,35 @@ def test_generate_yaml_includes_prompt_block(client):
     data = client.post("/generate", json=body).json()
     assert "prompt:" in data["yaml"]
     assert "너는 시니어 리뷰어다." in data["yaml"]
+
+
+def test_verify_endpoint_clean(client):
+    """POST /verify — 프롬프트만 있는 트리는 통과(ok). CLI 와 같은 verify 코어."""
+    r = client.post("/verify", json={"files": {"CLAUDE.md": "You review PRs."}})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+def test_verify_endpoint_required_missing_violation(client):
+    r = client.post(
+        "/verify", json={"files": {"CLAUDE.md": "x"}, "require": ["media.transcode"]}
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False and "required_missing" in body["violations"]
+
+
+def test_verify_endpoint_records_cooccurrence(client):
+    """MCP 2개 트리 → 공출현이 DB 에 기록된다(TASK 5e durable)."""
+    files = {
+        ".mcp.json": (
+            '{"mcpServers": {"github-mcp": {"command": "npx", "args": []}, '
+            '"slack-mcp": {"command": "npx", "args": []}}}'
+        )
+    }
+    r = client.post("/verify", json={"files": files})
+    assert r.status_code == 200
+    from harness_api.cooccurrence import CooccurrenceStore
+
+    pairs = {tuple(p["pair"]) for p in CooccurrenceStore(app.state.engine).top()}
+    assert ("github-mcp", "slack-mcp") in pairs

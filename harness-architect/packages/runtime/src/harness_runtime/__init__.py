@@ -6,9 +6,19 @@ ResolvedHarness → 요청 빌더(system/tools/mcp 조립) + 훅 엔진(이벤�
 
 from __future__ import annotations
 
-from .adopt import AdoptResult, adopt, adopt_dir
+from .adopt import AdoptResult, adopt, adopt_dir, read_native_tree
 from .builder import BuiltRequest, build_request
-from .emit import ClaudeCodeEmitter, CursorEmitter, Emitter, FileTree, available_targets, emit
+from .emit import (
+    ClaudeCodeEmitter,
+    CursorEmitter,
+    Emitter,
+    FileTree,
+    HarnessProtocolEmitter,
+    Loss,
+    available_targets,
+    emit,
+    target_losses,
+)
 from .eval import (
     AblationResult,
     CheckResult,
@@ -27,11 +37,14 @@ from .openharness_runner import OpenHarnessRunner
 from .runner import AnthropicRunner, RunResult
 from .sandbox import Executor, InProcessExecutor, TimeoutBoundExecutor, default_executors
 from .tracing import harness_span
+from .verify import DEFAULT_SEVERITY, VerifyReport, verify, violations
 
 __all__ = [
     "AblationResult",
     "AdoptResult",
     "AnthropicRunner",
+    "DEFAULT_SEVERITY",
+    "VerifyReport",
     "BuiltRequest",
     "CheckResult",
     "ClaudeCodeEmitter",
@@ -43,9 +56,11 @@ __all__ = [
     "EvalReport",
     "Executor",
     "FileTree",
+    "HarnessProtocolEmitter",
     "HookEngine",
     "HookOutcome",
     "InProcessExecutor",
+    "Loss",
     "OpenHarnessRunner",
     "RunResult",
     "TimeoutBoundExecutor",
@@ -59,7 +74,11 @@ __all__ = [
     "default_executors",
     "drop_component",
     "emit",
+    "target_losses",
     "harness_span",
+    "read_native_tree",
     "run_ablation",
     "run_eval",
+    "verify",
+    "violations",
 ]
