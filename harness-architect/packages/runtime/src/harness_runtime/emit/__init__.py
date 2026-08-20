@@ -13,10 +13,12 @@ from harness_resolver import ResolvedHarness
 from .base import Emitter, FileTree, Loss
 from .claude_code import ClaudeCodeEmitter
 from .cursor import CursorEmitter
+from .harness_protocol import HarnessProtocolEmitter
 
 _EMITTERS: dict[str, type] = {
     ClaudeCodeEmitter.target: ClaudeCodeEmitter,
     CursorEmitter.target: CursorEmitter,
+    HarnessProtocolEmitter.target: HarnessProtocolEmitter,
 }
 
 
@@ -49,6 +51,7 @@ __all__ = [
     "CursorEmitter",
     "Emitter",
     "FileTree",
+    "HarnessProtocolEmitter",
     "Loss",
     "available_targets",
     "emit",
