@@ -136,10 +136,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 시작 시 확정한다(키 변경은 재시작으로 반영). 서버 env 는 쓰지 않는다.
     from harness_catalog import (
         CapabilityEnricher,
+        ChainEnricher,
         LocalEmbedder,
         OpenAIEmbedder,
         make_classifier,
         make_reasoner,
+        zeroshot_classifier,
     )
 
     _app_llm = AppSettingsStore(engine).resolve()
@@ -166,9 +168,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.recommender = LiveRecommender(
         registry, embedder=embedder, reasoner=reasoner, store=vector_store
     )
-    enricher = CapabilityEnricher(
+    enricher: Any = CapabilityEnricher(
         classifier=make_classifier(_provider, _llm_key), max_enrich=cfg.registry_enrich_max
     )
+    # TASK 3: 제로샷 caps 태깅(옵트인). semantic 임베더(OpenAI 키)가 있을 때만 활성 — LocalEmbedder 는
+    # 정밀도 부족(baseline §6)이라 켜지 않는다. caps 임베더는 서빙과 **분리·고정**(결정성). 제로샷(전량,
+    # 결정적) → LLM(모호한 잔여만) 순으로 체인. threshold 는 활성화 전 eval_zeroshot.py 로 재보정할 것.
+    if cfg.use_caps_zeroshot and _emb_key:
+        zs = CapabilityEnricher(
+            classifier=zeroshot_classifier(
+                threshold=cfg.caps_zeroshot_threshold, embedder=OpenAIEmbedder(api_key=_emb_key)
+            ),
+            max_enrich=1_000_000,
+        )
+        enricher = ChainEnricher([zs, enricher])
+        log.info("caps 제로샷 활성(threshold=%.2f, semantic 임베더)", cfg.caps_zeroshot_threshold)
+    elif cfg.use_caps_zeroshot:
+        log.warning("caps 제로샷 요청됐으나 embedding 키 없음 — 정밀도 부족이라 스킵(무보강 유지)")
 
     async def _sync_loop() -> None:
         # 주기적으로 하이브리드 harvest→DB(증분 또는 full). 첫 기동엔 상태가 없어 즉시 1회(full),

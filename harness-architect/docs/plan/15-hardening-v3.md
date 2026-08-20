@@ -173,12 +173,16 @@ TASK 3의 스코핑 근거를 먼저 만든다.
 
 ## TASK 3 — 능력 태깅 커버리지 (구 TASK 4)
 
-> **상태(2026-08-19)**: 🚧 **인프라 준비 완료 · 활성화는 semantic 임베더 대기(데이터로 확인).**
-> 제로샷 분류기(`caps_zeroshot.py`, 고정 임베더=결정성) + 보정 하네스(`eval_zeroshot.py`) 구현.
-> 라이브 스냅샷 측정 결과 **LocalEmbedder 제로샷은 정밀도 부족**(0.35 임계값에서도 `aiven`(DB)→
-> `web.search` 헛매칭) → 켜면 거짓 충족 위험이라 **sync 파이프라인 미연결**. OpenAI 임베더로
-> `eval_zeroshot.py` 재보정 후 배선 예정([caps-coverage-baseline](../caps-coverage-baseline.md) §6).
-> 아래 "결정성 제약"은 그대로 유효(활성화 시 필수).
+> **상태(2026-08-20)**: 🚧 **인프라+배선 완료 · 활성화(켜기)만 semantic 키 대기.**
+> 제로샷 분류기(`caps_zeroshot.py`, 고정 임베더=결정성) + 보정 하네스(`eval_zeroshot.py`) + **sync
+> 배선**(`main.py`: `ChainEnricher([제로샷, LLM])`, 옵트인·키게이트·튜너블) 구현. 라이브 스냅샷 측정상
+> **LocalEmbedder 제로샷은 정밀도 부족**(0.35 에서도 `aiven`(DB)→`web.search`)이라, 배선은 **OpenAI
+> embedding 키가 있을 때만** 활성(키 없으면 경고+스킵 — LocalEmbedder 로는 절대 켜지 않음, 거짓 충족 방지).
+>
+> **활성화 레시피(키 확보 시)**: ① 앱에 OpenAI embedding 키 등록 → ② `eval_zeroshot.py --from-snapshot`
+> 을 **OpenAI 임베더로** 재실행해 threshold 확정(`HARNESS_CAPS_ZEROSHOT_THRESHOLD`) → ③ `HARNESS_CAPS_ZEROSHOT=on`
+> → ④ 재시작(재색인) → ⑤ IDF `cap_weight`·`RELEVANCE_FLOOR` 재보정 → ⑥ `reeval_gaps.py` 로 과거 거짓 gap 정화.
+> 배선·게이트는 준비 완료라 ②③만 하면 켜진다. ⑤⑥은 켠 뒤 후처리([baseline](../caps-coverage-baseline.md) §6).
 
 ### 배경 — v1의 메커니즘 서술은 틀렸다
 
