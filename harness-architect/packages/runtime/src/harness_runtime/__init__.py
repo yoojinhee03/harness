@@ -6,7 +6,7 @@ ResolvedHarness → 요청 빌더(system/tools/mcp 조립) + 훅 엔진(이벤�
 
 from __future__ import annotations
 
-from .adopt import AdoptResult, adopt, adopt_dir
+from .adopt import AdoptResult, adopt, adopt_dir, read_native_tree
 from .builder import BuiltRequest, build_request
 from .emit import (
     ClaudeCodeEmitter,
@@ -36,11 +36,14 @@ from .openharness_runner import OpenHarnessRunner
 from .runner import AnthropicRunner, RunResult
 from .sandbox import Executor, InProcessExecutor, TimeoutBoundExecutor, default_executors
 from .tracing import harness_span
+from .verify import DEFAULT_SEVERITY, VerifyReport, verify, violations
 
 __all__ = [
     "AblationResult",
     "AdoptResult",
     "AnthropicRunner",
+    "DEFAULT_SEVERITY",
+    "VerifyReport",
     "BuiltRequest",
     "CheckResult",
     "ClaudeCodeEmitter",
@@ -71,6 +74,9 @@ __all__ = [
     "emit",
     "target_losses",
     "harness_span",
+    "read_native_tree",
     "run_ablation",
     "run_eval",
+    "verify",
+    "violations",
 ]

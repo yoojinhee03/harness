@@ -167,8 +167,8 @@ def adopt(files: dict[str, str], registry: Registry, harness_id: str = "adopted"
     )
 
 
-def adopt_dir(source: str | Path, registry: Registry, harness_id: str = "adopted") -> AdoptResult:
-    """디스크 디렉터리에서 알려진 네이티브 파일을 읽어 adopt."""
+def read_native_tree(source: str | Path) -> dict[str, str]:
+    """디스크 디렉터리에서 알려진 네이티브 설정 파일을 읽어 {상대경로: 내용}. (adopt/verify 공용 입력)"""
     root = Path(source)
     files: dict[str, str] = {}
     for rel in ("CLAUDE.md", ".mcp.json", ".claude/settings.json", ".cursor/mcp.json"):
@@ -183,4 +183,9 @@ def adopt_dir(source: str | Path, registry: Registry, harness_id: str = "adopted
     if skills.is_dir():
         for skill_md in sorted(skills.glob("*/SKILL.md")):
             files[f".claude/skills/{skill_md.parent.name}/SKILL.md"] = skill_md.read_text(encoding="utf-8")
-    return adopt(files, registry, harness_id)
+    return files
+
+
+def adopt_dir(source: str | Path, registry: Registry, harness_id: str = "adopted") -> AdoptResult:
+    """디스크 디렉터리에서 알려진 네이티브 파일을 읽어 adopt."""
+    return adopt(read_native_tree(source), registry, harness_id)

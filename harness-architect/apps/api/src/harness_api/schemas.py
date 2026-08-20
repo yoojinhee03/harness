@@ -198,3 +198,12 @@ class RunRequest(ResolveRequest):
     """
 
     message: str = Field(min_length=1)
+
+
+class VerifyBody(BaseModel):
+    """POST /verify — 업로드된 네이티브 트리(상대경로→내용)를 정적 검증(harness verify 의 API 판)."""
+
+    files: dict[str, str] = Field(default_factory=dict)  # 예: {".mcp.json": "...", "CLAUDE.md": "..."}
+    require: list[str] = Field(default_factory=list)  # 요구 능력(통제어휘)
+    target: str | None = None  # 이식 손실을 잴 타깃(claude-code|cursor)
+    policy: dict[str, str] | None = None  # severity 오버라이드(선택)
