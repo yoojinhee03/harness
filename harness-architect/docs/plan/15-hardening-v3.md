@@ -482,15 +482,24 @@ TTL 라이브 소스가 직접 federate되어 generation을 흔들고 재색인�
 
 ---
 
+## 후속(follow-up) 진행 결과 (2026-08-20)
+
+- ✅ **#1 verify gap→GapDemand DB** — `POST /verify`(공용 `harness_runtime.verify` 코어로 CLI/API 공유) +
+  gap(source=verify)·공출현을 DB 에 durable 기록.
+- ✅ **#3 Harness Protocol v1 이미터** — `HarnessProtocolEmitter`(target=harness-protocol). 충돌을 상호운용으로.
+- ✅ **#5(일부) 승격 거버넌스** — `sandbox=none` 훅 승격 차단 게이트(`allow_unsandboxed` 심사). 다인 승인은 아래 백로그.
+- 🔸 **#4 웹 다운로드 파일명 — N/A**: 웹은 harness.yaml 을 파일로 내려받지 않고 UI 에 텍스트로 표시만 한다
+  (Blob/다운로드 링크 없음). 내용이 `$schema` 로 자기식별되므로 충돌 위험 없음 → 조치 불필요.
+- ⚙️ **머지 충돌 재발 방지(영구)** — 레포 머지 방식을 **merge-commit 전용**으로(squash·rebase off).
+  squash 는 장수 feat 브랜치와 매 머지 재충돌을 유발한다(#20·#21·#22 패턴). 되돌리려면 GitHub
+  Settings→Pull Requests 에서 재활성화.
+
 ## 백로그 (기록만, 착수하지 마라)
 
-- **Harness Protocol v1 이미터** — 세 번째 이미터. 남의 배포 인프라를 얻으면서 파일명 충돌에서도
-  벗어난다. TASK 4 완료 후 검토.
-- **skillsmp 소스 추가** — 주석의 Smithery/Glama/mcp.so는 전부 MCP라서 공식 레지스트리와 겹친다.
-  실제 공백은 non-mcp 타입이고 마켓플레이스 단일 파일 500개 상한이 병목이다. skillsmp가 SKILL.md를
-  REST API로 열어두고 있어 델타가 훨씬 크다.
-- **승격 거버넌스** — 현재 스코프 write 권한만으로 공유 카탈로그 승격이 가능하다. 다인 승인 +
-  `sandbox:none` 훅 추가 심사.
-- **공출현 신호를 랭킹에 투입** — TASK 5에서 데이터가 쌓인 뒤. 작동하면 임베딩은 콜드스타트
-  폴백으로만 남는다.
-- **`verify --fix`** — gap을 스튜디오 저작 루프로 연결. verify 판정이 안정된 뒤에.
+- **#2 공출현 신호를 랭킹에 투입** — 🚫 데이터+eval 선행. 핵심 `ranking.py`(추천 품질)를 바꾸는데
+  (1) 공출현 테이블이 verify --record/`POST /verify` 실사용으로 쌓여야 신호가 되고 (2) 회귀를 볼 eval
+  세트가 없으면 검증 불가. 투기적 코어 변경 금지 — 데이터 축적 + eval 확보 후 착수. 작동하면 임베딩은 콜드스타트 폴백.
+- **다인 승인 워크플로** — sandbox 게이트는 완료. 다인 승인은 durable 승인 테이블(alembic)+엔드포인트 필요(중간 규모).
+- **skillsmp 소스 추가** — 주석의 Smithery/Glama/mcp.so는 전부 MCP라 공식 레지스트리와 겹친다.
+  실제 공백은 non-mcp 타입이고 마켓플레이스 단일 파일 500개 상한이 병목. skillsmp 가 SKILL.md 를 REST 로 열어 델타가 크다.
+- **`verify --fix`** — gap 을 스튜디오 저작 루프로 연결. verify 판정이 안정된 뒤에.
