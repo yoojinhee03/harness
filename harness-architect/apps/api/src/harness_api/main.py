@@ -1083,6 +1083,7 @@ async def promote_component_endpoint(
     request: Request,
     cid: str,
     scope: str = Query("personal"),
+    allow_unsandboxed: bool = Query(False),  # sandbox=none 훅 추가 심사(거버넌스 게이트)
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
     """저작 컴포넌트를 공유 카탈로그로 승격(Phase 14 피드백 루프). 게이트: ready + validate 통과.
@@ -1093,7 +1094,9 @@ async def promote_component_endpoint(
     catalog_store = getattr(request.app.state, "catalog_store", None)
     if catalog_store is None:
         raise HTTPException(status_code=503, detail="카탈로그 스토어가 없습니다(harvest off).")
-    result = promote_component(_component_store(request), catalog_store, sk, cid)
+    result = promote_component(
+        _component_store(request), catalog_store, sk, cid, allow_unsandboxed=allow_unsandboxed
+    )
     if not result["ok"]:
         raise HTTPException(status_code=400, detail="; ".join(result["errors"]))
     return result
