@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, subscribeHarnessEvents, type Team } from "../api/client";
+import { AdoptImport } from "../components/AdoptImport";
 import { diffLines } from "../lib/diff";
 import { useToast } from "../lib/toast";
 import { Badge, Button, Card, codeBlock, EmptyState, Input, Modal, PageHeader, SeverityDot, SkeletonCards } from "../lib/ui";
@@ -26,6 +27,7 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("editor");
   const [delFor, setDelFor] = useState<{ id: string; scope: string; name: string } | null>(null);
+  const [adoptOpen, setAdoptOpen] = useState(false);
 
   useEffect(() => subscribeHarnessEvents(() => qc.invalidateQueries({ queryKey: ["harnesses"] })), [qc]);
 
@@ -88,9 +90,14 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
           </>
         }
         actions={
-          <Button variant="subtle" onClick={() => setTeamName("")}>
-            + 새 팀
-          </Button>
+          <>
+            <Button variant="subtle" onClick={() => setAdoptOpen(true)}>
+              기존 설정 가져오기
+            </Button>
+            <Button variant="subtle" onClick={() => setTeamName("")}>
+              + 새 팀
+            </Button>
+          </>
         }
       />
 
@@ -105,8 +112,15 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
       ) : shown.length === 0 ? (
         <EmptyState
           title={isTeamWs ? `${wsLabel} 팀에 아직 하네스가 없어요` : "아직 하네스가 없어요"}
-          hint="프로젝트를 설명해 harness.yaml 을 만들고 저장하면 이 워크스페이스와 VSCode 확장에 실시간으로 나타납니다."
-          action={<Button onClick={onCreate}>첫 하네스 만들기 →</Button>}
+          hint="프로젝트를 설명해 harness.yaml 을 만들거나, 쓰던 .claude/·.cursor/ 설정을 그대로 가져오세요. 저장하면 이 워크스페이스와 VSCode 확장에 실시간으로 나타납니다."
+          action={
+            <div className="flex justify-center gap-2">
+              <Button onClick={onCreate}>첫 하네스 만들기 →</Button>
+              <Button variant="subtle" onClick={() => setAdoptOpen(true)}>
+                기존 설정 가져오기
+              </Button>
+            </div>
+          }
         />
       ) : (
         <div className="space-y-2.5">
@@ -181,6 +195,8 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
       )}
 
       {/* 다이얼로그 */}
+      {adoptOpen && <AdoptImport scope={scopeQuery(workspace)} onClose={() => setAdoptOpen(false)} />}
+
       {teamName !== null && (
         <Modal title="새 팀 만들기" onClose={() => setTeamName(null)}>
           <Input autoFocus placeholder="팀 이름" value={teamName} onChange={(e) => setTeamName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createTeam()} />

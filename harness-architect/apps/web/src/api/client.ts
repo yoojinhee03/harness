@@ -100,6 +100,16 @@ export interface EjectResult {
   files: Record<string, string> | null;
 }
 
+/** POST /adopt — 기존 .claude/.cursor 트리를 harness.yaml IR 로 역흡수한 결과(온보딩). */
+export interface AdoptResponse extends GenerateResponse {
+  config: Record<string, unknown>;
+  /** 카탈로그에 없어 ref 로 승격되지 않은 것들 — 지어내지 않고 그대로 보존한 흔적이다. */
+  unknown_mcp: string[];
+  unknown_skills: string[];
+  hooks: string[];
+  notes: string[];
+}
+
 export interface HarnessSummary {
   id: string;
   scope: string; // "personal:<uid>" | "team:<tid>"
@@ -404,6 +414,9 @@ export const api = {
     post<RecommendResult>("/recommend", { description, top_k }),
   resolve: (harness: HarnessInput) => post<ResolveResult>("/resolve", harness),
   generate: (harness: HarnessInput) => post<GenerateResponse>("/generate", harness),
+  /** 기존 네이티브 설정(.claude/.cursor) → 편집 가능한 harness.yaml. 온보딩 진입점. */
+  adopt: (files: Record<string, string>, harness_id?: string) =>
+    post<AdoptResponse>("/adopt", harness_id ? { files, harness_id } : { files }),
   ejectTargets: () => fetch(`${BASE}/eject/targets`).then((r) => r.json() as Promise<string[]>),
   eject: (harness: HarnessInput, target: string) =>
     post<EjectResult>(`/eject?target=${encodeURIComponent(target)}`, harness),

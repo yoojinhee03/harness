@@ -44,6 +44,7 @@ from harness_runtime import (
     build_request,
     emit,
 )
+from harness_runtime import adopt as run_adopt
 from harness_runtime import verify as run_verify
 from harness_runtime import violations as compute_violations
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -76,6 +77,8 @@ from .orchestrator import studio_run as _studio_run
 from .orchestrator import suggest_title as _suggest_title
 from .promotion import promote_component
 from .schemas import (
+    AdoptBody,
+    AdoptResponse,
     CatalogItem,
     ComponentAuthorBody,
     ComponentSaveBody,
@@ -549,6 +552,45 @@ def verify_endpoint(
         },
         "note": "capability 판정은 TASK 3(caps 커버리지) 완료 전 잠정 — 거짓 gap 가능(기본 warning)",
     }
+
+
+@app.post("/adopt", response_model=AdoptResponse)
+@limiter.limit("30/minute")
+def adopt_endpoint(
+    request: Request, body: AdoptBody, user: dict[str, Any] | None = Depends(optional_user)
+) -> AdoptResponse:
+    """업로드된 .claude/.cursor 트리 → harness.yaml IR(CLI `harness adopt` 의 API 판).
+
+    온보딩 진입점이다 — 쓰던 설정을 그대로 올리면 편집 가능한 하네스가 된다. 판정이 아니라
+    **변환**이 목적이라 상세 진단은 내지 않는다(그건 `/verify`). `harness_runtime.adopt` 를
+    CLI 와 공유하므로 흡수 규칙이 갈라지지 않는다.
+
+    adopt 로 해소된 컴포넌트 집합은 '실제로 함께 쓰이던 조합'이라 공출현 신호로 기록한다
+    (`/verify` 와 동일, **비차단**). 온보딩이 verify 보다 트래픽이 많을 경로라 백로그 #2 의
+    데이터 게이트를 여기서 더 빨리 채운다.
+    """
+    registry = _scoped_registry(request, user)
+    adopted = run_adopt(body.files, registry, harness_id=body.harness_id)
+    result = resolve(adopted.config, registry)
+
+    ids = [rc.id for rc in result.resolved.components] if result.resolved else []
+    try:
+        CooccurrenceStore(request.app.state.engine).record(ids)
+    except Exception as exc:  # noqa: BLE001 — 비차단(기록 실패가 변환을 막지 않는다)
+        log.warning("공출현 기록 실패(무시): %s", exc)
+
+    return AdoptResponse(
+        yaml=to_harness_yaml(adopted.config),
+        config=adopted.config.model_dump(exclude_none=True, exclude_defaults=True, by_alias=True),
+        ok=result.ok,
+        gaps=len(result.diagnostics.gaps),
+        warnings=len(result.diagnostics.warnings),
+        errors=len(result.diagnostics.errors),
+        unknown_mcp=adopted.unknown_mcp,
+        unknown_skills=adopted.unknown_skills,
+        hooks=adopted.hooks,
+        notes=adopted.notes,
+    )
 
 
 @app.post("/resolve", response_model=ResolveResult)

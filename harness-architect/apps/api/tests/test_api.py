@@ -280,6 +280,52 @@ def test_verify_endpoint_required_missing_violation(client):
     assert body["ok"] is False and "required_missing" in body["violations"]
 
 
+ADOPT_TREE = {
+    ".mcp.json": (
+        '{"mcpServers": {"github-mcp": {"command": "npx", "args": []}, '
+        '"slack-mcp": {"command": "npx", "args": []}}}'
+    ),
+    "CLAUDE.md": "너는 시니어 코드 리뷰어다.",
+}
+
+
+def test_adopt_endpoint_returns_usable_ir(client):
+    """POST /adopt — 네이티브 트리가 편집 가능한 harness.yaml IR 로 돌아온다(온보딩 진입점)."""
+    r = client.post("/adopt", json={"files": ADOPT_TREE, "harness_id": "my-bot"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "github-mcp" in body["yaml"] and "slack-mcp" in body["yaml"]
+    assert body["config"]["metadata"]["id"] == "my-bot"
+    assert "너는 시니어 코드 리뷰어다." in body["yaml"]  # CLAUDE.md 본문이 inline prompt 로 보존
+    assert body["ok"] is True and body["errors"] == 0
+
+
+def test_adopt_result_round_trips_through_resolve(client):
+    """adopt 산출 config 가 그대로 /resolve 를 통과해야 한다 — 안 그러면 온보딩이 끊긴다."""
+    config = client.post("/adopt", json={"files": ADOPT_TREE}).json()["config"]
+    r = client.post("/resolve", json=config)
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+def test_adopt_preserves_unknown_without_inventing(client):
+    """카탈로그에 없는 서버는 unknown 으로 보존만 한다 — 비슷한 걸로 지어내면 안 된다(환각 금지)."""
+    files = {".mcp.json": '{"mcpServers": {"weird-unknown-mcp": {"command": "npx", "args": []}}}'}
+    body = client.post("/adopt", json={"files": files}).json()
+    assert body["unknown_mcp"] == ["weird-unknown-mcp"]
+    assert "weird-unknown-mcp" not in body["yaml"]  # ref 로 승격되지 않는다
+    assert body["config"].get("components", []) == []
+
+
+def test_adopt_endpoint_records_cooccurrence(client):
+    """adopt 로 해소된 조합은 '실제로 함께 쓰이던' 관측이라 공출현에 기록된다(백로그 #2 데이터)."""
+    from harness_api.cooccurrence import CooccurrenceStore
+
+    client.post("/adopt", json={"files": ADOPT_TREE})
+    pairs = {tuple(p["pair"]) for p in CooccurrenceStore(app.state.engine).top()}
+    assert ("github-mcp", "slack-mcp") in pairs
+
+
 def test_verify_endpoint_records_cooccurrence(client):
     """MCP 2개 트리 → 공출현이 DB 에 기록된다(TASK 5e durable)."""
     files = {
