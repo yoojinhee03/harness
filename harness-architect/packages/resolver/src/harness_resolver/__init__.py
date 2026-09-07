@@ -8,6 +8,9 @@ from __future__ import annotations
 from .diagnostics import Diagnostic, Diagnostics
 from .merge import merge_harness_configs
 from .models import (
+    DEFAULT_ADDED_TOOLS_BUDGET,
+    DEFAULT_CONTEXT_TOKEN_BUDGET,
+    DEFAULT_HARNESS_MODEL,
     Auth,
     Budget,
     Component,
@@ -42,6 +45,9 @@ from .resolver import ResolveResult, resolve
 __all__ = [
     "Auth",
     "Budget",
+    "DEFAULT_ADDED_TOOLS_BUDGET",
+    "DEFAULT_CONTEXT_TOKEN_BUDGET",
+    "DEFAULT_HARNESS_MODEL",
     "Component",
     "ComponentSelection",
     "Cost",

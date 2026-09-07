@@ -10,8 +10,16 @@ import json
 import os
 from typing import Any
 
-MODEL = "claude-sonnet-5"  # 하위호환 기본(anthropic)
-DEFAULT_MODEL = {"anthropic": "claude-sonnet-5", "openai": "gpt-4o-mini"}
+# 파이프라인(추출·랭킹 근거·caps 태깅)이 쓸 provider 별 기본 모델. **여기가 단일 출처다** —
+# apps/api 의 llm_client 도 이걸 재수출한다.
+#
+# ⚠️ harness_resolver 의 `DEFAULT_HARNESS_MODEL`(harness.yaml 의 model.name 기본값)과는 **일부러
+#    분리**돼 있다. 그건 "사용자 하네스가 돌 모델"이고 이건 "우리 파이프라인이 쓸 모델"이라 축이
+#    다르다. 지금 값이 같은 건 우연이니 한쪽을 올릴 때 다른 쪽을 자동으로 끌고 가면 안 된다.
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = {"anthropic": DEFAULT_CLAUDE_MODEL, "openai": DEFAULT_OPENAI_MODEL}
+MODEL = DEFAULT_CLAUDE_MODEL  # 하위호환 별칭
 _ENV_KEY = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 
 

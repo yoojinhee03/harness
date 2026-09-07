@@ -120,8 +120,8 @@ def test_embedder_choice():
 
     def mk(**kw):
         base = dict(
-            anthropic_key=None, voyage_key=None, embedder_mode="auto",
-            ranker_mode="heuristic", embed_model="x", claude_model="y",
+            anthropic_key=None, embedder_mode="auto",
+            ranker_mode="heuristic", claude_model="y",
         )
         base.update(kw)
         return Settings(**base)  # type: ignore[arg-type]

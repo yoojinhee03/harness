@@ -152,10 +152,8 @@ def test_marketplace_offline_fallback():
 def _settings(**kw: object) -> Settings:
     base = dict(
         anthropic_key=None,
-        voyage_key=None,
         embedder_mode="local",
         ranker_mode="heuristic",
-        embed_model="x",
         claude_model="y",
     )
     base.update(kw)

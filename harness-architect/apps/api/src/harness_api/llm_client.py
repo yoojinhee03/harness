@@ -11,8 +11,11 @@ import json
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from harness_catalog.llm import DEFAULT_MODEL as _CATALOG_DEFAULT_MODEL
+
 # 모델 선택 UI 는 제거 — provider 별 기본 모델을 쓴다.
-DEFAULT_MODEL = {"anthropic": "claude-sonnet-5", "openai": "gpt-4o-mini"}
+# 값은 harness_catalog.llm 이 단일 출처다(예전엔 같은 dict 를 두 곳에 손으로 맞춰야 했다).
+DEFAULT_MODEL = _CATALOG_DEFAULT_MODEL
 
 
 def _import_openai() -> Any:

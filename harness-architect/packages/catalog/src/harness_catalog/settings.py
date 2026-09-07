@@ -1,8 +1,11 @@
 """RAG 설정 일원화 — 환경변수에서 모드·모델명을 읽는다. 개발: 기술 스택 §2·§4.
 
 키가 없으면 자동으로 로컬 폴백. 명시 모드로 강제도 가능(테스트·재현).
-  HARNESS_EMBEDDER = auto | local | voyage
-  HARNESS_RANKER   = auto | heuristic | claude
+  HARNESS_EMBEDDER = auto | local | openai   (auto = OPENAI_API_KEY 있으면 openai)
+  HARNESS_RANKER   = auto | heuristic | claude (auto = ANTHROPIC_API_KEY 있으면 claude)
+  HARNESS_OPENAI_EMBED_MODEL = 임베딩 모델(기본 text-embedding-3-small)
+  HARNESS_CLAUDE_MODEL       = 추출·랭킹 근거 모델(기본 claude-sonnet-5)
+  HARNESS_RELEVANCE_FLOOR    = 추천 카드 관련성 하한(기본 0.20 — 임베더 교체 시 재보정)
 
 라이브 카탈로그(공식 MCP 레지스트리 실시간 연동) — 기본 off, 옵트인.
   HARNESS_LIVE_REGISTRY   = off | on   (on 이면 공식 레지스트리를 런타임에 물림)
@@ -19,14 +22,18 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from .llm import DEFAULT_CLAUDE_MODEL
+
+# 추천 카드 관련성 하한의 기본값. LocalEmbedder 실측(시드 카탈로그): 연관 컴포넌트 ≥0.27,
+# 무관 도메인 잡음 ≤0.15 → 0.20 이 경계. recommender 가 이 값을 기본으로 쓴다.
+DEFAULT_RELEVANCE_FLOOR = 0.20
+
 
 @dataclass(frozen=True)
 class Settings:
     anthropic_key: str | None
-    voyage_key: str | None
-    embedder_mode: str  # auto | local | voyage
+    embedder_mode: str  # auto | local | openai
     ranker_mode: str  # auto | heuristic | claude
-    embed_model: str
     claude_model: str
     # OpenAI(임베딩/LLM) — 기본값과 함께 끝에 추가(기존 kwargs 생성 무파손).
     openai_key: str | None = None
@@ -45,6 +52,10 @@ class Settings:
     # 정밀도 부족으로 스킵). 활성화 전 eval_zeroshot.py 로 threshold 를 재보정할 것.
     caps_zeroshot_mode: str = "off"  # off | on
     caps_zeroshot_threshold: float = 0.35
+    # 추천 카드로 남길 임베딩 유사도 하한. **절대 임계값이라 임베더를 바꾸면 재보정 대상**이고,
+    # 임베더는 HARNESS_EMBEDDER 로 런타임에 갈리므로 이것도 함께 조정 가능해야 한다.
+    # (gap 판정은 통제어휘 정합이라 이 값과 무관 — 여기 오보정은 잡음 카드 표시 이슈일 뿐.)
+    relevance_floor: float = DEFAULT_RELEVANCE_FLOOR
 
     @property
     def use_live_registry(self) -> bool:
@@ -77,13 +88,11 @@ class Settings:
 def load_settings() -> Settings:
     return Settings(
         anthropic_key=os.environ.get("ANTHROPIC_API_KEY") or None,
-        voyage_key=None,  # Voyage 제거(필드는 하위호환 위해 유지, 미사용)
         openai_key=os.environ.get("OPENAI_API_KEY") or None,
         openai_embed_model=os.environ.get("HARNESS_OPENAI_EMBED_MODEL", "text-embedding-3-small"),
         embedder_mode=os.environ.get("HARNESS_EMBEDDER", "auto"),
         ranker_mode=os.environ.get("HARNESS_RANKER", "auto"),
-        embed_model=os.environ.get("HARNESS_EMBED_MODEL", "voyage-3.5"),
-        claude_model=os.environ.get("HARNESS_CLAUDE_MODEL", "claude-sonnet-5"),
+        claude_model=os.environ.get("HARNESS_CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL),
         live_registry_mode=os.environ.get("HARNESS_LIVE_REGISTRY", "off"),
         registry_url=os.environ.get("HARNESS_REGISTRY_URL", "https://registry.modelcontextprotocol.io"),
         registry_ttl=float(os.environ.get("HARNESS_REGISTRY_TTL", "300")),
@@ -95,4 +104,5 @@ def load_settings() -> Settings:
         catalog_full_interval=int(os.environ.get("HARNESS_CATALOG_FULL_INTERVAL", "86400")),
         caps_zeroshot_mode=os.environ.get("HARNESS_CAPS_ZEROSHOT", "off"),
         caps_zeroshot_threshold=float(os.environ.get("HARNESS_CAPS_ZEROSHOT_THRESHOLD", "0.35")),
+        relevance_floor=float(os.environ.get("HARNESS_RELEVANCE_FLOOR", str(DEFAULT_RELEVANCE_FLOOR))),
     )

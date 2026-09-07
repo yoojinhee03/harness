@@ -21,6 +21,8 @@ from harness_resolver import (
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_STORE_DIR", str(tmp_path / "store"))
+    # 키를 저장하는 테스트라 서버 시크릿이 필요하다 — 없으면 encrypt 가 거부한다(공개 키 암호화 방지).
+    monkeypatch.setenv("HARNESS_SECRET_KEY", "test-secret")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)  # 결정적: 휴리스틱/스킵 경로
     from harness_api.main import app
 

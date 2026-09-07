@@ -100,10 +100,8 @@ def _both_sources_fetcher(url: str) -> dict:
 def _settings(**kw) -> Settings:
     base = dict(
         anthropic_key=None,
-        voyage_key=None,
         embedder_mode="local",
         ranker_mode="heuristic",
-        embed_model="x",
         claude_model="y",
     )
     base.update(kw)
