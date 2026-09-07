@@ -40,11 +40,13 @@ from harness_resolver import Component, InMemoryRegistry, ResolveResult, resolve
 from harness_runtime import (
     DEFAULT_SEVERITY,
     AnthropicRunner,
+    PreviewReport,
     available_targets,
     build_request,
     emit,
 )
 from harness_runtime import adopt as run_adopt
+from harness_runtime import preview as run_preview
 from harness_runtime import verify as run_verify
 from harness_runtime import violations as compute_violations
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -642,6 +644,23 @@ def run_endpoint(
     }
 
 
+@app.post("/preview", response_model=PreviewReport)
+def preview_endpoint(
+    request: Request,
+    body: ResolveRequest,
+    target: str | None = Query(None, description="함께 볼 eject 타깃(선택)"),
+    user: dict[str, Any] | None = Depends(optional_user),
+) -> PreviewReport:
+    """실행 전 조립 분해 — 시스템 프롬프트 조각·MCP·훅 타임라인·예산 (Phase 6). **모델 호출 없음.**
+
+    경고는 여기서 계산하지 않고 리졸버 진단을 그대로 싣는다(재계산하면 진실 원천이 갈라진다).
+    `harness_runtime.preview` 코어를 CLI 와 공유한다.
+    """
+    if target is not None and target not in available_targets():
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 타깃: {target} (가능: {available_targets()})")
+    return run_preview(body.to_config(), _scoped_registry(request, user), eject_target=target)
+
+
 @app.get("/eject/targets")
 def eject_targets() -> list[str]:
     """지원하는 eject 타깃 목록(프론트 타깃 셀렉터용)."""
@@ -983,6 +1002,28 @@ def validate_harness(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
     return resolve(config, _scoped_registry(request, user))
+
+
+@app.post("/harnesses/{hid}/preview", response_model=PreviewReport)
+def preview_harness(
+    request: Request,
+    hid: str,
+    scope: str = Query("personal"),
+    target: str | None = Query(None, description="함께 볼 eject 타깃(선택)"),
+    user: dict[str, Any] = Depends(current_user),
+) -> PreviewReport:
+    """저장된 harness.yaml 의 실행 전 조립 분해(Phase 6). 하네스 상세의 프리뷰 탭이 쓴다."""
+    if target is not None and target not in available_targets():
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 타깃: {target} (가능: {available_targets()})")
+    sk = _resolve_scope(request, user, scope)
+    doc = _store(request).get(sk, hid)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음(scope={scope})")
+    try:
+        config = parse_harness_yaml(doc["yaml"])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
+    return run_preview(config, _scoped_registry(request, user), eject_target=target)
 
 
 @app.post("/harnesses/{hid}/eject")

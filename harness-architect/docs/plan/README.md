@@ -42,12 +42,12 @@
 | # | Phase | 문서 | 우선순위 | 의존성 | 상태 |
 |---|-------|------|---------|--------|------|
 | 5 | 다중 런타임 컴파일 (`eject`, Claude Code 먼저) + CLI | [05-multi-runtime-compile.md](./05-multi-runtime-compile.md) | **P0 (플래그십)** | 없음 — `ResolvedHarness` IR 완료 | ✅ 완료 (Claude Code) |
-| 6 | 실행 전 프리뷰 / 시뮬레이터 | [06-preview-simulator.md](./06-preview-simulator.md) | P0 | `build_request`(완료), 05 와 방출 뷰 공유 | 📋 계획 |
-| 7 | 역방향 임포트 (`adopt`) + gap 분석 | [07-reverse-adopt.md](./07-reverse-adopt.md) | P1 | 05 (포맷 매핑의 역) | 📋 계획 |
+| 6 | 실행 전 프리뷰 / 시뮬레이터 | [06-preview-simulator.md](./06-preview-simulator.md) | P0 | `build_request`(완료), 05 와 방출 뷰 공유 | ✅ 완료 |
+| 7 | 역방향 임포트 (`adopt`) + gap 분석 | [07-reverse-adopt.md](./07-reverse-adopt.md) | P1 | 05 (포맷 매핑의 역) | ✅ 완료 (CLI·API·웹) |
 | 8 | 정책 as code (조직 가드레일) | [08-policy-as-code.md](./08-policy-as-code.md) | P1 (상업 차별화) | resolver(완료) — 독립 | 📋 계획 |
 | 9 | 피드백 루프 활성화 & 카탈로그 생애주기 | [09-feedback-and-catalog-lifecycle.md](./09-feedback-and-catalog-lifecycle.md) | P2 | 05 (실사용 신호) | 📋 계획 |
 | 10 | 프롬프트 관리 (합성·변수·버전·린트) | [10-prompt-management.md](./10-prompt-management.md) | **P0 (05·06 토대)** | IR/resolver/cost(완료) — 05·06 강화 | ✅ 완료 (코어) |
-| 11 | 경험적 검증 (프롬프트 eval → 품질 측정) | [11-empirical-validation.md](./11-empirical-validation.md) | P1 (신뢰도) | 10(완료) · 09 와 연동 | 📋 계획 |
+| 11 | 경험적 검증 (프롬프트 eval → 품질 측정) | [11-empirical-validation.md](./11-empirical-validation.md) | P1 (신뢰도) | 10(완료) · 09 와 연동 | 🟡 CLI 완료 (`POST /eval`·화면 노출 미착수) |
 | 12 | 프로덕션 하드닝 (MVP→실서비스: 보안·데이터·스케일·배포) | [12-production-hardening.md](./12-production-hardening.md) | **P0 (실서비스 잠금)** | 멀티테넌시(완료) 위 | 📋 계획 (12a~12d) |
 
 > **참고** — 12 는 기능이 아니라 **횡단 하드닝 트랙**이다. 웹↔확장 동기화 + 멀티테넌시(Bearer 인증·
@@ -71,9 +71,15 @@
 "설명→검증"에서 멈추던 데모가 **"→ 진짜 `.claude/` 가 생성돼 실행"**까지 완결되며 이식성이라는
 차별화 서사를 초반에 증명한다.
 
-> **현재 위치** — `10`·`05` 완료(프롬프트 코어 + Claude Code eject 관통). 다음 후보:
-> `06`(프리뷰) · `07·08` 병행 · 신뢰도용 `11`(경험적 검증). `05` 는 Cursor/Cline/Raw API
-> Emitter 로 이식 폭을 넓힌다.
+> **현재 위치(2026-09-07)** — `05`·`06`·`07`·`10` 완료. `05` 는 이미터 3종(Claude Code ·
+> Cursor · Harness Protocol v1). `06` 은 `harness_runtime.preview` 코어를 CLI(`harness preview`)·
+> API(`POST /preview`, `POST /harnesses/{id}/preview`)·웹(하네스 상세 프리뷰 탭)이 공유한다 —
+> 경고는 리졸버 진단을 그대로 나르고 재계산하지 않는다. `07` 은 adopt 가 CLI·`POST /adopt`·
+> 웹 온보딩("기존 설정 가져오기")까지 관통.
+>
+> **다음 후보**: `08`(정책 as code — 미착수, 상업 차별화) · `11` 잔여(`POST /eval` + 화면 노출) ·
+> `09`(피드백 루프). 백로그 #2(공출현 → 랭킹)는 eval 게이트가 풀렸고 데이터 축적만 대기 중이다
+> (`ranking-golden.yaml` 기준선 5/7 → 7/7 이 성공 기준).
 
 ## 검증 원칙
 

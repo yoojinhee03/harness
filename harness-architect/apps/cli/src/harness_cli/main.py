@@ -26,6 +26,7 @@ from harness_runtime import (
     available_targets,
     drop_component,
     emit,
+    preview,
     read_native_tree,
     run_ablation,
     run_eval,
@@ -195,6 +196,43 @@ def _load_policy(repo: Path) -> dict[str, str]:
     return {str(k): str(v) for k, v in sev.items()} if isinstance(sev, dict) else {}
 
 
+def cmd_preview(args: argparse.Namespace) -> int:
+    """실행 전 조립 분해를 보여준다(모델 호출 없음). 기본 text, CI 용 --format json."""
+    report = preview(_load_config(args.config), _registry(args.catalog), eject_target=args.target)
+    if args.format == "json":
+        print(report.model_dump_json(indent=2, exclude_none=True))
+        return 0 if report.ok else 1
+
+    print(f"{'✓' if report.ok else '✗'} {report.harness_id} · {report.model.get('name', '?')}")
+    for label, b in (("컨텍스트 토큰", report.context_budget), ("추가 도구", report.tool_budget)):
+        if b is None:
+            continue
+        print(f"  {label}: {b.used} / {b.limit}{' ⚠ 초과' if b.over else ''} (추정)")
+    for c in report.components:
+        dep = " [deprecated]" if c.status == "deprecated" else ""
+        print(f"    · {c.id:24s} {c.context_tokens:>6}토큰 ({c.share:.0%}) 도구+{c.added_tools}{dep}")
+    if report.prompt_sections:
+        print(f"  시스템 프롬프트 {report.prompt_chars}자 · 조각 {len(report.prompt_sections)}개")
+        for sec in report.prompt_sections:
+            print(f"    {sec.layer}. {sec.source} — {sec.tokens}토큰")
+    for m in report.mcp_servers:
+        where = "API 전송" if m.sent_to_api else "eject(로컬)"
+        print(f"  MCP {m.id} [{m.transport}] → {where}")
+    for event, steps in report.hooks.items():
+        chain = " → ".join(f"{s.id}{'(blocking)' if s.blocking else ''}" for s in steps)
+        print(f"  훅 {event}: {chain}")
+    for a in report.auth:
+        print(f"  인증 {a.component_id}: {'충족' if a.satisfied else '미충족'} ({a.granted_scope or '축소값 없음'})")
+    for d in report.diagnostics:
+        print(f"  [{d.severity}] {d.code}: {d.message}")
+    for n in report.notes:
+        print(f"  ※ {n}")
+    if report.eject_files is not None:
+        names = ", ".join(sorted(report.eject_files))
+        print(f"  eject({report.eject_target}) 파일 {len(report.eject_files)}개: {names}")
+    return 0 if report.ok else 1
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """레포를 adopt→resolve 로 검증 — ①능력 미충족 ②이식 손실 ③리졸버 에러. CI 게이트(종료코드).
 
@@ -328,6 +366,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_ablate.add_argument("--drop", required=True, help="빼서 기여도를 잴 컴포넌트 id")
     p_ablate.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
     p_ablate.set_defaults(func=cmd_ablate)
+
+    p_preview = sub.add_parser(
+        "preview", help="실행 전 조립 분해를 본다(프롬프트 조각·MCP·훅·예산). 모델 호출 없음."
+    )
+    p_preview.add_argument("config", help="harness.yaml 경로")
+    p_preview.add_argument("--target", default=None, choices=available_targets(), help="함께 볼 eject 타깃")
+    p_preview.add_argument("--format", choices=["json", "text"], default="text", help="출력(기본 text)")
+    p_preview.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
+    p_preview.set_defaults(func=cmd_preview)
 
     p_verify = sub.add_parser(
         "verify", help="기존 레포(.claude/.cursor)를 adopt→resolve 로 정적 검증(CI 게이트)."

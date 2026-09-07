@@ -110,6 +110,79 @@ export interface AdoptResponse extends GenerateResponse {
   notes: string[];
 }
 
+/** POST /preview — 실행 전 조립 분해(Phase 6). 모델 호출 없이 "무슨 일이 벌어지나"를 편다. */
+export interface PromptSectionView {
+  source: string;
+  layer: number;
+  tokens: number;
+  chars: number;
+  excerpt: string;
+}
+
+export interface ComponentCostView {
+  id: string;
+  type: ComponentType;
+  name: string;
+  version: string;
+  context_tokens: number;
+  added_tools: number;
+  status: string;
+  share: number;
+}
+
+export interface BudgetView {
+  used: number;
+  limit: number;
+  estimated: boolean;
+}
+
+export interface McpServerView {
+  id: string;
+  transport: string;
+  endpoint: string | null;
+  /** 원격(http/sse)만 Messages API 로 전송된다. stdio 는 eject 한 클라이언트에서 뜬다. */
+  sent_to_api: boolean;
+}
+
+export interface HookStepView {
+  id: string;
+  blocking: boolean;
+  sandbox: string | null;
+  timeout_ms: number | null;
+  failure: string | null;
+  modifies: string[];
+  has_command: boolean;
+}
+
+export interface AuthView {
+  component_id: string;
+  type: string | null;
+  scopes: string[];
+  granted_scope: string | null;
+  satisfied: boolean;
+}
+
+export interface PreviewReport {
+  ok: boolean;
+  harness_id: string;
+  model: Record<string, unknown>;
+  prompt_hash: string;
+  prompt_chars: number;
+  prompt_sections: PromptSectionView[];
+  components: ComponentCostView[];
+  context_budget: BudgetView | null;
+  tool_budget: BudgetView | null;
+  mcp_servers: McpServerView[];
+  hooks: Record<string, HookStepView[]>;
+  auth: AuthView[];
+  permissions: Record<string, string>;
+  /** 리졸버가 낸 진단 그대로 — 프리뷰는 경고를 재계산하지 않는다. */
+  diagnostics: Diagnostic[];
+  eject_target: string | null;
+  eject_files: Record<string, string> | null;
+  notes: string[];
+}
+
 export interface HarnessSummary {
   id: string;
   scope: string; // "personal:<uid>" | "team:<tid>"
@@ -452,6 +525,12 @@ export const api = {
   // 저장된 하네스(에이전트) 검증·내보내기 — 하네스 상세(구 생성 위저드 C·D 대체).
   validateHarness: (id: string, scope = "personal") =>
     post<ResolveResult>(`/harnesses/${encodeURIComponent(id)}/validate?scope=${encodeURIComponent(scope)}`, undefined),
+  /** 저장된 하네스의 실행 전 조립 분해(프리뷰 탭). 모델 호출 없음. */
+  previewHarness: (id: string, scope = "personal", target?: string) => {
+    const sp = new URLSearchParams({ scope });
+    if (target) sp.set("target", target);
+    return post<PreviewReport>(`/harnesses/${encodeURIComponent(id)}/preview?${sp.toString()}`, undefined);
+  },
   ejectHarness: (id: string, scope: string, target: string) =>
     post<EjectResult>(
       `/harnesses/${encodeURIComponent(id)}/eject?scope=${encodeURIComponent(scope)}&target=${encodeURIComponent(target)}`,

@@ -99,7 +99,7 @@ export function AdoptImport({ scope, onClose }: { scope: string; onClose: () => 
           type="file"
           multiple
           onChange={onPick}
-          className="block w-full text-sm text-muted file:mr-3 file:rounded-lg file:border-0 file:bg-surface-2 file:px-3 file:py-1.5 file:text-fg hover:file:bg-surface-3"
+          className="block w-full text-sm text-muted file:mr-3 file:rounded-lg file:border-0 file:bg-surface-2 file:px-3 file:py-1.5 file:text-fg hover:file:bg-line"
         />
       </div>
 

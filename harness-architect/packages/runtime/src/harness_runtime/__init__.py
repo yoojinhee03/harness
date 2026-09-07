@@ -34,6 +34,7 @@ from .eval import (
 from .guardrails import pii_redact_handler, presidio_redact
 from .hooks import HookEngine, HookOutcome
 from .openharness_runner import OpenHarnessRunner
+from .preview import PreviewReport, preview
 from .runner import AnthropicRunner, RunResult
 from .sandbox import Executor, InProcessExecutor, TimeoutBoundExecutor, default_executors
 from .tracing import harness_span
@@ -44,6 +45,7 @@ __all__ = [
     "AdoptResult",
     "AnthropicRunner",
     "DEFAULT_SEVERITY",
+    "PreviewReport",
     "VerifyReport",
     "BuiltRequest",
     "CheckResult",
@@ -79,6 +81,7 @@ __all__ = [
     "read_native_tree",
     "run_ablation",
     "run_eval",
+    "preview",
     "verify",
     "violations",
 ]

@@ -280,6 +280,51 @@ def test_verify_endpoint_required_missing_violation(client):
     assert body["ok"] is False and "required_missing" in body["violations"]
 
 
+PREVIEW_BODY = {
+    "metadata": {"id": "pr-bot"},
+    "permissions": {"vcs.code-hosting": "read-only"},
+    "components": [
+        {"ref": "github-mcp@1.4.0"},
+        {"ref": "pr-review-skill@2.1.0"},
+        {"ref": "secret-scan-hook@1.2.0"},
+    ],
+    "prompt": {"system": [{"inline": "너는 시니어 리뷰어다."}]},
+}
+
+
+def test_preview_decomposes_without_calling_model(client):
+    """POST /preview — 조립 분해(프롬프트 조각·MCP·훅·예산). 모델 호출 없음."""
+    r = client.post("/preview", json=PREVIEW_BODY)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["context_budget"]["used"] > 0
+    assert sum(c["context_tokens"] for c in body["components"]) == body["context_budget"]["used"]
+    assert [s["source"] for s in body["prompt_sections"]][0] == "inline"
+    assert body["hooks"]["before_tool_call"][0]["id"] == "secret-scan-hook"
+    assert body["eject_files"] is None  # target 미지정이면 방출 미리보기 없음
+
+
+def test_preview_with_eject_target_includes_file_tree(client):
+    body = client.post("/preview", json=PREVIEW_BODY, params={"target": "claude-code"}).json()
+    assert body["eject_target"] == "claude-code"
+    assert "CLAUDE.md" in body["eject_files"]
+
+
+def test_preview_rejects_unknown_target(client):
+    r = client.post("/preview", json=PREVIEW_BODY, params={"target": "nope"})
+    assert r.status_code == 400
+
+
+def test_preview_surfaces_resolver_diagnostics(client):
+    """예산을 조이면 리졸버 경고가 그대로 실려 나온다(프리뷰가 재계산하지 않는다)."""
+    body = client.post(
+        "/preview", json={**PREVIEW_BODY, "budget": {"context_tokens": 10, "added_tools": 1}}
+    ).json()
+    assert "token_budget_exceeded" in {d["code"] for d in body["diagnostics"]}
+    assert body["context_budget"]["used"] > body["context_budget"]["limit"]
+
+
 ADOPT_TREE = {
     ".mcp.json": (
         '{"mcpServers": {"github-mcp": {"command": "npx", "args": []}, '

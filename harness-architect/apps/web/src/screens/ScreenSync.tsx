@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, subscribeHarnessEvents, type Team } from "../api/client";
 import { AdoptImport } from "../components/AdoptImport";
+import { HarnessPreview } from "../components/HarnessPreview";
 import { diffLines } from "../lib/diff";
 import { useToast } from "../lib/toast";
 import { Badge, Button, Card, codeBlock, EmptyState, Input, Modal, PageHeader, SeverityDot, SkeletonCards } from "../lib/ui";
@@ -307,6 +308,7 @@ function HarnessActions({ id, scope }: { id: string; scope: string }) {
   const targets = targetsQ.data ?? ["claude-code"];
   const [target, setTarget] = useState("claude-code");
   const ejM = useMutation({ mutationFn: () => api.ejectHarness(id, qs, target) });
+  const [showPreview, setShowPreview] = useState(false);
 
   const diag = valM.data?.diagnostics.items ?? [];
   const errors = diag.filter((d) => d.severity === "error");
@@ -319,6 +321,9 @@ function HarnessActions({ id, scope }: { id: string; scope: string }) {
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" variant="subtle" onClick={() => valM.mutate()} disabled={valM.isPending}>
           {valM.isPending ? "검증 중…" : "검증"}
+        </Button>
+        <Button size="sm" variant="subtle" onClick={() => setShowPreview((v) => !v)}>
+          {showPreview ? "프리뷰 닫기" : "프리뷰"}
         </Button>
         {valM.data &&
           (errors.length ? (
@@ -347,6 +352,8 @@ function HarnessActions({ id, scope }: { id: string; scope: string }) {
           </Button>
         </span>
       </div>
+
+      {showPreview && <HarnessPreview id={id} scope={qs} />}
 
       {valM.data && diag.length > 0 && (
         <ul className="mt-2 space-y-1">
