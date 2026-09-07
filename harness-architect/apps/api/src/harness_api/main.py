@@ -68,6 +68,7 @@ from .catalog_store import CatalogStore, DbCatalogSource, sync_catalog
 from .component_store import ComponentStore, UserComponentSource, component_event_stream
 from .conversation_store import ConversationStore, conversation_event_stream
 from .cooccurrence import CooccurrenceStore
+from .crypto import InsecureSecretError, secret_is_insecure
 from .feedback import FeedbackStore, feedback_enabled
 from .gap_demand import GapDemand
 from .harness_build import parse_harness_yaml, to_harness_yaml
@@ -253,6 +254,12 @@ app = FastAPI(
 )
 
 # 레이트리밋(slowapi) — IP 기준. 계정 스팸·비용 유발 완화. 테스트에선 HARNESS_RATELIMIT=off 로 비활성.
+# 레이트리밋 — 두 등급이다. LLM 호출·외부 요청·무거운 처리가 붙는 경로(HEAVY)와 그렇지 않은
+# 경로(STANDARD). 배포 규모마다 적정선이 다르므로 env 로 조정한다
+# (HARNESS_RATELIMIT=off 는 전체 비활성화 — 테스트·단일 사용자 로컬용).
+RATE_LIMIT_STANDARD = os.environ.get("HARNESS_RATELIMIT_STANDARD", "60/minute")
+RATE_LIMIT_HEAVY = os.environ.get("HARNESS_RATELIMIT_HEAVY", "30/minute")
+
 limiter = Limiter(key_func=get_remote_address, enabled=os.environ.get("HARNESS_RATELIMIT", "on") != "off")
 app.state.limiter = limiter
 # slowapi 핸들러 시그니처(RateLimitExceeded)와 Starlette 기대(Exception)의 타입 불일치 — 런타임 정상.
@@ -363,9 +370,15 @@ def health(request: Request) -> dict[str, Any]:
 
 @app.get("/ready")
 def ready(request: Request) -> Response:
-    """레디니스 — 트래픽 받을 준비(DB 연결). 실패 시 503(로드밸런서가 제외)."""
+    """레디니스 — 트래픽 받을 준비(DB 연결). 실패 시 503(로드밸런서가 제외).
+
+    `insecure_secret` 은 HARNESS_SECRET_KEY 미설정을 운영에 드러낸다 — 로그 한 줄은 놓치기 쉽다.
+    준비 상태 자체는 아니므로 503 을 만들지는 않는다(DB 만 가용성 판단).
+    """
     ok = db_ready(request.app.state.engine)
-    return JSONResponse({"ready": ok}, status_code=200 if ok else 503)
+    return JSONResponse(
+        {"ready": ok, "insecure_secret": secret_is_insecure()}, status_code=200 if ok else 503
+    )
 
 
 @app.get("/metrics")
@@ -537,7 +550,7 @@ def _scoped_registry(request: Request, user: dict[str, Any] | None) -> Any:
 
 
 @app.post("/recommend")
-@limiter.limit("60/minute")
+@limiter.limit(RATE_LIMIT_STANDARD)
 def recommend(request: Request, body: RecommendRequest) -> dict[str, Any]:
     result = _recommender(request).recommend(body.description, top_k=body.top_k)
     _record_gaps(request, result.gaps, "recommend")  # gap 수요 집계(provenance 포함)
@@ -558,7 +571,7 @@ def gaps_top(request: Request, n: int = Query(10, ge=1, le=50)) -> dict[str, Any
 
 
 @app.post("/verify")
-@limiter.limit("30/minute")
+@limiter.limit(RATE_LIMIT_HEAVY)
 def verify_endpoint(
     request: Request, body: VerifyBody, user: dict[str, Any] | None = Depends(optional_user)
 ) -> dict[str, Any]:
@@ -595,7 +608,7 @@ def verify_endpoint(
 
 
 @app.post("/adopt", response_model=AdoptResponse)
-@limiter.limit("30/minute")
+@limiter.limit(RATE_LIMIT_HEAVY)
 def adopt_endpoint(
     request: Request, body: AdoptBody, user: dict[str, Any] | None = Depends(optional_user)
 ) -> AdoptResponse:
@@ -657,7 +670,7 @@ def generate(
 
 
 @app.post("/run")
-@limiter.limit("30/minute")
+@limiter.limit(RATE_LIMIT_HEAVY)
 def run_endpoint(
     request: Request, body: RunRequest, user: dict[str, Any] | None = Depends(optional_user)
 ) -> dict[str, Any]:
@@ -740,7 +753,7 @@ def doctor_endpoint(
 
 
 @app.post("/feedback")
-@limiter.limit("60/minute")
+@limiter.limit(RATE_LIMIT_STANDARD)
 def feedback_endpoint(request: Request, body: FeedbackEvent) -> dict[str, Any]:
     """실사용 keep/drop 관측 기록 (Phase 9). **옵트인 꺼짐이 기본**(HARNESS_FEEDBACK=on).
 
@@ -1191,7 +1204,7 @@ def _component_doc(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.post("/components/author")
-@limiter.limit("30/minute")
+@limiter.limit(RATE_LIMIT_HEAVY)
 def component_author(
     request: Request, body: ComponentAuthorBody, user: dict[str, Any] = Depends(current_user)
 ) -> dict[str, Any]:
@@ -1458,7 +1471,7 @@ async def delete_conversation(
 
 
 @app.post("/studio/conversations/{cid}/chat")
-@limiter.limit("30/minute")
+@limiter.limit(RATE_LIMIT_HEAVY)
 async def studio_chat(
     request: Request,
     cid: str,
@@ -1699,7 +1712,7 @@ async def studio_test(
 
 
 @app.post("/studio/conversations/{cid}/run")
-@limiter.limit("30/minute")
+@limiter.limit(RATE_LIMIT_HEAVY)
 def studio_run_endpoint(
     request: Request,
     cid: str,
@@ -1754,13 +1767,20 @@ def get_llm_settings(request: Request, user: dict[str, Any] = Depends(current_us
 def put_llm_settings(
     request: Request, body: LlmSettingsBody, user: dict[str, Any] = Depends(current_user)
 ) -> dict[str, Any]:
-    """앱 LLM/임베딩 키 저장 — 키는 None=유지·""=삭제·값=교체(암호화). 임베딩 키 변경은 재시작 후 인덱스 반영."""
-    return _app_settings(request).put(
-        provider=body.provider,
-        llm_key=body.llm_key,
-        embedding_key=body.embedding_key,
-        search_key=body.search_key,
-    )
+    """앱 LLM/임베딩 키 저장 — 키는 None=유지·""=삭제·값=교체(암호화). 임베딩 키 변경은 재시작 후 인덱스 반영.
+
+    서버 시크릿이 없으면 400 으로 거부한다 — 공개된 고정 키로 암호화해 "저장됐다"고 답하는 건
+    사용자를 속이는 것이다(그 값은 레포를 읽는 누구나 복호할 수 있다).
+    """
+    try:
+        return _app_settings(request).put(
+            provider=body.provider,
+            llm_key=body.llm_key,
+            embedding_key=body.embedding_key,
+            search_key=body.search_key,
+        )
+    except InsecureSecretError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/settings/llm/verify")

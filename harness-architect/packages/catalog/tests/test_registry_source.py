@@ -276,10 +276,8 @@ def test_federated_live_source_failure_keeps_local():
 def _settings(mode: str) -> Settings:
     return Settings(
         anthropic_key=None,
-        voyage_key=None,
         embedder_mode="local",
         ranker_mode="heuristic",
-        embed_model="x",
         claude_model="y",
         live_registry_mode=mode,
     )

@@ -18,6 +18,7 @@ from typing import Any, Literal, cast
 
 from harness_catalog import CAPABILITY_VOCAB, extract_capabilities_heuristic, facet_for_capability
 from harness_resolver import (
+    DEFAULT_CONTEXT_TOKEN_BUDGET,
     Component,
     ComponentSelection,
     HarnessConfig,
@@ -32,7 +33,11 @@ from .store import safe_id
 CompleteFn = Callable[[str, str, int], Any]  # (system, user, max_tokens) -> 파싱된 JSON
 
 _VOCAB: set[str] = set(CAPABILITY_VOCAB)
-_CONTEXT_TOKEN_BUDGET = 8000
+# ⚠️ 이건 **컴포넌트 하나**의 상한이다(하네스 전체 합인 resolver 의 Budget 과 뜻이 다르다).
+#    값은 전체 예산과 같게 두는데, 그 의미는 "한 컴포넌트가 하네스 기본 예산을 통째로 먹으면
+#    그때는 경고한다"는 최후 방어선이다 — 조립 단계의 총합 경고는 리졸버가 따로 낸다.
+#    숫자가 같아 보여 혼동하기 쉬우므로 이름과 출처를 분리해 둔다.
+_COMPONENT_TOKEN_CEILING = DEFAULT_CONTEXT_TOKEN_BUDGET
 _HOOK_EVENTS = {"before_request", "after_request", "before_tool_call", "after_tool_call", "after_response"}
 _TRANSPORTS = {"stdio", "http", "sse"}
 COMPONENT_TYPES = ("context", "skill", "mcp", "hook")
@@ -223,8 +228,11 @@ def validate_component(comp: Component) -> dict[str, Any]:
     bad = sorted({c for c in [*comp.provides, *comp.capability_tags] if c not in _VOCAB})
     if bad:
         errors.append(f"알 수 없는 능력: {', '.join(bad)}")
-    if comp.cost.context_tokens > _CONTEXT_TOKEN_BUDGET:
-        warnings.append(f"상시 컨텍스트 토큰이 예산({_CONTEXT_TOKEN_BUDGET})을 초과합니다")
+    if comp.cost.context_tokens > _COMPONENT_TOKEN_CEILING:
+        warnings.append(
+            f"이 컴포넌트 하나의 상시 컨텍스트 토큰이 "
+            f"하네스 기본 예산({_COMPONENT_TOKEN_CEILING})을 통째로 넘습니다"
+        )
 
     try:
         reg = InMemoryRegistry([comp])

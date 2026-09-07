@@ -12,6 +12,15 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ComponentType = Literal["skill", "mcp", "context", "hook"]
+
+# harness.yaml 이 model 을 생략했을 때의 기본 모델 — 즉 **사용자 하네스가 돌 모델**이다.
+# ⚠️ harness_catalog.llm 의 `DEFAULT_CLAUDE_MODEL`(우리 파이프라인이 추출·랭킹에 쓰는 모델)과는
+#    축이 다르므로 일부러 따로 둔다. 값이 같은 건 우연이니 한쪽만 올릴 수 있어야 한다.
+DEFAULT_HARNESS_MODEL = "claude-sonnet-5"
+
+# 하네스 전체 합의 기본 예산. authoring 의 컴포넌트 단위 상한이 이 값을 참조한다(§Budget 참고).
+DEFAULT_CONTEXT_TOKEN_BUDGET = 8000
+DEFAULT_ADDED_TOOLS_BUDGET = 30
 Status = Literal["stable", "beta", "deprecated"]
 Latency = Literal["low", "medium", "high"]
 HookEvent = Literal[
@@ -152,14 +161,17 @@ class ModelConfig(BaseModel):
     """스코프 결정: 컴포넌트 아닌 harness.yaml 최상위 선언 필드."""
 
     provider: str = "anthropic"
-    name: str = "claude-sonnet-5"
+    name: str = DEFAULT_HARNESS_MODEL
     max_tokens: int = 4096
     temperature: float = 0.2
 
 
 class Budget(BaseModel):
-    context_tokens: int = 8000
-    added_tools: int = 30
+    """하네스 **전체 합**의 상한(작성자가 스스로 정한 목표). 초과는 warning 이지 차단이 아니다 —
+    차단은 조직 정책(`policy.Budget`)의 몫이다."""
+
+    context_tokens: int = DEFAULT_CONTEXT_TOKEN_BUDGET
+    added_tools: int = DEFAULT_ADDED_TOOLS_BUDGET
 
 
 class ComponentSelection(BaseModel):

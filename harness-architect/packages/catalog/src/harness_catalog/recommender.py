@@ -26,6 +26,7 @@ from .embeddings import Embedder, cosine, get_embedder
 from .feedback import UsageSignal
 from .ranking import RankedComponent, rank
 from .reasoning import Reasoner, get_reasoner
+from .settings import DEFAULT_RELEVANCE_FLOOR
 from .store import VectorStore, VectorStoreLike, content_hash
 from .vocabulary import (
     extract_capabilities_heuristic,
@@ -37,10 +38,11 @@ from .vocabulary import (
 log = logging.getLogger("harness_catalog.recommender")
 
 # 요구 능력이 매칭되지 않은 후보는 이 임베딩 유사도 이상일 때만 추천 카드로 남긴다.
-# LocalEmbedder 실측(시드 카탈로그): 연관 컴포넌트 ≥0.27, 무관 도메인 잡음 ≤0.15 → 0.20 이 경계.
-# ⚠️ 절대 임계값이라 임베더 교체 시 재보정 대상. 단, gap 판정은 이 값과 무관(통제 어휘 정합)하므로
-#    floor 오보정이 '발명'을 유발하진 않는다 — 잡음 카드가 조금 새거나 덜 새는 표시 이슈일 뿐.
-RELEVANCE_FLOOR = 0.20
+# 기본값·근거는 `settings.DEFAULT_RELEVANCE_FLOOR` 에 있고, `HARNESS_RELEVANCE_FLOOR` 로 조정한다 —
+# 절대 임계값이라 임베더를 바꾸면 재보정 대상이고 임베더는 런타임에 갈리기 때문이다.
+# 단, gap 판정은 이 값과 무관(통제 어휘 정합)하므로 floor 오보정이 '발명'을 유발하진 않는다
+# — 잡음 카드가 조금 새거나 덜 새는 표시 이슈일 뿐.
+RELEVANCE_FLOOR = DEFAULT_RELEVANCE_FLOOR  # 하위호환 별칭(직접 import 하던 호출부용)
 
 
 # 집계 스크립트(scripts/aggregate_gaps.py)가 파싱하는 안정적 마커. 형식: `GAP_SIGNAL {json}`.
@@ -118,8 +120,11 @@ class Recommender:
         embedder: Embedder | None = None,
         reasoner: Reasoner | None = None,
         store: VectorStoreLike | None = None,
+        relevance_floor: float | None = None,
     ) -> None:
         self.registry = registry
+        # 잡음 카드를 걷어내는 임베딩 유사도 하한. 임베더에 딸린 값이라 주입 가능해야 한다.
+        self.relevance_floor = DEFAULT_RELEVANCE_FLOOR if relevance_floor is None else relevance_floor
         self.embedder = embedder or get_embedder()
         self.reasoner = reasoner or get_reasoner()
         # 실사용 피드백 신호(Phase 9). 호출부(API)가 최신값으로 갈아끼운다 — 재색인 없이 랭킹만 바뀐다
@@ -232,10 +237,9 @@ class Recommender:
             weight[cap] = 1.0 / (1.0 + math.log(df)) if df > 1 else 1.0
         return weight
 
-    @staticmethod
-    def _is_relevant(r: RankedComponent) -> bool:
+    def _is_relevant(self, r: RankedComponent) -> bool:
         """추천 카드로 남길 만큼 관련 있는가 — 능력 매칭이 있거나 임베딩 유사도가 floor 이상."""
-        return bool(r.matched_capabilities) or r.embed_score >= RELEVANCE_FLOOR
+        return bool(r.matched_capabilities) or r.embed_score >= self.relevance_floor
 
     def _catalog_verified(self, ranked: list[RankedComponent]) -> list[RankedComponent]:
         """반환 직전 그라운딩 게이트 — 카탈로그에 실재하는 id 만 통과(미존재는 제거·경고).
@@ -320,8 +324,10 @@ class LiveRecommender:
         embedder: Embedder | None = None,
         reasoner: Reasoner | None = None,
         store: VectorStoreLike | None = None,
+        relevance_floor: float | None = None,
     ) -> None:
         self._registry = registry
+        self._relevance_floor = relevance_floor
         self._embedder = embedder
         self._reasoner = reasoner
         self._store = store  # pgvector 등 영속 스토어(재구성 간 공유 → 영속·재임베딩 회피). None 이면 인메모리.
@@ -337,7 +343,11 @@ class LiveRecommender:
         gen = self._generation()
         if self._rec is None or gen != self._gen:
             self._rec = Recommender(
-                self._registry, embedder=self._embedder, reasoner=self._reasoner, store=self._store
+                self._registry,
+                embedder=self._embedder,
+                reasoner=self._reasoner,
+                store=self._store,
+                relevance_floor=self._relevance_floor,
             )
             self._gen = gen
         return self._rec
