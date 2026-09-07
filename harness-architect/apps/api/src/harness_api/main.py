@@ -42,7 +42,7 @@ from harness_catalog import (
 from harness_catalog import (
     usage_signals as compute_usage_signals,
 )
-from harness_resolver import Component, InMemoryRegistry, ResolveResult, resolve
+from harness_resolver import Component, InMemoryRegistry, Policy, ResolveResult, resolve, strictest
 from harness_runtime import (
     DEFAULT_SEVERITY,
     AnthropicRunner,
@@ -90,6 +90,7 @@ from .observability import (
 from .orchestrator import run_agent as _run_agent
 from .orchestrator import studio_run as _studio_run
 from .orchestrator import suggest_title as _suggest_title
+from .policy_store import PolicyStore
 from .promotion import promote_component
 from .schemas import (
     AdoptBody,
@@ -652,18 +653,26 @@ def adopt_endpoint(
 
 @app.post("/resolve", response_model=ResolveResult)
 def resolve_endpoint(
-    request: Request, body: ResolveRequest, user: dict[str, Any] | None = Depends(optional_user)
+    request: Request,
+    body: ResolveRequest,
+    scope: str = Query("personal", description="조직 정책을 적용할 스코프"),
+    user: dict[str, Any] | None = Depends(optional_user),
 ) -> ResolveResult:
     config = body.to_config()
-    return resolve(config, _scoped_registry(request, user), body.policy)
+    policy = _effective_policy(request, user, scope, body.policy)
+    return resolve(config, _scoped_registry(request, user), policy)
 
 
 @app.post("/generate", response_model=GenerateResponse)
 def generate(
-    request: Request, body: ResolveRequest, user: dict[str, Any] | None = Depends(optional_user)
+    request: Request,
+    body: ResolveRequest,
+    scope: str = Query("personal"),
+    user: dict[str, Any] | None = Depends(optional_user),
 ) -> GenerateResponse:
     config = body.to_config()
-    result = resolve(config, _scoped_registry(request, user), body.policy)
+    policy = _effective_policy(request, user, scope, body.policy)
+    result = resolve(config, _scoped_registry(request, user), policy)
     return GenerateResponse(
         yaml=to_harness_yaml(config),
         ok=result.ok,
@@ -676,14 +685,18 @@ def generate(
 @app.post("/run")
 @limiter.limit(RATE_LIMIT_HEAVY)
 def run_endpoint(
-    request: Request, body: RunRequest, user: dict[str, Any] | None = Depends(optional_user)
+    request: Request,
+    body: RunRequest,
+    scope: str = Query("personal"),
+    user: dict[str, Any] | None = Depends(optional_user),
 ) -> dict[str, Any]:
     """resolve → build_request → (키 있으면) Anthropic 전송, 없으면 dry_run. 런타임 관통.
 
     정책이 실려 오면 여기서도 강제한다 — /resolve 에서만 막고 /run 이 무시하면 정책을 우회할 수 있다.
     """
     config = body.to_config()
-    result = resolve(config, _scoped_registry(request, user), body.policy)
+    policy = _effective_policy(request, user, scope, body.policy)
+    result = resolve(config, _scoped_registry(request, user), policy)
     if not result.ok or result.resolved is None:
         return {"ok": False, "diagnostics": result.diagnostics.model_dump(), "built": None, "run": None}
     built = build_request(result.resolved, body.message)
@@ -707,6 +720,7 @@ def preview_endpoint(
     request: Request,
     body: ResolveRequest,
     target: str | None = Query(None, description="함께 볼 eject 타깃(선택)"),
+    scope: str = Query("personal"),
     user: dict[str, Any] | None = Depends(optional_user),
 ) -> PreviewReport:
     """실행 전 조립 분해 — 시스템 프롬프트 조각·MCP·훅 타임라인·예산 (Phase 6). **모델 호출 없음.**
@@ -717,7 +731,10 @@ def preview_endpoint(
     if target is not None and target not in available_targets():
         raise HTTPException(status_code=400, detail=f"지원하지 않는 타깃: {target} (가능: {available_targets()})")
     return run_preview(
-        body.to_config(), _scoped_registry(request, user), eject_target=target, policy=body.policy
+        body.to_config(),
+        _scoped_registry(request, user),
+        eject_target=target,
+        policy=_effective_policy(request, user, scope, body.policy),
     )
 
 
@@ -756,7 +773,10 @@ def eval_scenarios() -> list[str]:
 @app.post("/eval")
 @limiter.limit(RATE_LIMIT_HEAVY)
 def eval_endpoint(
-    request: Request, body: EvalBody, user: dict[str, Any] | None = Depends(optional_user)
+    request: Request,
+    body: EvalBody,
+    scope: str = Query("personal"),
+    user: dict[str, Any] | None = Depends(optional_user),
 ) -> dict[str, Any]:
     """하네스를 eval 케이스로 실행·채점 (Phase 11, `harness eval` 의 API 판).
 
@@ -772,7 +792,8 @@ def eval_endpoint(
             status_code=422, detail="scenario 또는 cases 중 하나가 필요합니다(빈 케이스는 검증이 아닙니다)."
         )
 
-    result = resolve(body.to_config(), _scoped_registry(request, user), body.policy)
+    policy = _effective_policy(request, user, scope, body.policy)
+    result = resolve(body.to_config(), _scoped_registry(request, user), policy)
     if not result.ok or result.resolved is None:
         return {"ok": False, "diagnostics": result.diagnostics.model_dump(), "report": None}
     report = run_eval(result.resolved, cases)
@@ -825,12 +846,14 @@ def eject_endpoint(
     request: Request,
     body: ResolveRequest,
     target: str = Query("claude-code"),
+    scope: str = Query("personal"),
     user: dict[str, Any] | None = Depends(optional_user),
 ) -> dict[str, Any]:
     """resolve → emit(target). ResolvedHarness IR 을 런타임 네이티브 파일 트리로 컴파일 (Phase 5)."""
     if target not in available_targets():
         raise HTTPException(status_code=400, detail=f"지원하지 않는 타깃: {target} (가능: {available_targets()})")
-    result = resolve(body.to_config(), _scoped_registry(request, user), body.policy)
+    policy = _effective_policy(request, user, scope, body.policy)
+    result = resolve(body.to_config(), _scoped_registry(request, user), policy)
     if not result.ok or result.resolved is None:
         return {"ok": False, "target": target, "diagnostics": result.diagnostics.model_dump(), "files": None}
     # eject 는 "실제로 런타임에 가져간다" 는 가장 강한 확정 신호다 — 선택분을 기록(옵트인·비차단).
@@ -1000,6 +1023,33 @@ def revoke_pat(
     return {"ok": True}
 
 
+def _policy_store(request: Request) -> PolicyStore:
+    return PolicyStore(request.app.state.engine)
+
+
+def _effective_policy(
+    request: Request,
+    user: dict[str, Any] | None,
+    scope: str,
+    body_policy: Policy | None,
+) -> Policy | None:
+    """저장된 스코프 정책 + 요청 본문 정책을 **엄격한 쪽으로** 합친다.
+
+    본문만 쓰면 클라이언트가 정책을 안 보내서 우회할 수 있다("정책을 걸었는데 안 걸린" 상태).
+    저장된 것은 클라이언트가 낮출 수 없는 하한이고, 본문은 더 엄격해질 때만 의미가 있다.
+
+    로그인하지 않았으면 스코프가 없으므로 본문 정책만 쓴다(개인 CI 경로).
+    """
+    if user is None:
+        return body_policy
+    try:
+        scope_key = _resolve_scope(request, user, scope)
+    except HTTPException:
+        # 스코프 접근 권한이 없으면 그 스코프 정책을 볼 자격도 없다 — 본문만 적용.
+        return body_policy
+    return strictest(_policy_store(request).get(scope_key), body_policy)
+
+
 def _resolve_scope(request: Request, user: dict[str, Any], scope: str, write: bool = False) -> str:
     """쿼리 scope('personal'|'team:<tid>')를 스코프 키로. 팀은 멤버십·역할을 검사.
 
@@ -1151,7 +1201,7 @@ async def delete_harness(
 def validate_harness(
     request: Request, hid: str, scope: str = Query("personal"), user: dict[str, Any] = Depends(current_user)
 ) -> ResolveResult:
-    """저장된 harness.yaml 을 역파싱해 resolve — gap/충돌/인증 진단."""
+    """저장된 harness.yaml 을 역파싱해 resolve — gap/충돌/인증 진단 + 스코프 정책 강제."""
     sk = _resolve_scope(request, user, scope)
     doc = _store(request).get(sk, hid)
     if doc is None:
@@ -1160,7 +1210,7 @@ def validate_harness(
         config = parse_harness_yaml(doc["yaml"])
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
-    return resolve(config, _scoped_registry(request, user))
+    return resolve(config, _scoped_registry(request, user), _effective_policy(request, user, scope, None))
 
 
 @app.post("/harnesses/{hid}/preview", response_model=PreviewReport)
@@ -1182,7 +1232,12 @@ def preview_harness(
         config = parse_harness_yaml(doc["yaml"])
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
-    return run_preview(config, _scoped_registry(request, user), eject_target=target)
+    return run_preview(
+        config,
+        _scoped_registry(request, user),
+        eject_target=target,
+        policy=_effective_policy(request, user, scope, None),
+    )
 
 
 @app.post("/harnesses/{hid}/doctor", response_model=DoctorReport)
@@ -1201,7 +1256,7 @@ def doctor_harness(
         config = parse_harness_yaml(doc["yaml"])
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
-    return run_doctor(config, _scoped_registry(request, user))
+    return run_doctor(config, _scoped_registry(request, user))  # doctor 는 버전 드리프트만 본다(정책 무관)
 
 
 @app.post("/harnesses/{hid}/eval")
@@ -1227,7 +1282,8 @@ def eval_harness(
     except (KeyError, FileNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    result = resolve(config, _scoped_registry(request, user))
+    policy = _effective_policy(request, user, scope, None)
+    result = resolve(config, _scoped_registry(request, user), policy)
     if not result.ok or result.resolved is None:
         return {"ok": False, "diagnostics": result.diagnostics.model_dump(), "report": None}
     return {"ok": True, "diagnostics": None, "report": run_eval(result.resolved, cases).model_dump()}
@@ -1252,7 +1308,7 @@ def eject_harness(
         config = parse_harness_yaml(doc["yaml"])
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
-    result = resolve(config, _scoped_registry(request, user))
+    result = resolve(config, _scoped_registry(request, user), _effective_policy(request, user, scope, None))
     if not result.ok or result.resolved is None:
         return {"ok": False, "target": target, "diagnostics": result.diagnostics.model_dump(), "files": None}
     return {"ok": True, "target": target, "files": emit(result.resolved, target)}
@@ -1269,6 +1325,57 @@ def _component_doc(doc: dict[str, Any]) -> dict[str, Any]:
     except (json.JSONDecodeError, TypeError):
         out["component"] = None
     return out
+
+
+@app.get("/policies")
+def get_policy(
+    request: Request, scope: str = Query("personal"), user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    """스코프의 조직 정책 (Phase 8). 없으면 `policy: null`."""
+    sk = _resolve_scope(request, user, scope)
+    meta = _policy_store(request).meta(sk)
+    return {"scope": scope, **(meta or {"policy": None, "updated_at": "", "updated_by": ""})}
+
+
+@app.put("/policies")
+def put_policy(
+    request: Request,
+    body: Policy,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """정책 저장. **팀은 owner 만** — 가드레일을 editor 가 바꿀 수 있으면 가드레일이 아니다.
+
+    저장된 정책은 이후 그 스코프의 resolve/generate/run/eject/preview/eval 에 **항상** 적용된다
+    (요청 본문 정책과는 엄격한 쪽으로 합친다 — 클라이언트가 낮출 수 없다).
+    """
+    sk = _resolve_scope(request, user, scope, write=True)
+    _require_policy_admin(request, user, scope)
+    _policy_store(request).put(sk, body, updated_by=user["id"])
+    return {"ok": True, "scope": scope}
+
+
+@app.delete("/policies")
+def delete_policy(
+    request: Request, scope: str = Query("personal"), user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    """정책 해제(팀은 owner 만)."""
+    sk = _resolve_scope(request, user, scope, write=True)
+    _require_policy_admin(request, user, scope)
+    return {"ok": True, "removed": _policy_store(request).delete(sk)}
+
+
+def _require_policy_admin(request: Request, user: dict[str, Any], scope: str) -> None:
+    """정책을 정할 자격 — 개인 스코프는 본인, 팀은 owner 만.
+
+    _resolve_scope(write=True) 는 owner/editor 를 통과시키는데, 정책은 그보다 좁아야 한다.
+    editor 가 조직 가드레일을 풀 수 있으면 가드레일이 아니다.
+    """
+    if not scope.startswith("team:"):
+        return
+    tid = scope[len("team:") :]
+    if _accounts(request).member_role(tid, user["id"]) != "owner":
+        raise HTTPException(status_code=403, detail="정책은 팀 owner 만 설정할 수 있습니다")
 
 
 @app.post("/components/author")

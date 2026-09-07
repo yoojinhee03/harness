@@ -246,6 +246,20 @@ component_feedback = Table(
 )
 
 
+# 스코프별 조직 정책(durable) — Phase 8 의 남은 절반. 정책이 요청 본문에서만 오면 클라이언트가
+# 그냥 안 보내서 우회할 수 있다("정책을 걸었는데 안 걸린" 상태). 여기 저장된 것은 서버가 항상
+# 적용하고, 요청 본문 정책과는 **엄격한 쪽으로** 합친다(resolver.policy.strictest).
+# grain = 스코프 키 단일 행("personal:<uid>" | "team:<tid>").
+scope_policies = Table(
+    "scope_policies",
+    metadata,
+    Column("scope_key", String(128), primary_key=True),
+    Column("doc", Text, nullable=False),  # Policy.model_dump_json()
+    Column("updated_at", String(40), nullable=False),
+    Column("updated_by", String(64), nullable=False, default=""),
+)
+
+
 def resolve_database_url(store_dir: Path) -> str:
     """`DATABASE_URL`(프로덕션 Postgres) 또는 기본 SQLite(store 폴더 밑)."""
     env = os.environ.get("DATABASE_URL")

@@ -23,7 +23,7 @@ from harness_resolver import (
     resolve,
 )
 from harness_resolver.models import Auth, Cost, McpServerSpec
-from harness_resolver.policy import matches
+from harness_resolver.policy import matches, strictest
 
 
 def registry() -> InMemoryRegistry:
@@ -277,3 +277,72 @@ def test_unknown_policy_key_is_rejected():
     """오타를 조용히 삼키면 '정책을 걸었다고 믿는데 안 걸린' 최악의 실패가 된다."""
     with pytest.raises(ValueError):
         policy_from_document({"require": {"capabilties": ["x"]}})  # 오타
+
+
+# ── 8. 엄격한 쪽 병합 — 조직 정책은 클라이언트가 낮출 수 없는 하한이다 ──
+
+
+def test_strictest_handles_none():
+    p = Policy(require=PolicyRequire(components=["a"]))
+    assert strictest(None, None) is None
+    assert strictest(p, None) == p
+    assert strictest(None, p) == p
+
+
+def test_require_and_forbid_are_unions():
+    """요구·금지는 늘어날수록 엄격하므로 합집합이다."""
+    a = Policy(require=PolicyRequire(capabilities=["x.a"]), forbid=PolicyForbid(components=["bad-1"]))
+    b = Policy(require=PolicyRequire(capabilities=["x.b"]), forbid=PolicyForbid(components=["bad-2"]))
+    m = strictest(a, b)
+    assert m is not None
+    assert m.require.capabilities == ["x.a", "x.b"]
+    assert m.forbid.components == ["bad-1", "bad-2"]
+
+
+def test_budget_takes_the_smaller_limit():
+    a = Policy(budget=PolicyBudget(context_tokens=8000, added_tools=None))
+    b = Policy(budget=PolicyBudget(context_tokens=4000, added_tools=10))
+    m = strictest(a, b)
+    assert m is not None
+    assert m.budget.context_tokens == 4000  # 더 엄격한 쪽
+    assert m.budget.added_tools == 10  # None(제약 없음)보다 10 이 엄격
+
+
+def test_client_cannot_relax_the_organization_budget():
+    """핵심 계약 — 클라이언트가 상한을 올려도 조직 상한이 이긴다."""
+    org = Policy(budget=PolicyBudget(context_tokens=1000))
+    client_tries_to_relax = Policy(budget=PolicyBudget(context_tokens=999999))
+    m = strictest(org, client_tries_to_relax)
+    assert m is not None and m.budget.context_tokens == 1000
+
+
+def test_allowed_scopes_intersect():
+    """양쪽이 허용한 것만 남는다 — 클라이언트가 scope 를 추가로 열 수 없다."""
+    org = Policy(auth=PolicyAuth(allowed_scopes=["read-only"]))
+    client = Policy(auth=PolicyAuth(allowed_scopes=["read-only", "write"]))
+    m = strictest(org, client)
+    assert m is not None and m.auth.allowed_scopes == ["read-only"]
+
+
+def test_allowed_scopes_none_means_defer():
+    """한쪽이 None(제약 없음)이면 다른 쪽을 따른다 — None 을 교집합에 넣으면 전부 막힌다."""
+    m = strictest(Policy(), Policy(auth=PolicyAuth(allowed_scopes=["read-only"])))
+    assert m is not None and m.auth.allowed_scopes == ["read-only"]
+
+
+def test_boolean_flags_or_together():
+    m = strictest(Policy(forbid=PolicyForbid(unsandboxed_hooks=True)), Policy())
+    assert m is not None and m.forbid.unsandboxed_hooks is True
+    m2 = strictest(Policy(), Policy(auth=PolicyAuth(require_narrowed=True)))
+    assert m2 is not None and m2.auth.require_narrowed is True
+
+
+def test_merged_policy_actually_blocks_in_resolver():
+    """병합 결과가 리졸버에서 실제로 차단해야 한다(단순 자료구조 테스트로 끝나지 않게)."""
+    org = Policy(require=PolicyRequire(capabilities=["lifecycle.guardrail"]))
+    client = Policy(budget=PolicyBudget(added_tools=1))
+    merged = strictest(org, client)
+    r = resolve(config(["github-mcp@1.4.0"]), registry(), merged)
+    rules = set(violations(r))
+    assert not r.ok
+    assert {"require.capabilities", "budget.added_tools"} <= rules  # 양쪽 규칙이 다 산다
