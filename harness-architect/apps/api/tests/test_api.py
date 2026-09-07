@@ -280,6 +280,37 @@ def test_verify_endpoint_required_missing_violation(client):
     assert body["ok"] is False and "required_missing" in body["violations"]
 
 
+# ── 드리프트 진단 (Phase 9-2) ──
+
+
+def test_doctor_flags_missing_pin_and_unpinned(client):
+    """저장된 구성이 카탈로그에 뒤처졌는지 — 사라진 핀과 미고정을 잡는다."""
+    body = {
+        "metadata": {"id": "drift-bot"},
+        "components": [{"ref": "github-mcp@0.9.0"}, {"ref": "slack-mcp"}, {"ref": "notion-mcp@1.0.0"}],
+    }
+    r = client.post("/doctor", json=body)
+    assert r.status_code == 200
+    found = {f["component_id"]: f for f in r.json()["findings"]}
+    assert found["github-mcp"]["issue"] == "missing"
+    assert found["github-mcp"]["suggested_ref"] == "github-mcp@1.4.0"
+    assert found["slack-mcp"]["issue"] == "unpinned"
+    assert found["notion-mcp"]["issue"] == "ok"
+
+
+def test_doctor_clean_harness(client):
+    body = {"metadata": {"id": "ok-bot"}, "components": [{"ref": "github-mcp@1.4.0"}]}
+    assert client.post("/doctor", json=body).json()["findings"][0]["issue"] == "ok"
+
+
+def test_doctor_only_suggests_never_mutates(client):
+    """진단은 제안만 낸다 — 저장된 하네스를 도구가 말없이 고치면 안 된다."""
+    body = {"metadata": {"id": "drift-bot"}, "components": [{"ref": "github-mcp@0.9.0"}]}
+    first = client.post("/doctor", json=body).json()
+    second = client.post("/doctor", json=body).json()
+    assert first == second  # 호출이 상태를 바꾸지 않는다
+
+
 # ── 피드백 루프 (Phase 9) ──
 
 
@@ -314,8 +345,10 @@ def test_eject_records_selected_when_enabled(client, monkeypatch):
 
 def test_eject_records_nothing_when_disabled(client):
     """옵트인 꺼짐이면 eject 도 아무것도 남기지 않는다."""
-    body = {"metadata": {"id": "fb-off"}, "components": [{"ref": "notion-mcp@1.2.0"}]}
-    client.post("/eject", json=body, params={"target": "claude-code"})
+    body = {"metadata": {"id": "fb-off"}, "components": [{"ref": "notion-mcp@1.0.0"}]}
+    r = client.post("/eject", json=body, params={"target": "claude-code"})
+    # eject 가 실제로 성공해야 이 테스트가 의미를 갖는다 — 실패한 eject 는 원래 아무것도 안 남긴다.
+    assert r.json()["ok"] is True
     assert client.get("/feedback/top").json() == {"enabled": False, "items": []}
 
 

@@ -31,7 +31,9 @@ from harness_runtime import (
     DEFAULT_SEVERITY,
     EvalCase,
     adopt_dir,
+    apply_suggestions,
     available_targets,
+    doctor,
     drop_component,
     emit,
     preview,
@@ -265,6 +267,41 @@ def cmd_preview(args: argparse.Namespace) -> int:
     return 0 if report.ok else 1
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """저장된 하네스 ↔ 현재 카탈로그의 드리프트를 진단한다. --fix 는 안전한 것만 적용한다."""
+    config = _load_config(args.config)
+    report = doctor(config, _registry(args.catalog))
+
+    if args.format == "json":
+        print(report.model_dump_json(indent=2, exclude_none=True))
+    else:
+        icon = {"missing": "✗", "deprecated": "⚠", "upgrade_available": "↑", "unpinned": "📌", "ok": "✓"}
+        for f in report.findings:
+            if f.issue == "ok" and not args.all:
+                continue
+            arrow = f"  → {f.suggested_ref}" if f.suggested_ref else ""
+            print(f"  {icon.get(f.issue, '·')} {f.component_id}: {f.detail or '최신'}{arrow}")
+        counts = ", ".join(f"{k} {v}" for k, v in sorted(report.summary().items())) or "없음"
+        print(f"{'✓ 이상 없음' if report.ok else '진단'} — {counts}")
+        for n in report.notes:
+            print(f"  ※ {n}")
+
+    if args.fix:
+        fixed = apply_suggestions(config, report)
+        if fixed == config:
+            print("적용할 안전한 제안이 없습니다.", file=sys.stderr)
+        else:
+            doc = fixed.model_dump(exclude_none=True, exclude_defaults=True, by_alias=True)
+            Path(args.config).write_text(
+                yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), encoding="utf-8"
+            )
+            print(f"✓ {args.config} 갱신(같은 id 의 버전 교체만 — 타 컴포넌트 대체는 수동)")
+        return 0
+
+    # blocking(사라짐·deprecated)만 non-zero — 업그레이드 권고로 CI 를 깨지 않는다.
+    return 1 if report.blocking else 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """레포를 adopt→resolve 로 검증 — ①능력 미충족 ②이식 손실 ③리졸버 에러. CI 게이트(종료코드).
 
@@ -416,6 +453,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_preview.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
     p_preview.set_defaults(func=cmd_preview)
+
+    p_doctor = sub.add_parser(
+        "doctor", help="저장된 하네스가 카탈로그 갱신에 뒤처졌는지 진단한다(드리프트·deprecated·업그레이드)."
+    )
+    p_doctor.add_argument("config", help="harness.yaml 경로")
+    p_doctor.add_argument("--fix", action="store_true", help="안전한 제안(같은 id 의 버전 교체)만 파일에 적용")
+    p_doctor.add_argument("--all", action="store_true", help="이상 없는 컴포넌트도 출력")
+    p_doctor.add_argument("--format", choices=["json", "text"], default="text", help="출력(기본 text)")
+    p_doctor.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
+    p_doctor.set_defaults(func=cmd_doctor)
 
     p_verify = sub.add_parser(
         "verify", help="기존 레포(.claude/.cursor)를 adopt→resolve 로 정적 검증(CI 게이트)."

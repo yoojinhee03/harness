@@ -44,12 +44,14 @@ from harness_resolver import Component, InMemoryRegistry, ResolveResult, resolve
 from harness_runtime import (
     DEFAULT_SEVERITY,
     AnthropicRunner,
+    DoctorReport,
     PreviewReport,
     available_targets,
     build_request,
     emit,
 )
 from harness_runtime import adopt as run_adopt
+from harness_runtime import doctor as run_doctor
 from harness_runtime import preview as run_preview
 from harness_runtime import verify as run_verify
 from harness_runtime import violations as compute_violations
@@ -700,6 +702,18 @@ def preview_endpoint(
     )
 
 
+@app.post("/doctor", response_model=DoctorReport)
+def doctor_endpoint(
+    request: Request, body: ResolveRequest, user: dict[str, Any] | None = Depends(optional_user)
+) -> DoctorReport:
+    """드리프트 진단 (Phase 9-2) — 저장된 구성이 현재 카탈로그에 뒤처졌는가.
+
+    제안만 낸다(`suggested_ref`). 적용은 사람이 결정한다 — 도구가 harness.yaml 을 말없이 고쳐
+    쓰면 안 된다.
+    """
+    return run_doctor(body.to_config(), _scoped_registry(request, user))
+
+
 @app.post("/feedback")
 @limiter.limit("60/minute")
 def feedback_endpoint(request: Request, body: FeedbackEvent) -> dict[str, Any]:
@@ -1092,6 +1106,25 @@ def preview_harness(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
     return run_preview(config, _scoped_registry(request, user), eject_target=target)
+
+
+@app.post("/harnesses/{hid}/doctor", response_model=DoctorReport)
+def doctor_harness(
+    request: Request,
+    hid: str,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> DoctorReport:
+    """저장된 harness.yaml 의 드리프트 진단 — 저장 시점이 아니라 지금 기준으로 본다."""
+    sk = _resolve_scope(request, user, scope)
+    doc = _store(request).get(sk, hid)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음(scope={scope})")
+    try:
+        config = parse_harness_yaml(doc["yaml"])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
+    return run_doctor(config, _scoped_registry(request, user))
 
 
 @app.post("/harnesses/{hid}/eject")
