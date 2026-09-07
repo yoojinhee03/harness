@@ -19,6 +19,7 @@ from typing import Any
 import yaml
 from harness_catalog import (
     build_registry,
+    drafts_from_native,
     facet_for_capability,
     load_recipe,
     load_recipes,
@@ -386,11 +387,74 @@ def cmd_verify(args: argparse.Namespace) -> int:
         },
         "note": "capability 판정은 TASK 3(caps 커버리지) 완료 전 잠정 — 거짓 gap 가능(기본 warning)",
     }
+    if args.fix:
+        exit_code = _write_drafts(repo, report, args.fix_out, exit_code)
+
     if args.format == "json":
         print(json.dumps(out, ensure_ascii=False, indent=2))
     else:
         _print_verify_text(out, severity.get)
+        _print_gap_queue(report, registry)
     return exit_code
+
+
+def _write_drafts(repo: Path, report: Any, out_dir: str | None, exit_code: int) -> int:
+    """미지 컴포넌트를 카탈로그 초안으로 떠낸다(`--fix`).
+
+    **초안이지 등록이 아니다.** 카탈로그에 자동으로 넣지 않는다 — 무엇을 공유 카탈로그에 올릴지는
+    큐레이션 결정이고, 수확 휴리스틱이 붙인 caps 는 사람이 검토해야 한다(doctor 와 같은 원칙).
+
+    능력 gap(아무도 제공하지 않는 능력)은 여기서 못 고친다 — 새 컴포넌트를 *발명*해야 하기
+    때문이다. 그건 시딩 큐와 스튜디오 저작 루프의 몫이라 아래 `_print_gap_queue` 로 안내만 한다.
+    """
+    drafts = drafts_from_native(read_native_tree(repo), report.unknown_mcp, report.unknown_skills)
+    if not drafts:
+        print("초안으로 떠낼 미지 컴포넌트가 없습니다.", file=sys.stderr)
+        return exit_code
+    target = Path(out_dir) if out_dir else repo / ".harness" / "drafts"
+    target.mkdir(parents=True, exist_ok=True)
+    for name, text in sorted(drafts.items()):
+        (target / name).write_text(text, encoding="utf-8")
+        print(f"  초안 {target / name}", file=sys.stderr)
+    print(
+        f"✓ {len(drafts)}개 초안 → {target}/ "
+        "— 설명·caps 를 검토·보완한 뒤 카탈로그 components/ 로 옮기세요(자동 등록하지 않습니다).",
+        file=sys.stderr,
+    )
+    return exit_code
+
+
+def _print_gap_queue(report: Any, registry: Registry) -> None:
+    """미충족 능력의 다음 행동을 안내한다 — **두 상황을 구분해야 한다.**
+
+    · 카탈로그에 **있는데** 이 하네스에 없다 → 그 컴포넌트를 추가하면 끝(저작 불필요).
+    · 카탈로그에 **없다** → 새로 저작해야 한다(스튜디오·시딩 큐).
+
+    섞으면 이미 있는 것을 중복 저작하게 만든다. 실제로 처음엔 `lifecycle.guardrail`(시드
+    카탈로그의 secret-scan-hook 이 제공)을 "새로 저작하라"고 안내했다.
+    """
+    caps = sorted(set(report.gap_capabilities))
+    if not caps:
+        return
+
+    suppliers: dict[str, list[str]] = {}
+    for comp in registry.all():
+        for cap in set(comp.provides) | set(comp.capability_tags):
+            suppliers.setdefault(cap, []).append(comp.id)
+
+    available = [(c, sorted(set(suppliers[c]))) for c in caps if c in suppliers]
+    to_author = [c for c in caps if c not in suppliers]
+
+    if available:
+        print("\n미충족 능력 — 카탈로그에 이미 있습니다(하네스에 추가하면 해소):", file=sys.stderr)
+        for cap, ids in available:
+            print(f"  • {cap} ← {', '.join(ids[:3])}", file=sys.stderr)
+    if to_author:
+        print("\n미충족 능력 — 카탈로그에 없어 새로 저작해야 합니다(--fix 로는 못 고칩니다):", file=sys.stderr)
+        for cap in to_author:
+            facet = facet_for_capability(cap) or "?"
+            print(f"  • {cap} → {suggested_component_type(cap)} 타입 (facet {facet})", file=sys.stderr)
+        print("  스튜디오에서 저작하거나 `harness verify --record` 로 수요를 집계하세요.", file=sys.stderr)
 
 
 def _print_verify_text(report: dict[str, Any], sev: Any) -> None:
@@ -530,6 +594,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="옵트인 데이터 수집 — gap/공출현을 로그 신호로 방출(로컬, 2>signals.log 로 수집)",
     )
+    p_verify.add_argument(
+        "--fix",
+        action="store_true",
+        help="미지 MCP·스킬을 카탈로그 컴포넌트 초안으로 떠낸다(자동 등록은 하지 않음)",
+    )
+    p_verify.add_argument("--fix-out", default=None, help="초안 출력 디렉터리(기본: <repo>/.harness/drafts)")
     p_verify.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
     p_verify.set_defaults(func=cmd_verify)
 
