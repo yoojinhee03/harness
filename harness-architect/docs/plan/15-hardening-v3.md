@@ -496,9 +496,21 @@ TTL 라이브 소스가 직접 federate되어 generation을 흔들고 재색인�
 
 ## 백로그 (기록만, 착수하지 마라)
 
-- **#2 공출현 신호를 랭킹에 투입** — 🚫 데이터+eval 선행. 핵심 `ranking.py`(추천 품질)를 바꾸는데
-  (1) 공출현 테이블이 verify --record/`POST /verify` 실사용으로 쌓여야 신호가 되고 (2) 회귀를 볼 eval
-  세트가 없으면 검증 불가. 투기적 코어 변경 금지 — 데이터 축적 + eval 확보 후 착수. 작동하면 임베딩은 콜드스타트 폴백.
+- **#2 공출현 신호를 랭킹에 투입** — 🚫 여전히 데이터 대기(게이트 2개 중 1개 해소).
+  - ✅ **eval 확보 완료(2026-09-07)** — 랭킹 골든셋 + 회귀 펜스.
+    `harness-catalog/evals/ranking-golden.yaml`(8케이스) · `harness_catalog/rank_eval.py` ·
+    `scripts/eval_ranking.py` · `tests/test_rank_eval.py`. 기준선: 통과율 100% · recall@k 1.0 ·
+    mean_rr 0.6629 · 선호순서 5/7. **판정을 하드/소프트로 분리**해 개선은 통과시키고 퇴행만 잡는다.
+  - 🚫 **데이터 미충족** — 공출현 테이블이 `verify --record`/`POST /verify` 실사용으로 쌓여야 신호가 된다.
+  - **착수 시 목표** — 골든셋에 *지금 위반 중인* 선호쌍 2개가 #2 가 고쳐야 할 지점으로 적혀 있다:
+    `[pr-review-skill, slack-mcp]`(1차 의도인 리뷰 스킬이 알림 MCP 아래) ·
+    `[doc-draft-skill, notion-mcp]`(requires 소비자가 공급자 아래). 5/7 → 7/7 이 성공 기준이다.
+  - ⚠️ **펜스의 한계(실측)** — 시드 카탈로그 13개에선 relevance floor 때문에 능력 매칭된 것만 올라와
+    *포함 여부*가 랭킹이 아니라 그라운딩을 잰다. 순서를 실제로 움직이는 축은 `_W_TOKENS`·`_W_EMBED`
+    둘뿐이고, `_W_CAPABILITY`(매칭 개수 동일)·`_W_EXPLORE`(usage_count 전부 0)는 상수항이라 **안 잡힌다**.
+    두 축까지 덮으려면 `CATALOG_DIR` 로 대규모 수확 카탈로그를 물려 같은 골든셋을 돌려야 한다.
+    이 한계는 `test_known_blind_spots_are_still_blind` 로 고정해뒀다(깨지면 카탈로그가 그 축을 가르기
+    시작했다는 뜻 — 좋은 소식이니 한계 서술과 하한선을 갱신하라).
 - **다인 승인 워크플로** — sandbox 게이트는 완료. 다인 승인은 durable 승인 테이블(alembic)+엔드포인트 필요(중간 규모).
 - **skillsmp 소스 추가** — 주석의 Smithery/Glama/mcp.so는 전부 MCP라 공식 레지스트리와 겹친다.
   실제 공백은 non-mcp 타입이고 마켓플레이스 단일 파일 500개 상한이 병목. skillsmp 가 SKILL.md 를 REST 로 열어 델타가 크다.

@@ -1,0 +1,142 @@
+# 랭킹 골든셋 — *추천* 품질(설명 → 어떤 컴포넌트가 위로 오는가)을 잰다.
+#
+# 같은 폴더의 pr-review.yaml 과 대상이 다르다: 저건 하네스를 붙였을 때의 *프롬프트 출력* eval
+# (Phase 11)이고, 이건 그 앞단인 추천 파이프라인 eval 이다. `kind` 로 구분한다.
+#
+# 실행:
+#   python packages/catalog/scripts/eval_ranking.py -v
+# 회귀 펜스:
+#   packages/catalog/tests/test_rank_eval.py (하한선 고정)
+#
+# 채점 규칙(자세히는 harness_catalog/rank_eval.py):
+#   expect_ids / expect_absent / expect_gaps  → 하드 판정(pass·fail)
+#   recall@k · mean_rr                        → 하한선으로만 게이팅(개선은 통과)
+#   prefer_order                              → 케이스 판정에서 제외, 총합만 하한선으로 관리
+#
+# ⚠️ 기준 카탈로그는 큐레이션 시드 13개다. 여기선 relevance floor 때문에 **능력 매칭된 것만**
+#    올라오므로 변별력은 '포함 여부'보다 **매칭된 것들 사이의 상대 순서**에 있다. 대규모 수확
+#    카탈로그에 대고 돌리려면 CATALOG_DIR 로 카탈로그를 갈아끼운다(그때 recall 이 살아난다).
+
+kind: ranking-golden
+name: seed-catalog
+
+cases:
+  # ── 커버리지 전부 충족 ──
+  - name: pr-review-bot
+    description: >-
+      GitHub PR 을 코드 리뷰하고 결과를 슬랙으로 알려주는 봇.
+      팀 코딩 컨벤션을 따르고 시크릿이 새지 않게 스캔한다.
+    top_k: 6
+    expect_ids:
+      - github-mcp
+      - pr-review-skill
+      - secret-scan-hook
+      - coding-convention-ctx
+      - slack-mcp
+    expect_gaps: []
+    prefer_order:
+      # 핵심 접근(코드호스팅)이 부수 채널(알림)보다 위 — 현재 만족.
+      - [github-mcp, slack-mcp]
+      # 설명이 명시한 배경지식(코딩 컨벤션)이 부수 채널보다 위 — 현재 만족.
+      # 점수차가 0.16 뿐이라 임베딩 축(_W_EMBED) 퇴행에 가장 먼저 뒤집히는 쌍이다(펜스 역할).
+      - [coding-convention-ctx, slack-mcp]
+      # ⚠️ 현재 위반 — 설명의 1차 의도는 '리뷰'인데 리뷰 스킬이 알림 MCP 아래에 깔린다.
+      #    능력 매칭 수(github 2개)와 비용 감점만으로 순위가 정해지는 탓. 공출현 신호(백로그 #2)가
+      #    올려야 할 지점이다: pr-review-skill 은 github-mcp 와 함께 쓰이는 빈도가 slack-mcp 보다 높다.
+      - [pr-review-skill, slack-mcp]
+
+  - name: issue-triage
+    description: 깃허브 이슈를 읽고 우선순위 라벨로 분류하는 트리아지 에이전트.
+    top_k: 6
+    expect_ids:
+      - issue-triage-skill
+      - github-mcp
+    expect_absent:
+      # 설명에 없는 도메인이 잡음으로 새면 안 된다(relevance floor 회귀 감지).
+      - slack-mcp
+      - notion-mcp
+      - web-search-mcp
+    expect_gaps: []
+    prefer_order:
+      - [issue-triage-skill, github-mcp]
+
+  - name: doc-draft
+    description: 노션 위키를 참고해 회의록 초안과 보고서를 작성하는 에이전트.
+    top_k: 6
+    expect_ids:
+      - doc-draft-skill
+      - notion-mcp
+    expect_absent:
+      - github-mcp
+      - slack-mcp
+    expect_gaps: []
+    prefer_order:
+      # ⚠️ 현재 위반 — 1차 의도는 '문서 저작'이고 위키는 그 재료(doc-draft-skill 의 requires)다.
+      #    requires 관계가 랭킹에 전혀 반영되지 않아 공급자가 소비자보다 위에 온다.
+      - [doc-draft-skill, notion-mcp]
+
+  - name: web-research
+    description: 웹 검색으로 자료를 모으고 url 페이지를 가져와 요약하는 리서치 에이전트.
+    top_k: 6
+    expect_ids:
+      - web-search-mcp
+      - doc-draft-skill
+    expect_absent:
+      - github-mcp
+    expect_gaps: []
+
+  - name: prompt-fragments
+    description: 리뷰어 페르소나로 구조화 출력 형식을 지키고 안전 프리앰블을 붙인 리뷰 에이전트.
+    top_k: 6
+    expect_ids:
+      - prompt-role-reviewer
+      - prompt-format-structured-review
+      - prompt-safety-preamble
+      - pr-review-skill
+    expect_gaps: []
+    prefer_order:
+      # 설명이 페르소나를 먼저 말한다 — 역할 조각이 안전 프리앰블보다 위. 현재 만족.
+      # 세 프롬프트 조각은 비용·능력이 거의 같아 임베딩만으로 갈린다 → 임베딩 축 퇴행 감지용.
+      - [prompt-role-reviewer, prompt-safety-preamble]
+
+  # ── 부분 커버리지: 히트 + gap 동시(정상 결과이지 실패가 아니다) ──
+  - name: mixed-coverage
+    description: >-
+      깃허브 이슈를 우선순위로 분류하고, 관련 유튜브 영상에 자막을 붙여
+      인코딩까지 하는 에이전트.
+    top_k: 6
+    expect_ids:
+      - issue-triage-skill
+      - github-mcp
+    expect_gaps:
+      - media.edit
+      - media.video
+    prefer_order:
+      - [issue-triage-skill, github-mcp]
+
+  # ── 전부 gap: 발명 금지 계약 ──
+  - name: media-all-gap
+    description: 유튜브 쇼츠 영상을 자막 붙여 인코딩하는 편집 에이전트.
+    top_k: 6
+    expect_ids: []
+    expect_absent:
+      # 카탈로그에 media 컴포넌트가 없다 — 아무거나 끌어다 채우면 안 된다.
+      - doc-draft-skill
+      - github-mcp
+      - web-search-mcp
+      - notion-mcp
+    expect_gaps:
+      - media.edit
+      - media.video
+
+  - name: data-all-gap
+    description: 관계형 데이터베이스 postgres 스키마를 분석해 통계를 내는 에이전트.
+    top_k: 6
+    expect_ids: []
+    expect_absent:
+      - notion-mcp
+      - doc-draft-skill
+      - github-mcp
+    expect_gaps:
+      - analyze.data
+      - data.relational

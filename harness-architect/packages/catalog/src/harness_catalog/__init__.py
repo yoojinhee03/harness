@@ -17,6 +17,15 @@ from .enrichment import (
 )
 from .harvest import ServerDescriptor, component_to_yaml, harvest, harvest_component, uncovered
 from .loader import build_registry, load_components, resolve_catalog_dir
+from .rank_eval import (
+    CaseResult,
+    EvalReport,
+    GoldenSet,
+    RankingCase,
+    build_eval_recommender,
+    evaluate,
+    load_cases,
+)
 from .ranking import RankedComponent, rank
 from .reasoning import ClaudeReasoner, NullReasoner, Reasoner, get_reasoner, make_reasoner
 from .recommender import (
@@ -60,9 +69,12 @@ __all__ = [
     "CapabilityClassifier",
     "CapabilityEnricher",
     "CapabilityGap",
+    "CaseResult",
     "ChainEnricher",
     "ClaudeReasoner",
     "Embedder",
+    "EvalReport",
+    "GoldenSet",
     "FederatedRegistry",
     "Fetcher",
     "LiveRecommender",
@@ -72,6 +84,7 @@ __all__ = [
     "MCPRegistrySource",
     "NullReasoner",
     "RankedComponent",
+    "RankingCase",
     "Reasoner",
     "RecommendResult",
     "Recommendation",
@@ -80,8 +93,10 @@ __all__ = [
     "Settings",
     "VectorStore",
     "OpenAIEmbedder",
+    "build_eval_recommender",
     "build_live_sources",
     "build_registry",
+    "evaluate",
     "claude_classifier",
     "component_to_yaml",
     "descriptor_from_entry",
@@ -94,6 +109,7 @@ __all__ = [
     "plugin_to_component",
     "harvest",
     "harvest_component",
+    "load_cases",
     "load_components",
     "load_settings",
     "make_classifier",
