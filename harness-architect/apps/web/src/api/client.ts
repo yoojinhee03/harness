@@ -246,6 +246,23 @@ export interface EvalResponse {
   report: EvalReport | null;
 }
 
+/** 조직 정책(Phase 8) — 저장하면 그 스코프의 모든 검증·실행 경로에 서버가 항상 적용한다. */
+export interface PolicyDoc {
+  version?: number;
+  name?: string;
+  require?: { capabilities?: string[]; components?: string[] };
+  forbid?: { components?: string[]; capabilities?: string[]; unsandboxed_hooks?: boolean };
+  budget?: { context_tokens?: number | null; added_tools?: number | null };
+  auth?: { allowed_scopes?: string[] | null; require_narrowed?: boolean };
+}
+
+export interface PolicyState {
+  scope: string;
+  policy: PolicyDoc | null;
+  updated_at: string;
+  updated_by: string;
+}
+
 export interface HarnessSummary {
   id: string;
   scope: string; // "personal:<uid>" | "team:<tid>"
@@ -588,6 +605,14 @@ export const api = {
   // 저장된 하네스(에이전트) 검증·내보내기 — 하네스 상세(구 생성 위저드 C·D 대체).
   validateHarness: (id: string, scope = "personal") =>
     post<ResolveResult>(`/harnesses/${encodeURIComponent(id)}/validate?scope=${encodeURIComponent(scope)}`, undefined),
+  // ── 조직 정책 (팀 가드레일) ──
+  getPolicy: (scope = "personal") =>
+    send<PolicyState>("GET", `/policies?scope=${encodeURIComponent(scope)}`),
+  putPolicy: (scope: string, policy: PolicyDoc) =>
+    send<{ ok: boolean }>("PUT", `/policies?scope=${encodeURIComponent(scope)}`, policy),
+  deletePolicy: (scope = "personal") =>
+    send<{ ok: boolean; removed: boolean }>("DELETE", `/policies?scope=${encodeURIComponent(scope)}`),
+
   // ── 경험적 검증 (프롬프트 eval) ──
   evalScenarios: () => fetch(`${BASE}/eval/scenarios`).then((r) => r.json() as Promise<string[]>),
   evalHarness: (harness: HarnessInput, scenario: string) =>

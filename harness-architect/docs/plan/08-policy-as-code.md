@@ -57,6 +57,33 @@
 - 프리셋을 시드 pr-bot 하네스에 걸면 실제로 두 건을 잡는다 — `lifecycle.transform` 미충족과
   `slack-mcp` 의 미축소 권한(프리뷰가 "인증 미충족"으로 표시하던 바로 그것).
 
+## 후속 — 스코프 정책 영속 (2026-09-07)
+
+초기 구현은 정책을 **요청 본문에서만** 받았다. CI(`harness resolve --policy`)는 운영자가 직접
+주니 맞지만, 제품 안에서는 **클라이언트가 그냥 안 보내면 아무 강제도 없었다** — 조직이 멤버를
+묶을 수 없으니 사실상 정책이 없는 것과 같았다. 그 절반을 채웠다.
+
+- `scope_policies` 테이블 + `PolicyStore` + alembic `b8c9d0e1f2a3`. grain = 스코프 키
+  (`personal:<uid>` | `team:<tid>`).
+- `GET/PUT/DELETE /policies?scope=` — **팀은 owner 만** 변경. `_resolve_scope(write=True)` 는
+  owner/editor 를 통과시키는데 정책은 그보다 좁아야 한다(editor 가 가드레일을 풀 수 있으면
+  가드레일이 아니다).
+- 저장된 정책을 **서버가 항상 적용**한다: `/resolve`·`/generate`·`/run`·`/eject`·`/preview`·
+  `/eval` + 저장본 경로(`/harnesses/{id}/validate·preview·eject·eval`). 스코프는 쿼리 파라미터.
+- 요청 본문 정책과는 `harness_resolver.strictest` 로 **엄격한 쪽으로** 합친다:
+  require/forbid 합집합 · budget 최소값 · allowed_scopes 교집합 · 불리언 OR.
+  즉 **저장된 정책은 클라이언트가 낮출 수 없는 하한**이고, 클라이언트는 더 엄격해질 수만 있다.
+- 웹 UI — 워크스페이스 정책 편집기(`components/PolicyEditor.tsx`). owner 아니면 읽기 전용으로
+  표시하고 이유를 밝힌다(서버가 403 으로 최종 판정).
+
+### 판단
+
+- **정책 조회 실패는 삼키지 않는다.** GapDemand·Cooccurrence 는 비차단이지만(신호를 놓쳐도
+  기능은 돈다), 정책은 "못 읽었으니 없음"으로 넘기면 가드레일이 조용히 사라진다 — 그건 사고다.
+- **`doctor` 에는 정책을 적용하지 않는다.** 버전 드리프트 진단은 정책과 무관한 축이고, 정책
+  위반으로 진단 자체가 막히면 "왜 막혔는지"를 볼 수단이 사라진다.
+- **정책 미저장 시 동작 완전 불변** — 저장이 없으면 `strictest(None, body)` = 본문 그대로다.
+
 ## 의존성
 
 리졸버 파이프라인(완료). **Phase 5 와 독립** — 아무 때나 병행 착수 가능(P1, 상업 가치 높음).

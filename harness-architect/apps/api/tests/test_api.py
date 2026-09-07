@@ -306,6 +306,118 @@ def test_unknown_recipe_404(client):
     assert client.get("/recipes/nope").status_code == 404
 
 
+# ── 스코프 정책 영속 (Phase 8 잔여) ──
+#
+# 핵심: 정책이 요청 본문에서만 오면 클라이언트가 안 보내서 우회할 수 있다. 저장된 정책은
+# 서버가 항상 적용해야 하고, 클라이언트는 그걸 **낮출 수 없어야** 한다.
+
+GUARD_POLICY = {"require": {"capabilities": ["lifecycle.guardrail"]}}
+NO_GUARD_HARNESS = {
+    "metadata": {"id": "policy-scope-bot"},
+    "components": [{"ref": "github-mcp@1.4.0"}],
+}
+
+
+@pytest.fixture()
+def auth_client(tmp_path, monkeypatch):
+    """정책은 로그인 스코프에 붙으므로 인증된 클라이언트가 필요하다."""
+    monkeypatch.setenv("HARNESS_STORE_DIR", str(tmp_path / "store"))
+    monkeypatch.setenv("HARNESS_DEV_AUTH", "on")
+    monkeypatch.setenv("HARNESS_SECRET_KEY", "test-secret")
+    from harness_api.main import app as fresh
+
+    with TestClient(fresh) as c:
+        token = c.post("/auth/dev-login", json={"email": "owner@example.com"}).json()["token"]
+        c.headers.update({"Authorization": f"Bearer {token}"})
+        yield c
+
+
+def test_no_stored_policy_means_unchanged(auth_client):
+    """정책을 저장하지 않았으면 기존 동작이 그대로여야 한다."""
+    assert auth_client.get("/policies").json()["policy"] is None
+    assert auth_client.post("/resolve", json=NO_GUARD_HARNESS).json()["ok"] is True
+
+
+def test_stored_policy_applies_without_client_sending_it(auth_client):
+    """**이게 이 기능의 핵심** — 본문에 policy 가 없어도 저장된 정책이 강제된다."""
+    assert auth_client.put("/policies", json=GUARD_POLICY).json()["ok"] is True
+    body = auth_client.post("/resolve", json=NO_GUARD_HARNESS).json()
+    assert body["ok"] is False
+    viol = [d for d in body["diagnostics"]["items"] if d["code"] == "policy_violation"]
+    assert viol and viol[0]["detail"]["rule"] == "require.capabilities"
+
+
+def test_client_cannot_relax_stored_policy(auth_client):
+    """느슨한 정책을 보내 저장된 정책을 무력화하려 해도 안 된다(엄격한 쪽 병합).
+
+    github-mcp 은 시드에서 added_tools=12 다(context_tokens 는 0 이라 토큰 축으로는 안 걸린다).
+    """
+    auth_client.put("/policies", json={"budget": {"added_tools": 1}})
+    relaxed = {**NO_GUARD_HARNESS, "policy": {"budget": {"added_tools": 999999}}}
+    body = auth_client.post("/resolve", json=relaxed).json()
+    assert body["ok"] is False
+    rules = {d["detail"]["rule"] for d in body["diagnostics"]["items"] if d["code"] == "policy_violation"}
+    assert "budget.added_tools" in rules
+
+
+@pytest.mark.parametrize("path", ["/generate", "/eject", "/preview"])
+def test_stored_policy_applies_to_every_body_endpoint(auth_client, path):
+    """/resolve 에서만 막고 다른 경로가 무시하면 우회 가능하다."""
+    auth_client.put("/policies", json=GUARD_POLICY)
+    assert auth_client.post(path, json=NO_GUARD_HARNESS).json()["ok"] is False
+
+
+def test_stored_policy_applies_to_run(auth_client):
+    auth_client.put("/policies", json=GUARD_POLICY)
+    body = auth_client.post("/run", json={**NO_GUARD_HARNESS, "message": "안녕"}).json()
+    assert body["ok"] is False and body["run"] is None
+
+
+def test_stored_policy_applies_to_saved_harness_validate(auth_client):
+    """저장된 하네스 검증도 스코프 정책을 따른다 — 저장 후 우회되면 안 된다."""
+    yaml_text = "metadata:\n  id: saved-bot\ncomponents:\n  - ref: github-mcp@1.4.0\n"
+    auth_client.put("/harnesses/saved-bot", json={"name": "x", "description": "", "yaml": yaml_text})
+    assert auth_client.post("/harnesses/saved-bot/validate").json()["ok"] is True
+
+    auth_client.put("/policies", json=GUARD_POLICY)
+    assert auth_client.post("/harnesses/saved-bot/validate").json()["ok"] is False
+
+
+def test_policy_delete_restores_previous_behavior(auth_client):
+    auth_client.put("/policies", json=GUARD_POLICY)
+    assert auth_client.post("/resolve", json=NO_GUARD_HARNESS).json()["ok"] is False
+    assert auth_client.delete("/policies").json()["removed"] is True
+    assert auth_client.post("/resolve", json=NO_GUARD_HARNESS).json()["ok"] is True
+
+
+def test_stored_policy_rejects_unknown_key(auth_client):
+    """저장 경로도 오타를 거부한다 — 삼키면 '정책을 걸었다고 믿는데 안 걸린' 상태가 된다."""
+    assert auth_client.put("/policies", json={"require": {"capabilties": []}}).status_code == 422
+
+
+def test_team_policy_requires_owner(auth_client):
+    """editor 가 가드레일을 바꿀 수 있으면 가드레일이 아니다 — owner 만."""
+    team = auth_client.post("/teams", json={"name": "T"}).json()
+    tid = team["id"]
+    # 생성자는 owner → 통과
+    assert auth_client.put("/policies", json=GUARD_POLICY, params={"scope": f"team:{tid}"}).status_code == 200
+
+    editor_token = auth_client.post("/auth/dev-login", json={"email": "editor@example.com"}).json()["token"]
+    auth_client.post(f"/teams/{tid}/members", json={"email": "editor@example.com", "role": "editor"})
+    r = auth_client.put(
+        "/policies",
+        json=GUARD_POLICY,
+        params={"scope": f"team:{tid}"},
+        headers={"Authorization": f"Bearer {editor_token}"},
+    )
+    assert r.status_code == 403
+
+
+def test_policy_requires_auth(client):
+    """비로그인은 스코프가 없다 — 정책 조회·설정 불가."""
+    assert client.get("/policies").status_code in (401, 403)
+
+
 # ── 경험적 검증 (Phase 11) ──
 
 EVAL_HARNESS = {

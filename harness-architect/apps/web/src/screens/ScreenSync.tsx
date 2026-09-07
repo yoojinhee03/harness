@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api, subscribeHarnessEvents, type EvalResponse, type Team } from "../api/client";
 import { AdoptImport } from "../components/AdoptImport";
 import { HarnessPreview } from "../components/HarnessPreview";
+import { PolicyEditor } from "../components/PolicyEditor";
 import { RecipePicker } from "../components/RecipePicker";
 import { diffLines } from "../lib/diff";
 import { useToast } from "../lib/toast";
@@ -38,6 +39,11 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
   const isTeamWs = workspace.startsWith("team:");
   const wsLabel = isTeamWs ? (teams.find((t) => `team:${t.id}` === workspace)?.name ?? workspace.slice(5)) : "개인";
   const shown = list.filter((h) => (isTeamWs ? h.scope === workspace : h.scope.startsWith("personal:")));
+  // 정책은 팀 owner 만 바꿀 수 있다(서버가 403 으로 최종 판정 — UI 는 미리 알려주는 역할).
+  const myTeamRole = isTeamWs
+    ? teams.find((t) => `team:${t.id}` === workspace)?.members.find((m) => m.id === me.data?.id)?.role
+    : undefined;
+  const canEditPolicy = !isTeamWs || myTeamRole === "owner";
 
   function toggleOpen(key: string) {
     setOpenKey((k) => (k === key ? null : key));
@@ -112,6 +118,8 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
           <p className="text-sm text-muted">백엔드 연결/인증 확인 필요.</p>
         </Card>
       )}
+
+      <PolicyEditor scope={scopeQuery(workspace)} canEdit={canEditPolicy} />
 
       {isLoading ? (
         <SkeletonCards count={3} cols="grid-cols-1" />

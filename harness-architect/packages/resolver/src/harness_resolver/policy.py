@@ -82,6 +82,65 @@ class Policy(BaseModel):
         return self == Policy(version=self.version, name=self.name)
 
 
+def _min_limit(a: int | None, b: int | None) -> int | None:
+    """상한 둘 중 더 엄격한 것(None = 제약 없음이라 가장 느슨하다)."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return min(a, b)
+
+
+def strictest(base: Policy | None, extra: Policy | None) -> Policy | None:
+    """두 정책을 **엄격한 쪽으로** 합친다. 둘 다 None 이면 None.
+
+    조직 정책이 저장돼 있을 때 클라이언트가 보낸 정책과 어떻게 합칠지의 답이다.
+    **조직 정책은 클라이언트가 낮출 수 없는 하한**이어야 한다 — 그러지 않으면 요청 본문을
+    고쳐서 가드레일을 우회할 수 있고, 그건 정책이 없는 것과 같다. 반대로 클라이언트가 *더*
+    엄격해지는 건 막을 이유가 없다(로컬 CI 가 규칙을 더 걸 수 있다).
+
+    합치는 방향:
+      · require / forbid  → 합집합 (요구와 금지는 늘어날수록 엄격)
+      · budget            → 더 작은 상한
+      · allowed_scopes    → 교집합 (양쪽이 허용한 것만. 한쪽이 None 이면 다른 쪽을 따른다)
+      · require_narrowed  → OR (한쪽이라도 요구하면 요구)
+    """
+    if base is None:
+        return extra
+    if extra is None:
+        return base
+
+    scopes: list[str] | None
+    if base.auth.allowed_scopes is None:
+        scopes = extra.auth.allowed_scopes
+    elif extra.auth.allowed_scopes is None:
+        scopes = base.auth.allowed_scopes
+    else:
+        scopes = sorted(set(base.auth.allowed_scopes) & set(extra.auth.allowed_scopes))
+
+    return Policy(
+        version=max(base.version, extra.version),
+        name=" + ".join(n for n in (base.name, extra.name) if n),
+        require=PolicyRequire(
+            capabilities=sorted(set(base.require.capabilities) | set(extra.require.capabilities)),
+            components=sorted(set(base.require.components) | set(extra.require.components)),
+        ),
+        forbid=PolicyForbid(
+            components=sorted(set(base.forbid.components) | set(extra.forbid.components)),
+            capabilities=sorted(set(base.forbid.capabilities) | set(extra.forbid.capabilities)),
+            unsandboxed_hooks=base.forbid.unsandboxed_hooks or extra.forbid.unsandboxed_hooks,
+        ),
+        budget=PolicyBudget(
+            context_tokens=_min_limit(base.budget.context_tokens, extra.budget.context_tokens),
+            added_tools=_min_limit(base.budget.added_tools, extra.budget.added_tools),
+        ),
+        auth=PolicyAuth(
+            allowed_scopes=scopes,
+            require_narrowed=base.auth.require_narrowed or extra.auth.require_narrowed,
+        ),
+    )
+
+
 def matches(pattern: str, component_id: str) -> bool:
     """정확 일치 또는 접두 glob(`ns/*`). 정규식은 쓰지 않는다 — 정책은 읽고 감사할 수 있어야 한다."""
     if pattern.endswith("*"):

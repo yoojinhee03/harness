@@ -37,6 +37,7 @@ from .policy import (
     PolicyForbid,
     PolicyRequire,
     policy_from_document,
+    strictest,
 )
 from .prompt import component_segment_text, compose_prompt, estimate_tokens
 from .registry import InMemoryRegistry, Registry
@@ -79,5 +80,6 @@ __all__ = [
     "estimate_tokens",
     "merge_harness_configs",
     "policy_from_document",
+    "strictest",
     "resolve",
 ]
