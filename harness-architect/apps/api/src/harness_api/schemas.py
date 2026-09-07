@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from harness_resolver import Component, ComponentSelection, HarnessConfig, HarnessMetadata, PromptSpec
+from harness_resolver import (
+    Component,
+    ComponentSelection,
+    HarnessConfig,
+    HarnessMetadata,
+    Policy,
+    PromptSpec,
+)
 from pydantic import BaseModel, Field
 
 
@@ -80,6 +87,10 @@ class ResolveRequest(BaseModel):
     components: list[SelectionInput] = Field(default_factory=list)
     budget: dict[str, int] | None = None
     prompt: PromptSpec | None = None  # 시스템 프롬프트 합성 블록(Phase 10) — harness.yaml prompt 와 동일 형태
+    # 조직 가드레일(Phase 8). None 이면 정책 미적용 — 기존 요청의 동작이 그대로다.
+    # ⚠️ 이 본문을 쓰는 엔드포인트는 **전부** 이 정책을 적용해야 한다. /resolve 에서만 막고
+    #    /run·/eject 가 무시하면 "정책을 걸었는데 실행은 된다" 는 거버넌스 구멍이 된다.
+    policy: Policy | None = None
 
     def to_config(self) -> HarnessConfig:
         data: dict[str, Any] = {
@@ -206,7 +217,9 @@ class VerifyBody(BaseModel):
     files: dict[str, str] = Field(default_factory=dict)  # 예: {".mcp.json": "...", "CLAUDE.md": "..."}
     require: list[str] = Field(default_factory=list)  # 요구 능력(통제어휘)
     target: str | None = None  # 이식 손실을 잴 타깃(claude-code|cursor)
-    policy: dict[str, str] | None = None  # severity 오버라이드(선택)
+    # ⚠️ ResolveRequest.policy(조직 가드레일)와 이름만 같고 뜻이 다르다 — 이건 verify 판정의
+    #    심각도 오버라이드다({category: violation|warning|ignore}). 기존 계약이라 이름을 유지한다.
+    policy: dict[str, str] | None = None
 
 
 class AdoptBody(BaseModel):

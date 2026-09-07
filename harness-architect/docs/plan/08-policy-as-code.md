@@ -29,11 +29,33 @@
 
 ## 완료 기준
 
-- [ ] `policy.yaml` 스키마 + 로더 + 검증.
-- [ ] 리졸버 정책 단계(순수) + `policy_violation` 진단 + 테스트(require/forbid/budget/auth).
-- [ ] `/resolve`·`/generate` 정책 수용 + 위반 차단 리포트.
-- [ ] `security-baseline` 프리셋 + 적용 테스트.
-- [ ] **정책 미지정 시 기존 리졸버 동작 완전 불변**(회귀 테스트) · 로컬 폴백 불변.
+- [x] `policy.yaml` 스키마 + 로더 + 검증 — `harness_resolver/policy.py`.
+      **별도 파일을 만들지 않았다**: `.harness/policy.yaml` 은 이미 verify 심각도 오버라이드
+      (`severity:`)로 쓰이고 있어, 같은 파일에 거버넌스 섹션(`require`/`forbid`/`budget`/`auth`)을
+      나눠 담는다. `policy_from_document()` 는 거버넌스 키가 없으면 None 을 돌려주므로 severity 만
+      있던 기존 레포는 정책 미지정으로 읽힌다(하위호환).
+- [x] 리졸버 정책 단계(순수, 11단계) + `policy_violation` 진단 + 테스트 24건.
+      severity 는 기존 `error` 를 재사용하고 `code="policy_violation"` + `detail["rule"]` 로 구분한다 —
+      새 severity 를 만들면 프론트·CLI 의 기존 분기가 전부 깨진다.
+- [x] `/resolve`·`/generate` **및 `/run`·`/eject`·`/preview`** 정책 수용 + 차단 리포트.
+      문서는 앞 둘만 적었지만 그러면 구멍이 난다 — 같은 본문(`ResolveRequest`)을 쓰는 경로가
+      정책을 무시하면 우회 가능하다. `harness resolve/eject/preview --policy` 도 같은 이유로 함께.
+- [x] `security-baseline` 프리셋(`harness-catalog/policies/security-baseline.yaml`) + 적용 테스트.
+- [x] **정책 미지정 시 기존 리졸버 동작 완전 불변** — `resolve()` 의 세 번째 인자는 기본 None 이고,
+      None·빈 정책 모두 진단이 한 줄도 늘지 않음을 테스트로 고정(378 전체 통과, 회귀 0).
+
+## 구현 노트 (2026-09-07)
+
+- **같은 수치라도 누가 정했느냐로 강도가 갈린다.** harness 자신의 `budget` 초과는 warning(작성자가
+  스스로 정한 목표)이고, 정책 상한 초과는 차단(조직이 정한 선)이다. 테스트로 이 대비를 고정했다.
+- **`forbid.unsandboxed_hooks`** — 훅은 라이프사이클 시점에 임의 로직을 실행하므로 공급망 위험이
+  가장 크다. 공유 카탈로그의 sandbox=none 승격 차단 게이트와 같은 근거를 조직 정책에서도 쓴다.
+- **패턴은 정확 일치 + 접두 glob 만.** 정규식을 넣지 않았다 — 정책은 읽고 감사할 수 있어야 한다.
+  연합 레지스트리 네임스페이스 차단(`io.github.randomdev/*`)이 실사용 동기다.
+- **미지 키는 거부한다**(`extra="forbid"`). 오타를 조용히 삼키면 "정책을 걸었다고 믿는데 안 걸린"
+  최악의 실패가 된다. API 는 422 로 떨어진다.
+- 프리셋을 시드 pr-bot 하네스에 걸면 실제로 두 건을 잡는다 — `lifecycle.transform` 미충족과
+  `slack-mcp` 의 미축소 권한(프리뷰가 "인증 미충족"으로 표시하던 바로 그것).
 
 ## 의존성
 

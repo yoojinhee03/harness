@@ -280,6 +280,64 @@ def test_verify_endpoint_required_missing_violation(client):
     assert body["ok"] is False and "required_missing" in body["violations"]
 
 
+# ── 정책 as code (Phase 8) ──
+
+POLICY_HARNESS = {
+    "metadata": {"id": "policy-bot"},
+    "components": [{"ref": "github-mcp@1.4.0"}, {"ref": "pr-review-skill@2.1.0"}],
+}
+GUARDRAIL_POLICY = {"require": {"capabilities": ["lifecycle.guardrail"]}}
+
+
+def test_policy_absent_keeps_existing_behavior(client):
+    """정책 필드가 없으면 기존 응답과 완전히 같아야 한다(도입만으로 동작이 바뀌면 안 된다)."""
+    a = client.post("/resolve", json=POLICY_HARNESS).json()
+    b = client.post("/resolve", json={**POLICY_HARNESS, "policy": None}).json()
+    assert a == b
+    assert a["ok"] is True
+
+
+def test_policy_blocks_resolve(client):
+    body = client.post("/resolve", json={**POLICY_HARNESS, "policy": GUARDRAIL_POLICY}).json()
+    assert body["ok"] is False
+    viol = [d for d in body["diagnostics"]["items"] if d["code"] == "policy_violation"]
+    assert viol and viol[0]["detail"]["rule"] == "require.capabilities"
+
+
+def test_policy_satisfied_passes(client):
+    body = client.post(
+        "/resolve",
+        json={
+            **POLICY_HARNESS,
+            "components": [*POLICY_HARNESS["components"], {"ref": "secret-scan-hook@1.2.0"}],
+            "policy": GUARDRAIL_POLICY,
+        },
+    ).json()
+    assert body["ok"] is True
+
+
+@pytest.mark.parametrize("path", ["/generate", "/eject", "/preview"])
+def test_policy_enforced_on_every_endpoint_using_the_body(client, path):
+    """정책을 /resolve 에서만 막고 다른 경로가 무시하면 우회 가능하다 — 전부 막혀야 한다."""
+    r = client.post(path, json={**POLICY_HARNESS, "policy": GUARDRAIL_POLICY})
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+
+
+def test_policy_enforced_on_run(client):
+    """/run 도 마찬가지 — 여기가 뚫리면 정책을 걸어도 그냥 실행된다."""
+    body = client.post(
+        "/run", json={**POLICY_HARNESS, "message": "리뷰해줘", "policy": GUARDRAIL_POLICY}
+    ).json()
+    assert body["ok"] is False and body["run"] is None
+
+
+def test_policy_rejects_unknown_key(client):
+    """오타를 삼키면 '정책을 걸었다고 믿는데 안 걸린' 최악의 실패가 된다 → 422."""
+    r = client.post("/resolve", json={**POLICY_HARNESS, "policy": {"require": {"capabilties": []}}})
+    assert r.status_code == 422
+
+
 PREVIEW_BODY = {
     "metadata": {"id": "pr-bot"},
     "permissions": {"vcs.code-hosting": "read-only"},
