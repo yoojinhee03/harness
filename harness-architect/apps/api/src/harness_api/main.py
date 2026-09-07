@@ -600,7 +600,7 @@ def resolve_endpoint(
     request: Request, body: ResolveRequest, user: dict[str, Any] | None = Depends(optional_user)
 ) -> ResolveResult:
     config = body.to_config()
-    return resolve(config, _scoped_registry(request, user))
+    return resolve(config, _scoped_registry(request, user), body.policy)
 
 
 @app.post("/generate", response_model=GenerateResponse)
@@ -608,7 +608,7 @@ def generate(
     request: Request, body: ResolveRequest, user: dict[str, Any] | None = Depends(optional_user)
 ) -> GenerateResponse:
     config = body.to_config()
-    result = resolve(config, _scoped_registry(request, user))
+    result = resolve(config, _scoped_registry(request, user), body.policy)
     return GenerateResponse(
         yaml=to_harness_yaml(config),
         ok=result.ok,
@@ -623,9 +623,12 @@ def generate(
 def run_endpoint(
     request: Request, body: RunRequest, user: dict[str, Any] | None = Depends(optional_user)
 ) -> dict[str, Any]:
-    """resolve → build_request → (키 있으면) Anthropic 전송, 없으면 dry_run. 런타임 관통."""
+    """resolve → build_request → (키 있으면) Anthropic 전송, 없으면 dry_run. 런타임 관통.
+
+    정책이 실려 오면 여기서도 강제한다 — /resolve 에서만 막고 /run 이 무시하면 정책을 우회할 수 있다.
+    """
     config = body.to_config()
-    result = resolve(config, _scoped_registry(request, user))
+    result = resolve(config, _scoped_registry(request, user), body.policy)
     if not result.ok or result.resolved is None:
         return {"ok": False, "diagnostics": result.diagnostics.model_dump(), "built": None, "run": None}
     built = build_request(result.resolved, body.message)
@@ -658,7 +661,9 @@ def preview_endpoint(
     """
     if target is not None and target not in available_targets():
         raise HTTPException(status_code=400, detail=f"지원하지 않는 타깃: {target} (가능: {available_targets()})")
-    return run_preview(body.to_config(), _scoped_registry(request, user), eject_target=target)
+    return run_preview(
+        body.to_config(), _scoped_registry(request, user), eject_target=target, policy=body.policy
+    )
 
 
 @app.get("/eject/targets")
@@ -677,7 +682,7 @@ def eject_endpoint(
     """resolve → emit(target). ResolvedHarness IR 을 런타임 네이티브 파일 트리로 컴파일 (Phase 5)."""
     if target not in available_targets():
         raise HTTPException(status_code=400, detail=f"지원하지 않는 타깃: {target} (가능: {available_targets()})")
-    result = resolve(body.to_config(), _scoped_registry(request, user))
+    result = resolve(body.to_config(), _scoped_registry(request, user), body.policy)
     if not result.ok or result.resolved is None:
         return {"ok": False, "target": target, "diagnostics": result.diagnostics.model_dump(), "files": None}
     return {"ok": True, "target": target, "files": emit(result.resolved, target)}

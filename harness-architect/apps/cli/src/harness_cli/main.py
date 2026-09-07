@@ -18,7 +18,15 @@ from typing import Any
 
 import yaml
 from harness_catalog import build_registry, facet_for_capability, suggested_component_type
-from harness_resolver import HarnessConfig, InMemoryRegistry, Registry, ResolveResult, resolve
+from harness_resolver import (
+    HarnessConfig,
+    InMemoryRegistry,
+    Policy,
+    Registry,
+    ResolveResult,
+    policy_from_document,
+    resolve,
+)
 from harness_runtime import (
     DEFAULT_SEVERITY,
     EvalCase,
@@ -53,10 +61,26 @@ def _registry(catalog: str | None) -> Registry:
         return InMemoryRegistry([])
 
 
+def _load_governance(path: str | None) -> Policy | None:
+    """`--policy <파일>` → Policy. 거버넌스 섹션이 없으면 None(정책 미지정).
+
+    같은 `.harness/policy.yaml` 의 `severity:` 는 verify 심각도 오버라이드로 이미 쓰이고 있다
+    (`_load_policy`). 한 파일에 섹션을 나눠 담으므로 severity 만 있는 기존 파일은 None 이 된다.
+    """
+    if not path:
+        return None
+    doc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    return policy_from_document(doc)
+
+
 def _print_diagnostics(result: ResolveResult) -> None:
     d = result.diagnostics
     for item in d.errors:
-        print(f"  ✗ [error] {item.code}: {item.message}", file=sys.stderr)
+        # 정책 위반은 규칙 이름을 함께 낸다 — "무엇을 고쳐야 하나"가 설정 오류와 다르기 때문이다.
+        if item.code == "policy_violation":
+            print(f"  ⛔ [policy] {item.detail.get('rule', '?')}: {item.message}", file=sys.stderr)
+        else:
+            print(f"  ✗ [error] {item.code}: {item.message}", file=sys.stderr)
     for item in d.gaps:
         print(f"  • [gap] {item.capability} (요구: {item.component_id})", file=sys.stderr)
     for item in d.warnings:
@@ -64,7 +88,8 @@ def _print_diagnostics(result: ResolveResult) -> None:
 
 
 def cmd_resolve(args: argparse.Namespace) -> int:
-    result = resolve(_load_config(args.config), _registry(args.catalog))
+    policy = _load_governance(getattr(args, "policy", None))
+    result = resolve(_load_config(args.config), _registry(args.catalog), policy)
     _print_diagnostics(result)
     if result.ok and result.resolved is not None:
         r = result.resolved
@@ -80,7 +105,9 @@ def cmd_resolve(args: argparse.Namespace) -> int:
 
 
 def cmd_eject(args: argparse.Namespace) -> int:
-    result = resolve(_load_config(args.config), _registry(args.catalog))
+    # 정책 위반 하네스는 방출도 막는다 — resolve 에서만 막으면 eject 로 우회된다.
+    policy = _load_governance(getattr(args, "policy", None))
+    result = resolve(_load_config(args.config), _registry(args.catalog), policy)
     if not result.ok or result.resolved is None:
         _print_diagnostics(result)
         print("✗ resolve 실패 — eject 중단", file=sys.stderr)
@@ -198,7 +225,12 @@ def _load_policy(repo: Path) -> dict[str, str]:
 
 def cmd_preview(args: argparse.Namespace) -> int:
     """실행 전 조립 분해를 보여준다(모델 호출 없음). 기본 text, CI 용 --format json."""
-    report = preview(_load_config(args.config), _registry(args.catalog), eject_target=args.target)
+    report = preview(
+        _load_config(args.config),
+        _registry(args.catalog),
+        eject_target=args.target,
+        policy=_load_governance(getattr(args, "policy", None)),
+    )
     if args.format == "json":
         print(report.model_dump_json(indent=2, exclude_none=True))
         return 0 if report.ok else 1
@@ -332,6 +364,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_resolve = sub.add_parser("resolve", help="harness.yaml 을 검증(진단)한다.")
     p_resolve.add_argument("config", help="harness.yaml 경로")
+    p_resolve.add_argument(
+        "--policy", default=None, help="조직 정책 파일(.harness/policy.yaml 형식) — 위반 시 차단"
+    )
     p_resolve.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
     p_resolve.set_defaults(func=cmd_resolve)
 
@@ -340,6 +375,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_eject.add_argument("--to", required=True, choices=available_targets(), help="타깃 런타임")
     p_eject.add_argument("--out", default=".", help="출력 디렉터리(기본: 현재 폴더)")
     p_eject.add_argument("--dry-run", action="store_true", help="디스크에 쓰지 않고 생성될 내용만 출력")
+    p_eject.add_argument(
+        "--policy", default=None, help="조직 정책 파일(.harness/policy.yaml 형식) — 위반 시 차단"
+    )
     p_eject.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
     p_eject.set_defaults(func=cmd_eject)
 
@@ -373,6 +411,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_preview.add_argument("config", help="harness.yaml 경로")
     p_preview.add_argument("--target", default=None, choices=available_targets(), help="함께 볼 eject 타깃")
     p_preview.add_argument("--format", choices=["json", "text"], default="text", help="출력(기본 text)")
+    p_preview.add_argument(
+        "--policy", default=None, help="조직 정책 파일(.harness/policy.yaml 형식) — 위반 시 차단"
+    )
     p_preview.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
     p_preview.set_defaults(func=cmd_preview)
 

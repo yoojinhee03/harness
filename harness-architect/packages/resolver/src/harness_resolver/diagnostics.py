@@ -37,6 +37,21 @@ class Diagnostics(BaseModel):
     def warn(self, code: str, message: str, **detail: Any) -> None:
         self.items.append(Diagnostic(severity="warning", code=code, message=message, detail=detail))
 
+    def policy_violation(self, rule: str, message: str, **detail: Any) -> None:
+        """조직 정책 위반 — **차단**한다(gap 과 의미가 다르다).
+
+        severity 는 기존 `error` 를 쓴다(새 severity 를 만들면 프론트·CLI 의 분기가 전부 깨진다).
+        구분은 `code="policy_violation"` + `detail["rule"]` 로 한다.
+        """
+        self.items.append(
+            Diagnostic(
+                severity="error",
+                code="policy_violation",
+                message=message,
+                detail={"rule": rule, **detail},
+            )
+        )
+
     def gap(self, component_id: str, capability: str, message: str | None = None) -> None:
         self.items.append(
             Diagnostic(
@@ -52,6 +67,11 @@ class Diagnostics(BaseModel):
     @property
     def errors(self) -> list[Diagnostic]:
         return [d for d in self.items if d.severity == "error"]
+
+    @property
+    def policy_violations(self) -> list[Diagnostic]:
+        """차단 사유 중 정책 위반만 — 리포트에서 "규칙 위반"과 "설정 오류"를 나눠 보여준다."""
+        return [d for d in self.items if d.code == "policy_violation"]
 
     @property
     def warnings(self) -> list[Diagnostic]:

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import heapq
 from collections import defaultdict
+from collections.abc import Mapping
 
 from pydantic import BaseModel
 
@@ -32,6 +33,8 @@ from .models import (
     ResolvedHarness,
     ResolvedSubAgent,
 )
+from .policy import Policy
+from .policy import matches as policy_matches
 from .prompt import compose_prompt
 from .registry import Registry
 
@@ -42,7 +45,14 @@ class ResolveResult(BaseModel):
     diagnostics: Diagnostics
 
 
-def resolve(config: HarnessConfig, registry: Registry) -> ResolveResult:
+def resolve(
+    config: HarnessConfig, registry: Registry, policy: Policy | None = None
+) -> ResolveResult:
+    """harness.yaml → 실행 명세. 순수 함수(I/O·전역 상태 없음).
+
+    `policy` 는 조직 가드레일(Phase 8). **None 이면 기존 동작이 한 치도 안 바뀐다** — 정책을
+    안 쓰던 호출부가 이 파라미터 추가만으로 달라지면 안 되기 때문이다. 파일 로딩은 호출부 몫이다.
+    """
     diag = Diagnostics()
 
     # ── 2. 상속 병합 (extends) — 참조 해소 전에 유효 config 확정 ──
@@ -166,6 +176,10 @@ def resolve(config: HarnessConfig, registry: Registry) -> ResolveResult:
     # ── 10. 서브에이전트(팀) 재귀 해소 (멀티에이전트) — 이름 유일성 + 각 역할 검증 ──
     resolved_subagents = _resolve_subagents(effective, registry, diag)
 
+    # ── 11. 조직 정책 강제 (Phase 8) — 모든 신호가 모인 뒤 마지막에. 위반은 차단(policy_violation) ──
+    if policy is not None:
+        _enforce_policy(policy, diag, comps, provided, tokens, tools, auth_needs)
+
     if diag.has_errors():
         return ResolveResult(ok=False, resolved=None, diagnostics=diag)
 
@@ -182,6 +196,95 @@ def resolve(config: HarnessConfig, registry: Registry) -> ResolveResult:
         subagents=resolved_subagents,
     )
     return ResolveResult(ok=True, resolved=resolved, diagnostics=diag)
+
+
+def _enforce_policy(
+    policy: Policy,
+    diag: Diagnostics,
+    comps: list[Component],
+    provided: Mapping[str, list[str]],
+    tokens: int,
+    tools: int,
+    auth_needs: list[AuthNeed],
+) -> None:
+    """정책 위반을 진단으로 낸다. 순수 — 입력을 읽고 diag 에만 쓴다.
+
+    harness 자신의 `budget` 초과는 warning(작성자가 스스로 정한 목표)이지만, **정책의 상한 초과는
+    차단**이다(조직이 정한 선). 같은 수치라도 누가 정했느냐로 강도가 갈린다.
+    """
+    ids = {c.id for c in comps}
+
+    for cap in policy.require.capabilities:
+        if cap not in provided:
+            diag.policy_violation(
+                "require.capabilities",
+                f"정책이 요구하는 능력 '{cap}' 를 제공하는 컴포넌트가 없음",
+                capability=cap,
+            )
+    for cid in policy.require.components:
+        if cid not in ids:
+            diag.policy_violation(
+                "require.components", f"정책이 요구하는 컴포넌트 '{cid}' 가 없음", component_id=cid
+            )
+
+    for pattern in policy.forbid.components:
+        for cid in sorted(ids):
+            if policy_matches(pattern, cid):
+                diag.policy_violation(
+                    "forbid.components",
+                    f"정책이 금지한 컴포넌트 '{cid}' 가 포함됨(규칙: {pattern})",
+                    component_id=cid,
+                    pattern=pattern,
+                )
+    for cap in policy.forbid.capabilities:
+        for cid in sorted(provided.get(cap, [])):
+            diag.policy_violation(
+                "forbid.capabilities",
+                f"정책이 금지한 능력 '{cap}' 를 '{cid}' 가 제공함",
+                capability=cap,
+                component_id=cid,
+            )
+    if policy.forbid.unsandboxed_hooks:
+        for c in comps:
+            if c.type == "hook" and c.sandbox in (None, "none"):
+                diag.policy_violation(
+                    "forbid.unsandboxed_hooks",
+                    f"훅 '{c.id}' 가 격리 없이 실행됨(sandbox={c.sandbox or '미선언'})",
+                    component_id=c.id,
+                    sandbox=c.sandbox,
+                )
+
+    if policy.budget.context_tokens is not None and tokens > policy.budget.context_tokens:
+        diag.policy_violation(
+            "budget.context_tokens",
+            f"컨텍스트 토큰 {tokens} > 정책 상한 {policy.budget.context_tokens}",
+            used=tokens,
+            limit=policy.budget.context_tokens,
+        )
+    if policy.budget.added_tools is not None and tools > policy.budget.added_tools:
+        diag.policy_violation(
+            "budget.added_tools",
+            f"추가 도구 {tools} > 정책 상한 {policy.budget.added_tools}",
+            used=tools,
+            limit=policy.budget.added_tools,
+        )
+
+    allowed = policy.auth.allowed_scopes
+    for need in auth_needs:
+        if policy.auth.require_narrowed and need.granted_scope is None:
+            diag.policy_violation(
+                "auth.require_narrowed",
+                f"'{need.component_id}' 는 인증이 필요한데 permissions 로 축소된 scope 선언이 없음",
+                component_id=need.component_id,
+            )
+        if allowed is not None and need.granted_scope is not None and need.granted_scope not in allowed:
+            diag.policy_violation(
+                "auth.allowed_scopes",
+                f"'{need.component_id}' 에 부여된 scope '{need.granted_scope}' 는 허용 목록 밖",
+                component_id=need.component_id,
+                granted_scope=need.granted_scope,
+                allowed=allowed,
+            )
 
 
 def _resolve_subagents(effective: HarnessConfig, registry: Registry, diag: Diagnostics) -> list[ResolvedSubAgent]:

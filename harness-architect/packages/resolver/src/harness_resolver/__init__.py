@@ -27,6 +27,14 @@ from .models import (
     ResolvedSubAgent,
     SubAgentSpec,
 )
+from .policy import (
+    Policy,
+    PolicyAuth,
+    PolicyBudget,
+    PolicyForbid,
+    PolicyRequire,
+    policy_from_document,
+)
 from .prompt import component_segment_text, compose_prompt, estimate_tokens
 from .registry import InMemoryRegistry, Registry
 from .resolver import ResolveResult, resolve
@@ -38,6 +46,11 @@ __all__ = [
     "ComponentSelection",
     "Cost",
     "Diagnostic",
+    "Policy",
+    "PolicyAuth",
+    "PolicyBudget",
+    "PolicyForbid",
+    "PolicyRequire",
     "Diagnostics",
     "HarnessConfig",
     "HarnessMetadata",
@@ -59,5 +72,6 @@ __all__ = [
     "compose_prompt",
     "estimate_tokens",
     "merge_harness_configs",
+    "policy_from_document",
     "resolve",
 ]

@@ -1,0 +1,41 @@
+# 보안 기준선 프리셋 (Phase 8) — 조직이 바로 쓰거나 확장하는 출발점.
+#
+# 사용:
+#   harness resolve my.harness.yaml --policy harness-catalog/policies/security-baseline.yaml
+#   또는 레포 루트의 `.harness/policy.yaml` 로 복사(같은 파일의 `severity:` 섹션은 verify 용이라
+#   공존한다 — 거버넌스 키와 심각도 키를 한 파일에 나눠 담는다).
+#
+# ⚠️ 강제 범위는 **선언**까지다. "PII 훅이 실제로 마스킹하는가"는 런타임 영역이고, 여기서 보는 건
+#    "그 훅이 붙어 있는가 · 격리돼 있는가 · 권한이 축소됐는가"다. 정적 검증의 한계를 알고 써라.
+
+version: 1
+name: security-baseline
+
+require:
+  capabilities:
+    # 시크릿 유출 차단이 파이프라인에 반드시 있어야 한다.
+    - lifecycle.guardrail
+    # 요청/응답 변형 지점 — 시드 카탈로그에선 pii-redact-hook 이 제공한다.
+    - lifecycle.transform
+
+forbid:
+  # 격리 없이 도는 훅 금지. 훅은 라이프사이클 시점에 임의 로직을 실행하므로 공급망 위험이 가장 크다
+  # (공유 카탈로그의 sandbox=none 승격 차단 게이트와 같은 근거).
+  unsandboxed_hooks: true
+  components: []
+  # 예: 미검증 발행자 네임스페이스를 통째로 막으려면 접두 glob 을 쓴다.
+  #   - "io.github.randomdev/*"
+
+budget:
+  # harness 자신의 budget 초과는 warning 이지만, 여기 상한을 넘으면 **차단**이다.
+  # 컨텍스트가 부풀면 주입된 지침이 묻혀 가드레일이 실질적으로 약해진다.
+  context_tokens: 8000
+  added_tools: 30
+
+auth:
+  # 인증이 필요한 컴포넌트는 permissions 로 축소된 scope 를 반드시 선언해야 한다.
+  # 선언을 강제해야 "기본값이 광범위 권한"이 되는 걸 막는다.
+  require_narrowed: true
+  # 화이트리스트로 쓰기 권한까지 막으려면 주석을 풀어라(기준선은 제약하지 않는다 —
+  # 쓰기가 필요한 정당한 하네스를 기본값으로 막으면 정책 자체가 우회된다).
+  # allowed_scopes: ["read-only"]

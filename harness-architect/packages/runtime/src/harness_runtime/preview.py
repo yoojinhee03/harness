@@ -21,6 +21,7 @@ from harness_resolver import (
     Budget,
     Diagnostic,
     HarnessConfig,
+    Policy,
     Registry,
     ResolvedHarness,
     resolve,
@@ -127,9 +128,14 @@ def preview(
     registry: Registry,
     *,
     eject_target: str | None = None,
+    policy: Policy | None = None,
 ) -> PreviewReport:
-    """harness.yaml(IR) → 조립 분해 뷰. resolve 실패 시에도 진단은 실어 낸다."""
-    result = resolve(config, registry)
+    """harness.yaml(IR) → 조립 분해 뷰. resolve 실패 시에도 진단은 실어 낸다.
+
+    `policy` 를 주면 조직 가드레일 위반도 진단에 함께 실린다(Phase 8) — 확정 전에 "이건 정책상
+    막힌다"를 보여주는 게 프리뷰의 일이다.
+    """
+    result = resolve(config, registry, policy)
     diags = list(result.diagnostics.items)
 
     if result.resolved is None:
