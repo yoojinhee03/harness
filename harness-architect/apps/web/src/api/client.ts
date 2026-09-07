@@ -591,6 +591,12 @@ export const api = {
   createTeam: (name: string) => send<Team>("POST", "/teams", { name }),
   addMember: (tid: string, email: string, role = "editor") =>
     send<Team>("POST", `/teams/${encodeURIComponent(tid)}/members`, { email, role }),
+  /** 기존 멤버의 역할 변경 — owner 만(서버가 403). 마지막 owner 강등은 400. */
+  setMemberRole: (tid: string, uid: string, role: string) =>
+    send<Team>("PUT", `/teams/${encodeURIComponent(tid)}/members/${encodeURIComponent(uid)}`, { role }),
+  /** 멤버 제거 — owner 이거나 본인 탈퇴. 마지막 owner 는 400. */
+  removeMember: (tid: string, uid: string) =>
+    send<Team>("DELETE", `/teams/${encodeURIComponent(tid)}/members/${encodeURIComponent(uid)}`),
 
   // ── 공유 하네스 저장소 (VSCode 확장과 동일 백엔드 — 스코프 격리 · 양방향 동기화) ──
   listHarnesses: () => send<HarnessSummary[]>("GET", "/harnesses"),

@@ -202,6 +202,12 @@ class MemberBody(BaseModel):
     role: str = "editor"
 
 
+class MemberRoleBody(BaseModel):
+    """기존 멤버의 역할 변경 — owner 만 호출할 수 있다(서버가 검사)."""
+
+    role: str = Field(pattern="^(owner|editor|viewer)$")
+
+
 class RunRequest(ResolveRequest):
     """런타임 dry-run — 선택 구성 + 사용자 메시지로 요청을 조립하고(키 있으면) 전송.
 
