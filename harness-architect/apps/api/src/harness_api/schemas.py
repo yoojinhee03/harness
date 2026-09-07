@@ -229,6 +229,12 @@ class EvalBody(ResolveRequest):
     cases: list[EvalCase] = Field(default_factory=list)
 
 
+class ApprovalBody(BaseModel):
+    """승격 승인 — 심사 메모(선택). 누가 왜 승인했는지가 남아야 감사가 된다."""
+
+    note: str = Field(default="", max_length=1000)
+
+
 class VerifyBody(BaseModel):
     """POST /verify — 업로드된 네이티브 트리(상대경로→내용)를 정적 검증(harness verify 의 API 판)."""
 

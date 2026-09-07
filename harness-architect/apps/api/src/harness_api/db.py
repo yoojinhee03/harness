@@ -260,6 +260,21 @@ scope_policies = Table(
 )
 
 
+# 승격 승인(durable) — 공유 카탈로그 승격의 다인 승인. 승격은 origin='promoted' 로 **전 유저**에게
+# 노출되므로 단독 행위로 두면 공급망 위험이 크다(CONTRIBUTING §3: 자동 승격 금지).
+# grain = (스코프, 컴포넌트, 승인자) 단일 행 → 한 사람이 여러 번 승인해 정족수를 채울 수 없다.
+component_approvals = Table(
+    "component_approvals",
+    metadata,
+    Column("scope_key", String(128), primary_key=True),
+    Column("component_id", String(256), primary_key=True),
+    Column("approver_id", String(64), primary_key=True),
+    Column("component_version", Integer, nullable=False, default=0),  # 승인 당시 버전(변경 시 무효화)
+    Column("note", Text, nullable=False, default=""),
+    Column("created_at", String(40), nullable=False),
+)
+
+
 def resolve_database_url(store_dir: Path) -> str:
     """`DATABASE_URL`(프로덕션 Postgres) 또는 기본 SQLite(store 폴더 밑)."""
     env = os.environ.get("DATABASE_URL")

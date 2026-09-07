@@ -66,6 +66,7 @@ from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
 
 from .accounts import AccountStore
+from .approvals import ApprovalStore, required_approvals
 from .authoring import COMPONENT_TYPES, author_component, test_component, validate_component
 from .catalog_store import CatalogStore, DbCatalogSource, sync_catalog
 from .component_store import ComponentStore, UserComponentSource, component_event_stream
@@ -91,10 +92,11 @@ from .orchestrator import run_agent as _run_agent
 from .orchestrator import studio_run as _studio_run
 from .orchestrator import suggest_title as _suggest_title
 from .policy_store import PolicyStore
-from .promotion import promote_component
+from .promotion import approval_progress, promote_component
 from .schemas import (
     AdoptBody,
     AdoptResponse,
+    ApprovalBody,
     CatalogItem,
     ComponentAuthorBody,
     ComponentSaveBody,
@@ -1577,12 +1579,79 @@ async def promote_component_endpoint(
     catalog_store = getattr(request.app.state, "catalog_store", None)
     if catalog_store is None:
         raise HTTPException(status_code=503, detail="카탈로그 스토어가 없습니다(harvest off).")
+    approvals = ApprovalStore(request.app.state.engine)
+    min_approvals = required_approvals()
     result = promote_component(
-        _component_store(request), catalog_store, sk, cid, allow_unsandboxed=allow_unsandboxed
+        _component_store(request),
+        catalog_store,
+        sk,
+        cid,
+        allow_unsandboxed=allow_unsandboxed,
+        approvals=approvals.list(sk, cid),
+        min_approvals=min_approvals,
     )
     if not result["ok"]:
         raise HTTPException(status_code=400, detail="; ".join(result["errors"]))
+    # 승격됐으면 승인을 정리한다 — 남겨두면 다음 버전이 과거 승인으로 통과할 수 있다.
+    if min_approvals > 0:
+        approvals.clear(sk, cid)
     return result
+
+
+@app.get("/components/{cid}/approvals")
+def list_approvals(
+    request: Request,
+    cid: str,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """승격 승인 현황 — 몇 명이 더 필요한지, 왜 안 세는지(자기 승인·구버전)."""
+    sk = _resolve_scope(request, user, scope)
+    doc = _component_store(request).get(sk, cid)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"컴포넌트 '{cid}' 없음(scope={scope})")
+    records = ApprovalStore(request.app.state.engine).list(sk, cid)
+    return {
+        "approvals": records,
+        "progress": approval_progress(doc, records, required_approvals()),
+    }
+
+
+@app.post("/components/{cid}/approvals")
+def add_approval(
+    request: Request,
+    cid: str,
+    body: ApprovalBody,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """승격 승인 — 심사했다는 기록. 자기 것은 승인해도 정족수에 안 든다(막지는 않고 안 센다).
+
+    같은 사람이 여러 번 눌러도 한 행이라 정족수를 혼자 채울 수 없다. 승인 당시 버전을 함께
+    남겨 컴포넌트가 바뀌면 과거 승인이 무효가 된다.
+    """
+    sk = _resolve_scope(request, user, scope)
+    store = _component_store(request)
+    doc = store.get(sk, cid)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"컴포넌트 '{cid}' 없음(scope={scope})")
+    approvals = ApprovalStore(request.app.state.engine)
+    approvals.record(sk, cid, user["id"], int(doc.get("version") or 0), body.note)
+    records = approvals.list(sk, cid)
+    return {"ok": True, "progress": approval_progress(doc, records, required_approvals())}
+
+
+@app.delete("/components/{cid}/approvals")
+def withdraw_approval(
+    request: Request,
+    cid: str,
+    scope: str = Query("personal"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """내 승인 철회 — 재검토 후 마음이 바뀔 수 있어야 한다."""
+    sk = _resolve_scope(request, user, scope)
+    removed = ApprovalStore(request.app.state.engine).withdraw(sk, cid, user["id"])
+    return {"ok": True, "removed": removed}
 
 
 @app.delete("/components/{cid}")

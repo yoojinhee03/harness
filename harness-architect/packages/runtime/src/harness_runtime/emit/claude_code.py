@@ -68,6 +68,19 @@ class ClaudeCodeEmitter:
                     "도구 단위 allow(mcp__<id>)로만 표현 — capability→scope(read-only 등) 소실",
                 )
             )
+        bodyless = [c.id for c in resolved.components if c.type == "skill" and not (c.body or "").strip()]
+        if bodyless:
+            # 본문 없는 skill 은 frontmatter+제목만 있는 **껍데기 SKILL.md** 로 나간다 — 파일은
+            # 생기니 성공처럼 보이는데 스킬이 아무 일도 안 한다. 수확 소스(SkillsMP 등)가 메타만
+            # 주는 경우가 실제로 있어(본문은 API 응답에 없다) 조용히 새지 않도록 선언한다.
+            out.append(
+                Loss(
+                    "skill.body",
+                    "approximate",
+                    f"본문 없는 skill {len(bodyless)}개({', '.join(sorted(bodyless)[:3])}) — "
+                    "껍데기 SKILL.md 로 방출됨. 컴포넌트의 source 에서 본문을 채워야 실제로 동작한다",
+                )
+            )
         if "after_request" in resolved.hook_plan:
             out.append(
                 Loss(
