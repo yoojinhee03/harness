@@ -37,6 +37,7 @@ from .rank_eval import (
 )
 from .ranking import RankedComponent, rank
 from .reasoning import ClaudeReasoner, NullReasoner, Reasoner, get_reasoner, make_reasoner
+from .recipes import Recipe, RecipeMeta, load_recipe, load_recipes, resolve_recipes_dir
 from .recommender import (
     CapabilityGap,
     LiveRecommender,
@@ -96,6 +97,8 @@ __all__ = [
     "LocalEmbedder",
     "MCPRegistrySource",
     "NullReasoner",
+    "Recipe",
+    "RecipeMeta",
     "RankedComponent",
     "RankingCase",
     "Reasoner",
@@ -124,6 +127,9 @@ __all__ = [
     "harvest",
     "harvest_component",
     "load_cases",
+    "load_recipe",
+    "load_recipes",
+    "resolve_recipes_dir",
     "usage_signal",
     "usage_signals",
     "load_components",

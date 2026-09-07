@@ -17,7 +17,13 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from harness_catalog import build_registry, facet_for_capability, suggested_component_type
+from harness_catalog import (
+    build_registry,
+    facet_for_capability,
+    load_recipe,
+    load_recipes,
+    suggested_component_type,
+)
 from harness_resolver import (
     HarnessConfig,
     InMemoryRegistry,
@@ -87,6 +93,37 @@ def _print_diagnostics(result: ResolveResult) -> None:
         print(f"  • [gap] {item.capability} (요구: {item.component_id})", file=sys.stderr)
     for item in d.warnings:
         print(f"  ! [warn] {item.code}: {item.message}", file=sys.stderr)
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """검증된 레시피로 harness.yaml 을 만든다 — 콜드스타트("무엇부터 골라야 하나")를 없앤다."""
+    if args.list or not args.recipe:
+        for r in load_recipes():
+            print(f"  {r.meta.name:14s} {r.meta.title} — {r.meta.description}")
+            for w in r.meta.use_when:
+                print(f"      · {w}")
+        if not args.recipe:
+            print("\n사용: harness init --recipe <이름> [-o harness.yaml]")
+        return 0
+
+    try:
+        recipe = load_recipe(args.recipe)
+    except KeyError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+
+    doc = recipe.config.model_dump(exclude_none=True, exclude_defaults=True, by_alias=True)
+    text = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+    out = Path(args.output) if args.output else None
+    if out is None:
+        print(text.rstrip())
+        return 0
+    if out.exists() and not args.force:
+        print(f"✗ {out} 가 이미 있습니다(--force 로 덮어쓰기)", file=sys.stderr)
+        return 1
+    out.write_text(text, encoding="utf-8")
+    print(f"✓ {out} 생성 — {recipe.meta.title}. 시작점이니 팀에 맞게 고쳐 쓰세요.")
+    return 0
 
 
 def cmd_resolve(args: argparse.Namespace) -> int:
@@ -398,6 +435,13 @@ def _emit_signals(findings: dict[str, list[dict[str, Any]]], component_ids: list
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="harness", description="harness.yaml 을 resolve/eject 한다.")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_init = sub.add_parser("init", help="검증된 레시피로 harness.yaml 을 만든다.")
+    p_init.add_argument("--recipe", default=None, help="레시피 이름(생략 시 목록 출력)")
+    p_init.add_argument("--list", action="store_true", help="레시피 목록만 출력")
+    p_init.add_argument("-o", "--output", default=None, help="쓸 파일 경로(생략 시 stdout)")
+    p_init.add_argument("--force", action="store_true", help="기존 파일 덮어쓰기")
+    p_init.set_defaults(func=cmd_init)
 
     p_resolve = sub.add_parser("resolve", help="harness.yaml 을 검증(진단)한다.")
     p_resolve.add_argument("config", help="harness.yaml 경로")

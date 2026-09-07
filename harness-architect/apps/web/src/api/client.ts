@@ -183,6 +183,39 @@ export interface PreviewReport {
   notes: string[];
 }
 
+/** 레시피 — 검증된 시작점(Phase 9-3). 카탈로그 위의 큐레이션이라 컴포넌트를 새로 만들지 않는다. */
+export interface RecipeMeta {
+  name: string;
+  title: string;
+  description: string;
+  use_when: string[];
+}
+
+export interface RecipeDetail {
+  meta: RecipeMeta;
+  yaml: string;
+  config: Record<string, unknown>;
+}
+
+export type DoctorIssue = "ok" | "missing" | "deprecated" | "upgrade_available" | "unpinned";
+
+export interface ComponentDiagnosis {
+  component_id: string;
+  issue: DoctorIssue;
+  pinned_version: string | null;
+  current_version: string | null;
+  latest_version: string | null;
+  status: string;
+  detail: string;
+  suggested_ref: string | null;
+}
+
+export interface DoctorReport {
+  harness_id: string;
+  findings: ComponentDiagnosis[];
+  notes: string[];
+}
+
 export interface HarnessSummary {
   id: string;
   scope: string; // "personal:<uid>" | "team:<tid>"
@@ -525,6 +558,16 @@ export const api = {
   // 저장된 하네스(에이전트) 검증·내보내기 — 하네스 상세(구 생성 위저드 C·D 대체).
   validateHarness: (id: string, scope = "personal") =>
     post<ResolveResult>(`/harnesses/${encodeURIComponent(id)}/validate?scope=${encodeURIComponent(scope)}`, undefined),
+  // ── 레시피(시작점) ──
+  recipes: () => fetch(`${BASE}/recipes`).then((r) => r.json() as Promise<RecipeMeta[]>),
+  recipe: (name: string) =>
+    fetch(`${BASE}/recipes/${encodeURIComponent(name)}`).then((r) => {
+      if (!r.ok) throw new Error(`레시피를 불러오지 못했습니다 (${r.status})`);
+      return r.json() as Promise<RecipeDetail>;
+    }),
+  /** 드리프트 진단 — 저장된 구성이 현재 카탈로그에 뒤처졌는가. 제안만 내고 고치지 않는다. */
+  doctorHarness: (id: string, scope = "personal") =>
+    post<DoctorReport>(`/harnesses/${encodeURIComponent(id)}/doctor?scope=${encodeURIComponent(scope)}`, undefined),
   /** 저장된 하네스의 실행 전 조립 분해(프리뷰 탭). 모델 호출 없음. */
   previewHarness: (id: string, scope = "personal", target?: string) => {
     const sp = new URLSearchParams({ scope });

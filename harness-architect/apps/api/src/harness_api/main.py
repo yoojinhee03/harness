@@ -34,6 +34,8 @@ from harness_catalog import (
     LiveRecommender,
     Recommender,
     build_registry,
+    load_recipe,
+    load_recipes,
     load_settings,
     resolve_catalog_dir,
 )
@@ -700,6 +702,29 @@ def preview_endpoint(
     return run_preview(
         body.to_config(), _scoped_registry(request, user), eject_target=target, policy=body.policy
     )
+
+
+@app.get("/recipes")
+def list_recipes() -> list[dict[str, Any]]:
+    """검증된 시작점 목록 (Phase 9-3). 콜드스타트("무엇부터 골라야 하나")를 없앤다."""
+    try:
+        return [r.meta.model_dump() for r in load_recipes()]
+    except FileNotFoundError:
+        return []  # 레시피 데이터가 없는 배포에서도 화면이 깨지지 않게
+
+
+@app.get("/recipes/{name}")
+def get_recipe(name: str) -> dict[str, Any]:
+    """레시피 하나 — 메타 + 바로 저장 가능한 harness.yaml."""
+    try:
+        recipe = load_recipe(name)
+    except (KeyError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "meta": recipe.meta.model_dump(),
+        "yaml": to_harness_yaml(recipe.config),
+        "config": recipe.config.model_dump(exclude_none=True, exclude_defaults=True, by_alias=True),
+    }
 
 
 @app.post("/doctor", response_model=DoctorReport)

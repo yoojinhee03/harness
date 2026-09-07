@@ -280,6 +280,32 @@ def test_verify_endpoint_required_missing_violation(client):
     assert body["ok"] is False and "required_missing" in body["violations"]
 
 
+# ── 레시피 (Phase 9-3) ──
+
+
+def test_recipes_list(client):
+    names = {r["name"] for r in client.get("/recipes").json()}
+    assert {"pr-review", "issue-triage", "doc-draft"} <= names
+
+
+def test_recipe_detail_is_immediately_usable(client):
+    """레시피 yaml 이 그대로 resolve 를 통과해야 한다 — 안 그러면 시작점이 아니다."""
+    d = client.get("/recipes/pr-review").json()
+    assert d["meta"]["title"] == "PR 리뷰 봇"
+    assert "github-mcp" in d["yaml"]
+    assert client.post("/resolve", json=d["config"]).json()["ok"] is True
+
+
+def test_every_recipe_resolves_over_api(client):
+    for meta in client.get("/recipes").json():
+        d = client.get(f"/recipes/{meta['name']}").json()
+        assert client.post("/resolve", json=d["config"]).json()["ok"] is True, meta["name"]
+
+
+def test_unknown_recipe_404(client):
+    assert client.get("/recipes/nope").status_code == 404
+
+
 # ── 드리프트 진단 (Phase 9-2) ──
 
 

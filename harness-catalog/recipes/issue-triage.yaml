@@ -1,0 +1,22 @@
+recipe:
+  name: issue-triage
+  title: 이슈 분류 에이전트
+  description: 새 이슈를 읽고 우선순위·카테고리 라벨을 달아 분류한다.
+  use_when:
+    - 들어오는 이슈가 많아 분류에 시간이 든다
+    - 라벨 기준을 일관되게 적용하고 싶다
+
+harness:
+  metadata:
+    id: issue-triage-bot
+    name: 이슈 분류 에이전트
+  model:
+    name: claude-sonnet-5
+  permissions:
+    vcs.issue-tracking: read-only
+  components:
+    - ref: github-mcp@1.4.0
+    - ref: issue-triage-skill@1.0.0
+  prompt:
+    system:
+      - inline: 너는 이슈 트리아지 담당이다. 근거 없이 라벨을 붙이지 말고, 불확실하면 그렇게 말한다.
