@@ -87,7 +87,7 @@ harness/                       # 한 레포
 ## 기술 스택 (요약)
 
 - **백엔드**: Python 3.12 · FastAPI · Pydantic v2 · anthropic SDK (Claude Sonnet 5)
-- **RAG**: pgvector · Voyage AI 임베딩(스왑 가능, 로컬 폴백) · Claude 랭킹
+- **RAG**: pgvector · OpenAI 임베딩(스왑 가능, 로컬 해싱 폴백) · Claude 랭킹
 - **프론트**: React · TypeScript · Vite · Tailwind · shadcn/ui · TanStack Query
 - **툴링**: uv 워크스페이스 · ruff · mypy · pytest · GitHub Actions · docker-compose
 
@@ -113,7 +113,8 @@ docker compose --profile pgvector up # + pgvector DB (MVP 는 인메모리라 �
 ```
 
 키 없이도 로컬 임베딩/휴리스틱 폴백으로 전 구간이 돈다. 품질 모드는 루트에 `.env` 를 두고
-`ANTHROPIC_API_KEY`·`VOYAGE_API_KEY` 를 넣으면 자동 활성(`cp .env.example .env`).
+`ANTHROPIC_API_KEY`(추출·랭킹)·`OPENAI_API_KEY`(임베딩) 를 넣으면 자동 활성(`cp .env.example .env`).
+저장된 사용자 키를 암호화하려면 `HARNESS_SECRET_KEY` 도 필요하다(미설정 시 키 저장을 거부한다).
 
 > **포트 충돌** — 기본 웹 `8080`·API `8000`. 이미 쓰는 스택이 있으면
 > `WEB_PORT=9000 API_PORT=9001 docker compose up` 처럼 바꾼다(또는 `.env`).
@@ -156,7 +157,7 @@ corepack pnpm dev                                 # http://localhost:5173
 - ✅ 설계 완료 (스코프·카탈로그 스키마·리졸버·harness.yaml 스펙·훅 실행 모델·피드백 루프·화면)
 - ✅ 리졸버 슬라이스 — 8단계 파이프라인, 성공/gap/충돌/미지 테스트 통과
 - ✅ RAG 추천 — 로컬 폴백으로 관통 (추출 → 검색 → 랭킹)
-- ✅ RAG 실연동 — Voyage 임베더·Claude Reasoner 주입 가능(키 있으면 자동, 없으면 폴백)
+- ✅ RAG 실연동 — OpenAI 임베더·Claude Reasoner 주입 가능(키 있으면 자동, 없으면 로컬 폴백)
 - ✅ 런타임 — 빌더 + 훅 엔진(sandbox·timeout·권한 강제) + Anthropic 러너(dry_run), `POST /run`
 - ✅ OpenHarness 임베드(선택) — 검증된 IR 을 오픈소스 [OpenHarness](https://github.com/HKUDS/OpenHarness) `QueryEngine` 에 태워 **실제 에이전트 루프(Action·Observation)** 실행. 우리는 Tools·Knowledge·Permissions 를 찍고 루프는 OpenHarness 가 준다 → 5요소 완성. `pip install openharness-ai` 로 옵트인(코어는 이것 없이도 오프라인 완주)
 - ✅ 프론트엔드 — 화면 A~F (생성 A~D · 카탈로그 E · 대시보드 F)
@@ -164,15 +165,19 @@ corepack pnpm dev                                 # http://localhost:5173
 - ✅ 다중 런타임 컴파일 (`eject`) — `ResolvedHarness` → **Claude Code · Cursor** 두 Emitter · `POST /eject` + `harness eject/resolve` CLI (**플래그십**). 같은 IR 이 `.claude/`(CLAUDE.md·.mcp.json·settings.json)와 `.cursor/`(rules/*.mdc·mcp.json)로 방출된다(Cline·Raw 는 seam 만). MCP 서버는 실행 스펙을 갖춰 **그대로 도는 `.mcp.json`** 으로 나가고(훅 `command` 도 카탈로그가 주면 실 명령), 두 타깃이 mcpServers 조립을 공유한다.
 - ✅ 프롬프트 관리 — 시스템 프롬프트를 합성·변수·버전·린트 가능한 1급 아티팩트로(리졸버 prompt 합성 단계 + 카탈로그 프롬프트 조각)
 - ✅ MCP 서버 — recommend·resolve·eject 를 MCP 툴로(Claude Code·Cursor·Desktop), in-process·백엔드 불필요 → [harness-architect/apps/mcp](./harness-architect/apps/mcp)
-- 🚧 하드닝 — 실 네트워크 호출(키 필요) · 훅 프로세스/WASM 격리 · pgvector 전환
+- 🚧 하드닝 — 실 네트워크 호출(키 필요) · 훅 프로세스/WASM 격리 (pgvector 전환은 완료)
 
 **다음 (v2 — 차별화 로드맵):** harness.yaml 을 *실행 포맷*이 아니라 **소스 오브 트루스**로 두고,
 검증된 IR(`ResolvedHarness`)을 아무 런타임으로나 컴파일한다. 기존 플러그인의 포맷 락인·수동
 조립·런타임 터짐·학습 없음을 정면으로 뒤집는 게 목표다.
 
-- ✅ 이젝트 타깃 — Claude Code·Cursor(`.cursor/rules`) 관통. 📋 남은 타깃: Cline·Raw API Emitter
-- 📋 실행 전 프리뷰/시뮬레이터 · 역방향 `adopt`(기존 설정 흡수) · 정책 as code(팀 가드레일)
-- 📋 경험적 검증 — 프롬프트 eval(입력→기대속성)로 "하네스가 실제로 낫다"를 측정해 피드백 루프에 연결 → [docs/plan/11](./harness-architect/docs/plan/11-empirical-validation.md)
+- ✅ 이젝트 타깃 — Claude Code·Cursor(`.cursor/rules`)·Harness Protocol v1 세 이미터. 📋 남은 타깃: Cline·Raw API
+- ✅ 실행 전 프리뷰/시뮬레이터 — 조립 분해(프롬프트 조각·MCP 전송 여부·훅 타임라인·예산)를 **모델 호출 없이**. `harness preview` · `POST /preview` · 하네스 상세 프리뷰 탭
+- ✅ 역방향 `adopt` — 쓰던 `.claude/`·`.cursor/` 를 harness.yaml IR 로 흡수. `harness adopt` · `POST /adopt` · 웹 "기존 설정 가져오기"(온보딩 진입점)
+- ✅ 정책 as code — `policy.yaml` 로 조직 가드레일(require·forbid·budget·auth)을 리졸버가 강제. 위반은 `policy_violation` 으로 차단
+- ✅ 피드백 루프 & 카탈로그 생애주기 — 실사용 keep/drop → 랭킹 신호(옵트인) · `harness doctor` 드리프트 진단 · 레시피 3종 시작점
+- 🟡 경험적 검증 — `harness eval`·`harness ablate` CLI 와 결정적 채점기는 완료. 남은 것: `POST /eval`·화면 노출·시나리오 eval 셋 확충 → [docs/plan/11](./harness-architect/docs/plan/11-empirical-validation.md)
+- ✅ 랭킹 회귀 펜스 — 추천 품질 골든셋(`harness-catalog/evals/ranking-golden.yaml`)으로 `ranking.py` 퇴행을 잡는다
 - 📋 피드백 루프 활성화 & 카탈로그 생애주기(드리프트·레시피)
 
 > 진행 플랜(v1 완료 + v2 로드맵)과 우선순위·의존성·단계별 완료 기준:

@@ -19,6 +19,19 @@ _ROOT = Path(__file__).resolve().parents[4]  # <repo>
 _ENV_EXAMPLE = _ROOT / ".env.example"
 _SOURCE_DIRS = [_ROOT / "harness-architect" / "packages", _ROOT / "harness-architect" / "apps"]
 
+# 사용자에게 "이걸 설정하라"고 지시하는 문서들 — 코드가 안 읽는 걸 넣으라고 하면 안 된다.
+# .env.example 만 막았더니 README·compose 가 Voyage 를 계속 안내하고 있었다(실제로 겪은 일).
+_USER_FACING = [
+    _ROOT / ".env.example",
+    _ROOT / "README.md",
+    _ROOT / "harness-architect" / "README.md",
+    _ROOT / "docker-compose.yml",
+]
+
+# 제거된 공급자·설정 — 사용자 대면 문서에 남으면 채워도 아무 일이 안 일어난다.
+# (docs/plan 의 과거 Phase 기록은 당시 사실이라 대상이 아니다.)
+_REMOVED = ("VOYAGE_API_KEY", "HARNESS_EMBED_MODEL")
+
 # 코드에서 env 를 읽는 형태들.
 _READ = re.compile(r'os\.environ(?:\.get)?\(\s*"([A-Z][A-Z0-9_]*)"|os\.getenv\(\s*"([A-Z][A-Z0-9_]*)"')
 
@@ -56,11 +69,21 @@ def test_every_env_var_read_by_code_is_documented():
     )
 
 
-def test_no_removed_provider_leftovers():
-    """제거된 공급자의 잔재가 남아 있으면 안 된다 — 채워도 아무 일이 안 일어난다."""
-    text = _ENV_EXAMPLE.read_text(encoding="utf-8")
-    for dead in ("VOYAGE_API_KEY", "HARNESS_EMBED_MODEL="):
-        assert dead not in text, f"{dead} 는 더 이상 쓰이지 않는다"
+@pytest.mark.parametrize("doc", _USER_FACING, ids=lambda p: p.name)
+def test_no_removed_settings_in_user_facing_docs(doc):
+    """제거된 설정을 안내하는 문서가 없어야 한다.
+
+    `.env.example` 만 검사했을 때 README·compose 가 `VOYAGE_API_KEY` 를 계속 안내하고 있었다 —
+    문서가 아무 효과 없는 일을 지시하는 상태였다. 사용자 대면 문서 전부를 본다.
+    """
+    if not doc.is_file():
+        pytest.skip(f"{doc} 없음")
+    text = doc.read_text(encoding="utf-8")
+    leftovers = [name for name in _REMOVED if name in text]
+    assert leftovers == [], (
+        f"{doc.name} 이 제거된 설정을 안내한다: {', '.join(leftovers)} — "
+        "코드가 읽지 않으므로 채워도 아무 일이 안 일어난다."
+    )
 
 
 @pytest.mark.parametrize(
