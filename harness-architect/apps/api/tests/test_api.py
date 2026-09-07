@@ -262,3 +262,126 @@ def test_generate_yaml_includes_prompt_block(client):
     data = client.post("/generate", json=body).json()
     assert "prompt:" in data["yaml"]
     assert "너는 시니어 리뷰어다." in data["yaml"]
+
+
+def test_verify_endpoint_clean(client):
+    """POST /verify — 프롬프트만 있는 트리는 통과(ok). CLI 와 같은 verify 코어."""
+    r = client.post("/verify", json={"files": {"CLAUDE.md": "You review PRs."}})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+def test_verify_endpoint_required_missing_violation(client):
+    r = client.post(
+        "/verify", json={"files": {"CLAUDE.md": "x"}, "require": ["media.transcode"]}
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False and "required_missing" in body["violations"]
+
+
+PREVIEW_BODY = {
+    "metadata": {"id": "pr-bot"},
+    "permissions": {"vcs.code-hosting": "read-only"},
+    "components": [
+        {"ref": "github-mcp@1.4.0"},
+        {"ref": "pr-review-skill@2.1.0"},
+        {"ref": "secret-scan-hook@1.2.0"},
+    ],
+    "prompt": {"system": [{"inline": "너는 시니어 리뷰어다."}]},
+}
+
+
+def test_preview_decomposes_without_calling_model(client):
+    """POST /preview — 조립 분해(프롬프트 조각·MCP·훅·예산). 모델 호출 없음."""
+    r = client.post("/preview", json=PREVIEW_BODY)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["context_budget"]["used"] > 0
+    assert sum(c["context_tokens"] for c in body["components"]) == body["context_budget"]["used"]
+    assert [s["source"] for s in body["prompt_sections"]][0] == "inline"
+    assert body["hooks"]["before_tool_call"][0]["id"] == "secret-scan-hook"
+    assert body["eject_files"] is None  # target 미지정이면 방출 미리보기 없음
+
+
+def test_preview_with_eject_target_includes_file_tree(client):
+    body = client.post("/preview", json=PREVIEW_BODY, params={"target": "claude-code"}).json()
+    assert body["eject_target"] == "claude-code"
+    assert "CLAUDE.md" in body["eject_files"]
+
+
+def test_preview_rejects_unknown_target(client):
+    r = client.post("/preview", json=PREVIEW_BODY, params={"target": "nope"})
+    assert r.status_code == 400
+
+
+def test_preview_surfaces_resolver_diagnostics(client):
+    """예산을 조이면 리졸버 경고가 그대로 실려 나온다(프리뷰가 재계산하지 않는다)."""
+    body = client.post(
+        "/preview", json={**PREVIEW_BODY, "budget": {"context_tokens": 10, "added_tools": 1}}
+    ).json()
+    assert "token_budget_exceeded" in {d["code"] for d in body["diagnostics"]}
+    assert body["context_budget"]["used"] > body["context_budget"]["limit"]
+
+
+ADOPT_TREE = {
+    ".mcp.json": (
+        '{"mcpServers": {"github-mcp": {"command": "npx", "args": []}, '
+        '"slack-mcp": {"command": "npx", "args": []}}}'
+    ),
+    "CLAUDE.md": "너는 시니어 코드 리뷰어다.",
+}
+
+
+def test_adopt_endpoint_returns_usable_ir(client):
+    """POST /adopt — 네이티브 트리가 편집 가능한 harness.yaml IR 로 돌아온다(온보딩 진입점)."""
+    r = client.post("/adopt", json={"files": ADOPT_TREE, "harness_id": "my-bot"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "github-mcp" in body["yaml"] and "slack-mcp" in body["yaml"]
+    assert body["config"]["metadata"]["id"] == "my-bot"
+    assert "너는 시니어 코드 리뷰어다." in body["yaml"]  # CLAUDE.md 본문이 inline prompt 로 보존
+    assert body["ok"] is True and body["errors"] == 0
+
+
+def test_adopt_result_round_trips_through_resolve(client):
+    """adopt 산출 config 가 그대로 /resolve 를 통과해야 한다 — 안 그러면 온보딩이 끊긴다."""
+    config = client.post("/adopt", json={"files": ADOPT_TREE}).json()["config"]
+    r = client.post("/resolve", json=config)
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+def test_adopt_preserves_unknown_without_inventing(client):
+    """카탈로그에 없는 서버는 unknown 으로 보존만 한다 — 비슷한 걸로 지어내면 안 된다(환각 금지)."""
+    files = {".mcp.json": '{"mcpServers": {"weird-unknown-mcp": {"command": "npx", "args": []}}}'}
+    body = client.post("/adopt", json={"files": files}).json()
+    assert body["unknown_mcp"] == ["weird-unknown-mcp"]
+    assert "weird-unknown-mcp" not in body["yaml"]  # ref 로 승격되지 않는다
+    assert body["config"].get("components", []) == []
+
+
+def test_adopt_endpoint_records_cooccurrence(client):
+    """adopt 로 해소된 조합은 '실제로 함께 쓰이던' 관측이라 공출현에 기록된다(백로그 #2 데이터)."""
+    from harness_api.cooccurrence import CooccurrenceStore
+
+    client.post("/adopt", json={"files": ADOPT_TREE})
+    pairs = {tuple(p["pair"]) for p in CooccurrenceStore(app.state.engine).top()}
+    assert ("github-mcp", "slack-mcp") in pairs
+
+
+def test_verify_endpoint_records_cooccurrence(client):
+    """MCP 2개 트리 → 공출현이 DB 에 기록된다(TASK 5e durable)."""
+    files = {
+        ".mcp.json": (
+            '{"mcpServers": {"github-mcp": {"command": "npx", "args": []}, '
+            '"slack-mcp": {"command": "npx", "args": []}}}'
+        )
+    }
+    r = client.post("/verify", json={"files": files})
+    assert r.status_code == 200
+    from harness_api.cooccurrence import CooccurrenceStore
+
+    pairs = {tuple(p["pair"]) for p in CooccurrenceStore(app.state.engine).top()}
+    assert ("github-mcp", "slack-mcp") in pairs

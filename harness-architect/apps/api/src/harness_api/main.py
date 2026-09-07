@@ -37,7 +37,18 @@ from harness_catalog import (
     resolve_catalog_dir,
 )
 from harness_resolver import Component, InMemoryRegistry, ResolveResult, resolve
-from harness_runtime import AnthropicRunner, available_targets, build_request, emit
+from harness_runtime import (
+    DEFAULT_SEVERITY,
+    AnthropicRunner,
+    PreviewReport,
+    available_targets,
+    build_request,
+    emit,
+)
+from harness_runtime import adopt as run_adopt
+from harness_runtime import preview as run_preview
+from harness_runtime import verify as run_verify
+from harness_runtime import violations as compute_violations
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -48,6 +59,7 @@ from .authoring import COMPONENT_TYPES, author_component, test_component, valida
 from .catalog_store import CatalogStore, DbCatalogSource, sync_catalog
 from .component_store import ComponentStore, UserComponentSource, component_event_stream
 from .conversation_store import ConversationStore, conversation_event_stream
+from .cooccurrence import CooccurrenceStore
 from .gap_demand import GapDemand
 from .harness_build import parse_harness_yaml, to_harness_yaml
 from .llm_client import DEFAULT_MODEL
@@ -67,6 +79,8 @@ from .orchestrator import studio_run as _studio_run
 from .orchestrator import suggest_title as _suggest_title
 from .promotion import promote_component
 from .schemas import (
+    AdoptBody,
+    AdoptResponse,
     CatalogItem,
     ComponentAuthorBody,
     ComponentSaveBody,
@@ -83,6 +97,7 @@ from .schemas import (
     StudioRunBody,
     TeamCreateBody,
     TokenCreateBody,
+    VerifyBody,
 )
 from .scoped_recommender import ScopedRecommender
 from .store import (
@@ -136,10 +151,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 시작 시 확정한다(키 변경은 재시작으로 반영). 서버 env 는 쓰지 않는다.
     from harness_catalog import (
         CapabilityEnricher,
+        ChainEnricher,
         LocalEmbedder,
         OpenAIEmbedder,
         make_classifier,
         make_reasoner,
+        zeroshot_classifier,
     )
 
     _app_llm = AppSettingsStore(engine).resolve()
@@ -166,9 +183,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.recommender = LiveRecommender(
         registry, embedder=embedder, reasoner=reasoner, store=vector_store
     )
-    enricher = CapabilityEnricher(
+    enricher: Any = CapabilityEnricher(
         classifier=make_classifier(_provider, _llm_key), max_enrich=cfg.registry_enrich_max
     )
+    # TASK 3: 제로샷 caps 태깅(옵트인). semantic 임베더(OpenAI 키)가 있을 때만 활성 — LocalEmbedder 는
+    # 정밀도 부족(baseline §6)이라 켜지 않는다. caps 임베더는 서빙과 **분리·고정**(결정성). 제로샷(전량,
+    # 결정적) → LLM(모호한 잔여만) 순으로 체인. threshold 는 활성화 전 eval_zeroshot.py 로 재보정할 것.
+    if cfg.use_caps_zeroshot and _emb_key:
+        zs = CapabilityEnricher(
+            classifier=zeroshot_classifier(
+                threshold=cfg.caps_zeroshot_threshold, embedder=OpenAIEmbedder(api_key=_emb_key)
+            ),
+            max_enrich=1_000_000,
+        )
+        enricher = ChainEnricher([zs, enricher])
+        log.info("caps 제로샷 활성(threshold=%.2f, semantic 임베더)", cfg.caps_zeroshot_threshold)
+    elif cfg.use_caps_zeroshot:
+        log.warning("caps 제로샷 요청됐으나 embedding 키 없음 — 정밀도 부족이라 스킵(무보강 유지)")
 
     async def _sync_loop() -> None:
         # 주기적으로 하이브리드 harvest→DB(증분 또는 full). 첫 기동엔 상태가 없어 즉시 1회(full),
@@ -488,6 +519,82 @@ def gaps_top(request: Request, n: int = Query(10, ge=1, le=50)) -> dict[str, Any
     return {"gaps": _gap_demand(request).top(n)}
 
 
+@app.post("/verify")
+@limiter.limit("30/minute")
+def verify_endpoint(
+    request: Request, body: VerifyBody, user: dict[str, Any] | None = Depends(optional_user)
+) -> dict[str, Any]:
+    """업로드된 .claude/.cursor 트리를 adopt→resolve 로 정적 검증(CLI `harness verify` 의 API 판).
+
+    판정은 CLI 와 동일한 `harness_runtime.verify` 코어(드리프트 방지). gap→GapDemand(source=verify) +
+    컴포넌트 공출현을 DB 에 durable 기록(TASK 5e) — 기록은 **비차단**(실패해도 검증 응답은 정상).
+    caps 판정은 TASK 3 완료 전 잠정이라 기본 warning(policy 로 오버라이드 가능).
+    """
+    registry = _scoped_registry(request, user)
+    try:
+        report = run_verify(body.files, registry, require=body.require, target=body.target)
+    except ValueError as exc:  # 미지원 타깃 등
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    severity = {**DEFAULT_SEVERITY, **(body.policy or {})}
+    viols = compute_violations(report.findings, severity)
+    # 데이터 수집(비차단) — gap 수요(source=verify) + 컴포넌트 공출현
+    _record_gaps(request, [{"capability": c} for c in report.gap_capabilities], "verify")
+    try:
+        CooccurrenceStore(request.app.state.engine).record(report.component_ids)
+    except Exception as exc:  # noqa: BLE001 — 비차단
+        log.warning("공출현 기록 실패(무시): %s", exc)
+    return {
+        "ok": not viols,
+        "violations": viols,
+        "findings": {c: v for c, v in report.findings.items() if v and severity.get(c) != "ignore"},
+        "adopt": {
+            "unknown_mcp": report.unknown_mcp,
+            "unknown_skills": report.unknown_skills,
+            "hooks": report.hooks,
+        },
+        "note": "capability 판정은 TASK 3(caps 커버리지) 완료 전 잠정 — 거짓 gap 가능(기본 warning)",
+    }
+
+
+@app.post("/adopt", response_model=AdoptResponse)
+@limiter.limit("30/minute")
+def adopt_endpoint(
+    request: Request, body: AdoptBody, user: dict[str, Any] | None = Depends(optional_user)
+) -> AdoptResponse:
+    """업로드된 .claude/.cursor 트리 → harness.yaml IR(CLI `harness adopt` 의 API 판).
+
+    온보딩 진입점이다 — 쓰던 설정을 그대로 올리면 편집 가능한 하네스가 된다. 판정이 아니라
+    **변환**이 목적이라 상세 진단은 내지 않는다(그건 `/verify`). `harness_runtime.adopt` 를
+    CLI 와 공유하므로 흡수 규칙이 갈라지지 않는다.
+
+    adopt 로 해소된 컴포넌트 집합은 '실제로 함께 쓰이던 조합'이라 공출현 신호로 기록한다
+    (`/verify` 와 동일, **비차단**). 온보딩이 verify 보다 트래픽이 많을 경로라 백로그 #2 의
+    데이터 게이트를 여기서 더 빨리 채운다.
+    """
+    registry = _scoped_registry(request, user)
+    adopted = run_adopt(body.files, registry, harness_id=body.harness_id)
+    result = resolve(adopted.config, registry)
+
+    ids = [rc.id for rc in result.resolved.components] if result.resolved else []
+    try:
+        CooccurrenceStore(request.app.state.engine).record(ids)
+    except Exception as exc:  # noqa: BLE001 — 비차단(기록 실패가 변환을 막지 않는다)
+        log.warning("공출현 기록 실패(무시): %s", exc)
+
+    return AdoptResponse(
+        yaml=to_harness_yaml(adopted.config),
+        config=adopted.config.model_dump(exclude_none=True, exclude_defaults=True, by_alias=True),
+        ok=result.ok,
+        gaps=len(result.diagnostics.gaps),
+        warnings=len(result.diagnostics.warnings),
+        errors=len(result.diagnostics.errors),
+        unknown_mcp=adopted.unknown_mcp,
+        unknown_skills=adopted.unknown_skills,
+        hooks=adopted.hooks,
+        notes=adopted.notes,
+    )
+
+
 @app.post("/resolve", response_model=ResolveResult)
 def resolve_endpoint(
     request: Request, body: ResolveRequest, user: dict[str, Any] | None = Depends(optional_user)
@@ -535,6 +642,23 @@ def run_endpoint(
         },
         "run": run.model_dump(),
     }
+
+
+@app.post("/preview", response_model=PreviewReport)
+def preview_endpoint(
+    request: Request,
+    body: ResolveRequest,
+    target: str | None = Query(None, description="함께 볼 eject 타깃(선택)"),
+    user: dict[str, Any] | None = Depends(optional_user),
+) -> PreviewReport:
+    """실행 전 조립 분해 — 시스템 프롬프트 조각·MCP·훅 타임라인·예산 (Phase 6). **모델 호출 없음.**
+
+    경고는 여기서 계산하지 않고 리졸버 진단을 그대로 싣는다(재계산하면 진실 원천이 갈라진다).
+    `harness_runtime.preview` 코어를 CLI 와 공유한다.
+    """
+    if target is not None and target not in available_targets():
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 타깃: {target} (가능: {available_targets()})")
+    return run_preview(body.to_config(), _scoped_registry(request, user), eject_target=target)
 
 
 @app.get("/eject/targets")
@@ -880,6 +1004,28 @@ def validate_harness(
     return resolve(config, _scoped_registry(request, user))
 
 
+@app.post("/harnesses/{hid}/preview", response_model=PreviewReport)
+def preview_harness(
+    request: Request,
+    hid: str,
+    scope: str = Query("personal"),
+    target: str | None = Query(None, description="함께 볼 eject 타깃(선택)"),
+    user: dict[str, Any] = Depends(current_user),
+) -> PreviewReport:
+    """저장된 harness.yaml 의 실행 전 조립 분해(Phase 6). 하네스 상세의 프리뷰 탭이 쓴다."""
+    if target is not None and target not in available_targets():
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 타깃: {target} (가능: {available_targets()})")
+    sk = _resolve_scope(request, user, scope)
+    doc = _store(request).get(sk, hid)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음(scope={scope})")
+    try:
+        config = parse_harness_yaml(doc["yaml"])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
+    return run_preview(config, _scoped_registry(request, user), eject_target=target)
+
+
 @app.post("/harnesses/{hid}/eject")
 def eject_harness(
     request: Request,
@@ -1067,6 +1213,7 @@ async def promote_component_endpoint(
     request: Request,
     cid: str,
     scope: str = Query("personal"),
+    allow_unsandboxed: bool = Query(False),  # sandbox=none 훅 추가 심사(거버넌스 게이트)
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
     """저작 컴포넌트를 공유 카탈로그로 승격(Phase 14 피드백 루프). 게이트: ready + validate 통과.
@@ -1077,7 +1224,9 @@ async def promote_component_endpoint(
     catalog_store = getattr(request.app.state, "catalog_store", None)
     if catalog_store is None:
         raise HTTPException(status_code=503, detail="카탈로그 스토어가 없습니다(harvest off).")
-    result = promote_component(_component_store(request), catalog_store, sk, cid)
+    result = promote_component(
+        _component_store(request), catalog_store, sk, cid, allow_unsandboxed=allow_unsandboxed
+    )
     if not result["ok"]:
         raise HTTPException(status_code=400, detail="; ".join(result["errors"]))
     return result

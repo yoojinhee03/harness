@@ -10,6 +10,7 @@ MCP `mcpServers` 직렬화는 Claude Code(.mcp.json)·Cursor(.cursor/mcp.json)�
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Protocol
 
 from harness_resolver import ResolvedComponent, ResolvedHarness
@@ -18,10 +19,27 @@ from harness_resolver import ResolvedComponent, ResolvedHarness
 FileTree = dict[str, str]
 
 
+@dataclass(frozen=True)
+class Loss:
+    """이 타깃으로 방출할 때 잃거나 근사되는 IR 요소(이식 손실). verify 가 정량 리포트한다.
+
+    손실 목록은 이미터가 **자기 자신에 대해 선언**한다(verify 가 하드코딩하지 않는다) — 이미터가
+    바뀌면 손실 선언도 같이 바뀌어 리포트가 자동 정합한다.
+    """
+
+    feature: str  # IR 필드/기능 (예: "hook_plan.after_request")
+    fidelity: str  # "unsupported"(대응 없음) | "approximate"(근사·부분 소실)
+    detail: str  # 사람이 읽는 설명
+
+
 class Emitter(Protocol):
     target: str
 
     def emit(self, resolved: ResolvedHarness) -> FileTree: ...
+
+    def losses(self, resolved: ResolvedHarness) -> list[Loss]:
+        """이 IR 을 target 으로 방출할 때 발생하는 이식 손실(실제 IR 기준으로 트리거된 것만)."""
+        ...
 
 
 def mcp_entry(c: ResolvedComponent) -> dict[str, object]:

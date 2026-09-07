@@ -5,16 +5,27 @@ RAG 엔진 *코드* 는 백엔드에 잔류하고, 컴포넌트 *데이터* 는 
 
 from __future__ import annotations
 
+from .caps_zeroshot import zeroshot_classifier
 from .embeddings import Embedder, LocalEmbedder, OpenAIEmbedder, get_embedder
 from .enrichment import (
     CapabilityClassifier,
     CapabilityEnricher,
+    ChainEnricher,
     claude_classifier,
     get_classifier,
     make_classifier,
 )
 from .harvest import ServerDescriptor, component_to_yaml, harvest, harvest_component, uncovered
 from .loader import build_registry, load_components, resolve_catalog_dir
+from .rank_eval import (
+    CaseResult,
+    EvalReport,
+    GoldenSet,
+    RankingCase,
+    build_eval_recommender,
+    evaluate,
+    load_cases,
+)
 from .ranking import RankedComponent, rank
 from .reasoning import ClaudeReasoner, NullReasoner, Reasoner, get_reasoner, make_reasoner
 from .recommender import (
@@ -58,8 +69,12 @@ __all__ = [
     "CapabilityClassifier",
     "CapabilityEnricher",
     "CapabilityGap",
+    "CaseResult",
+    "ChainEnricher",
     "ClaudeReasoner",
     "Embedder",
+    "EvalReport",
+    "GoldenSet",
     "FederatedRegistry",
     "Fetcher",
     "LiveRecommender",
@@ -69,6 +84,7 @@ __all__ = [
     "MCPRegistrySource",
     "NullReasoner",
     "RankedComponent",
+    "RankingCase",
     "Reasoner",
     "RecommendResult",
     "Recommendation",
@@ -77,8 +93,10 @@ __all__ = [
     "Settings",
     "VectorStore",
     "OpenAIEmbedder",
+    "build_eval_recommender",
     "build_live_sources",
     "build_registry",
+    "evaluate",
     "claude_classifier",
     "component_to_yaml",
     "descriptor_from_entry",
@@ -91,6 +109,7 @@ __all__ = [
     "plugin_to_component",
     "harvest",
     "harvest_component",
+    "load_cases",
     "load_components",
     "load_settings",
     "make_classifier",
@@ -100,4 +119,5 @@ __all__ = [
     "suggested_component_type",
     "uncovered",
     "urllib_fetcher",
+    "zeroshot_classifier",
 ]

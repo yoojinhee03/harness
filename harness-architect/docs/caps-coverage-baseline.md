@@ -93,6 +93,30 @@ python packages/catalog/scripts/measure_caps.py --from-snapshot live.json
 
 ---
 
+## 6. TASK 3 제로샷 측정 결과 (오프라인, LocalEmbedder) — 활성화 보류
+
+제로샷 분류기([caps_zeroshot.py](../packages/catalog/src/harness_catalog/caps_zeroshot.py))를 라이브
+스냅샷(425개)에 돌린 보정 결과([eval_zeroshot.py](../packages/catalog/scripts/eval_zeroshot.py)):
+
+| threshold | 빈 caps(259) 중 채움 | 정밀도(육안) |
+|---:|---:|---|
+| 0.25 | 43 (16.6%) | 낮음 — 표면('search') 매칭 다수 |
+| 0.30 | 17 (6.6%) | 낮음 |
+| 0.35 | 4 (1.5%) | 여전히 헛매칭(`aiven`(DB)→`web.search`) |
+| 0.40 | 1 (0.4%) | — |
+
+**결론**: LocalEmbedder(문자 트라이그램) 제로샷은 **정밀도 부족** — 유효 커버리지 구간에서 헛매칭이
+많아 켜면 **거짓 충족**(제공 못 하는 능력을 있는 척)이 발생한다("거짓 gap 보다 나쁘다"). 따라서
+**제로샷을 기본 sync 파이프라인에 연결하지 않는다**(인프라·보정 하네스만 준비). **활성화 조건**:
+OpenAI 등 semantic 임베더로 `eval_zeroshot.py --from-snapshot` 재측정 → 정밀도 확인 → 임계값 확정 →
+caps 분류 임베더를 **서빙과 분리·고정**해 배선. 이때 IDF `cap_weight`·`RELEVANCE_FLOOR` 재보정 +
+TASK 2 재평가(`reeval_gaps.py`)로 과거 거짓 gap 정화.
+
+> 즉 TASK 3(caps 커버리지)은 **semantic 임베더 없이는 안전하게 완료 불가**임이 데이터로 확인됐다.
+> 인프라는 준비 완료(키만 생기면 보정→배선). 그 전까진 60.9% 빈 caps 가 유지된다(정직 표기).
+
+---
+
 ## 부록 — 스크립트 검증 노트
 
 로컬 실측(빈 caps 0)은 원인 신호·샘플·버킷 경로를 타지 않으므로, 합성 스냅샷(빈 caps 포함)으로

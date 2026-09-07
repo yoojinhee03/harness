@@ -218,6 +218,20 @@ gap_demand = Table(
 )
 
 
+# 컴포넌트 공출현(durable) — 한 하네스(verify 로 검증된 실제 레포 등)에서 함께 등장한 컴포넌트 쌍의
+# 빈도(TASK 5e). 협업 필터링 신호("이 MCP 를 쓰면 이 훅도 같이 쓴다") — 랭킹 투입은 후속(백로그).
+# 쌍 정규화: comp_a < comp_b(사전순)로 대칭 중복 제거.
+component_cooccurrence = Table(
+    "component_cooccurrence",
+    metadata,
+    Column("comp_a", String(256), primary_key=True),
+    Column("comp_b", String(256), primary_key=True),
+    Column("count", Integer, nullable=False, default=0),
+    Column("first_seen_at", String(40), nullable=False),
+    Column("last_seen_at", String(40), nullable=False),
+)
+
+
 def resolve_database_url(store_dir: Path) -> str:
     """`DATABASE_URL`(프로덕션 Postgres) 또는 기본 SQLite(store 폴더 밑)."""
     env = os.environ.get("DATABASE_URL")

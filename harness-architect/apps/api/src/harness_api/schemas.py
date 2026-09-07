@@ -198,3 +198,39 @@ class RunRequest(ResolveRequest):
     """
 
     message: str = Field(min_length=1)
+
+
+class VerifyBody(BaseModel):
+    """POST /verify — 업로드된 네이티브 트리(상대경로→내용)를 정적 검증(harness verify 의 API 판)."""
+
+    files: dict[str, str] = Field(default_factory=dict)  # 예: {".mcp.json": "...", "CLAUDE.md": "..."}
+    require: list[str] = Field(default_factory=list)  # 요구 능력(통제어휘)
+    target: str | None = None  # 이식 손실을 잴 타깃(claude-code|cursor)
+    policy: dict[str, str] | None = None  # severity 오버라이드(선택)
+
+
+class AdoptBody(BaseModel):
+    """POST /adopt — 업로드된 네이티브 트리를 harness.yaml IR 로 역흡수(harness adopt 의 API 판)."""
+
+    files: dict[str, str] = Field(default_factory=dict)  # VerifyBody.files 와 같은 모양
+    harness_id: str = Field("adopted", min_length=1, max_length=64)
+
+
+class AdoptResponse(BaseModel):
+    """adopt 결과 — IR(yaml/config) + 흡수 손실(unknown·hooks) + resolve 요약.
+
+    `yaml` 은 그대로 저장·편집 가능한 harness.yaml 이고, `config` 는 스튜디오가 바로 열 수 있는
+    구조체다. 상세 판정은 `/verify` 몫이라 여기선 개수만 낸다(GenerateResponse 와 같은 결).
+    """
+
+    yaml: str
+    config: dict[str, object]
+    ok: bool
+    gaps: int
+    warnings: int
+    errors: int
+    # 흡수 손실 — adopt 가 '구조적으로 식별 가능한 것만' 복원하므로 남는 것들이다(환각 금지).
+    unknown_mcp: list[str] = Field(default_factory=list)  # 카탈로그에 없는 MCP(=수확 후보)
+    unknown_skills: list[str] = Field(default_factory=list)  # 카탈로그에 없는 SKILL.md
+    hooks: list[str] = Field(default_factory=list)  # 이벤트만 흡수된 훅(컴포넌트 미해석)
+    notes: list[str] = Field(default_factory=list)

@@ -23,9 +23,19 @@ PROMOTED_ORIGIN = "promoted"
 
 
 def promote_component(
-    cstore: ComponentStore, catalog_store: CatalogStore, scope: str, cid: str
+    cstore: ComponentStore,
+    catalog_store: CatalogStore,
+    scope: str,
+    cid: str,
+    *,
+    allow_unsandboxed: bool = False,
 ) -> dict[str, Any]:
-    """저작 컴포넌트를 공유 카탈로그로 승격. 게이트 실패 시 ok=False + 사유."""
+    """저작 컴포넌트를 공유 카탈로그로 승격. 게이트 실패 시 ok=False + 사유.
+
+    거버넌스 게이트(CONTRIBUTING §3): ready 상태 + validate 재검증에 더해, **sandbox=none 훅**은
+    무격리 실행이라 공유 카탈로그(전 유저 노출)로 올릴 때 공급망 위험이 크다 → 추가 심사(명시
+    `allow_unsandboxed`)가 없으면 차단한다. (다인 승인 워크플로는 후속 — durable 승인 테이블 필요.)
+    """
     doc = cstore.get(scope, cid)
     if doc is None:
         return {"ok": False, "errors": [f"컴포넌트 '{cid}' 없음(scope={scope})"], "promoted": None}
@@ -39,6 +49,15 @@ def promote_component(
     v = validate_component(comp)
     if not v["ok"]:
         return {"ok": False, "errors": v["errors"], "promoted": None}
+    if comp.type == "hook" and comp.sandbox == "none" and not allow_unsandboxed:
+        return {
+            "ok": False,
+            "errors": [
+                "sandbox=none 훅은 무격리로 실행돼 공유 카탈로그 승격 시 공급망 위험이 큽니다 — "
+                "추가 심사 후 allow_unsandboxed 로 명시 승인하세요."
+            ],
+            "promoted": None,
+        }
     catalog_store.upsert(PROMOTED_ORIGIN, [comp])
     return {
         "ok": True,

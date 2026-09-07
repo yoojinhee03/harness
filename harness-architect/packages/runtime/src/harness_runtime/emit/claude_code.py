@@ -17,7 +17,7 @@ import json
 from harness_resolver import ResolvedHarness
 from harness_resolver.models import HookStep, ResolvedComponent, ResolvedSubAgent
 
-from .base import FileTree, mcp_servers_json
+from .base import FileTree, Loss, mcp_servers_json
 
 # 하네스 훅 이벤트 → Claude Code 훅 이벤트 (근사; MAPPING.md 참조).
 # after_request 는 Claude Code 대응이 없어 방출을 생략한다.
@@ -47,6 +47,48 @@ class ClaudeCodeEmitter:
             if comp.type == "skill":
                 tree[f".claude/skills/{comp.id}/SKILL.md"] = self._skill_md(comp)
         return tree
+
+    def losses(self, resolved: ResolvedHarness) -> list[Loss]:
+        """이 IR 을 claude-code 로 방출할 때의 이식 손실(MAPPING.md 를 IR 기준으로 트리거된 것만)."""
+        out: list[Loss] = []
+        m = resolved.model
+        if m.max_tokens != 4096 or m.temperature != 0.2:
+            out.append(
+                Loss(
+                    "model.max_tokens/temperature",
+                    "unsupported",
+                    "Claude Code 가 자체 관리 — settings 필드가 아니라 무시됨",
+                )
+            )
+        if resolved.permissions:
+            out.append(
+                Loss(
+                    "permissions.scope",
+                    "approximate",
+                    "도구 단위 allow(mcp__<id>)로만 표현 — capability→scope(read-only 등) 소실",
+                )
+            )
+        if "after_request" in resolved.hook_plan:
+            out.append(
+                Loss(
+                    "hook_plan.after_request",
+                    "unsupported",
+                    "Claude Code 대응 이벤트 없음 → 방출 생략(가드레일 소실)",
+                )
+            )
+        if any(not s.emit_command for steps in resolved.hook_plan.values() for s in steps):
+            out.append(
+                Loss(
+                    "hook.command",
+                    "approximate",
+                    "emit_command 없는 훅은 셸 자리표시(echo…)로 방출 — 실제 핸들러/명령 교체 필요",
+                )
+            )
+        if any(c.type == "mcp" and c.config for c in resolved.components):
+            out.append(
+                Loss("mcp.config", "unsupported", "표준 .mcp.json 형태에 없어 생략(예: repo_filter)")
+            )
+        return out
 
     # ── .claude/skills/<id>/SKILL.md ← skill 본문(네이티브 Agent Skill) ──
     def _skill_md(self, comp: ResolvedComponent) -> str:
