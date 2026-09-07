@@ -501,7 +501,12 @@ TTL 라이브 소스가 직접 federate되어 generation을 흔들고 재색인�
     `harness-catalog/evals/ranking-golden.yaml`(8케이스) · `harness_catalog/rank_eval.py` ·
     `scripts/eval_ranking.py` · `tests/test_rank_eval.py`. 기준선: 통과율 100% · recall@k 1.0 ·
     mean_rr 0.6629 · 선호순서 5/7. **판정을 하드/소프트로 분리**해 개선은 통과시키고 퇴행만 잡는다.
-  - 🚫 **데이터 미충족** — 공출현 테이블이 `verify --record`/`POST /verify` 실사용으로 쌓여야 신호가 된다.
+  - 🚫 **데이터 미충족(2026-09-07 재확인)** — 공출현 테이블이 실사용으로 쌓여야 신호가 된다.
+    수집 경로는 이제 셋이다(`POST /verify`·`POST /adopt`·`/eject`) + 피드백(`HARNESS_FEEDBACK=on`).
+    ⚠️ **확인 중 함정을 하나 만났다**: 로컬 DB 에 공출현 128쌍·피드백 20관측이 있어 게이트가
+    충족된 것처럼 보였는데, 전부 **테스트 오염**이었다(`test_api.py` 의 module-scope 픽스처가
+    `HARNESS_STORE_DIR` 을 안 걸어 `~/.harness` 실 DB 에 썼다). conftest 에서 전역 격리로 막았다.
+    실사용 데이터는 **여전히 0** 이다 — 착수 판단 시 반드시 origin 을 확인할 것.
   - **착수 시 목표** — 골든셋에 *지금 위반 중인* 선호쌍 2개가 #2 가 고쳐야 할 지점으로 적혀 있다:
     `[pr-review-skill, slack-mcp]`(1차 의도인 리뷰 스킬이 알림 MCP 아래) ·
     `[doc-draft-skill, notion-mcp]`(requires 소비자가 공급자 아래). 5/7 → 7/7 이 성공 기준이다.
@@ -514,4 +519,16 @@ TTL 라이브 소스가 직접 federate되어 generation을 흔들고 재색인�
 - **다인 승인 워크플로** — sandbox 게이트는 완료. 다인 승인은 durable 승인 테이블(alembic)+엔드포인트 필요(중간 규모).
 - **skillsmp 소스 추가** — 주석의 Smithery/Glama/mcp.so는 전부 MCP라 공식 레지스트리와 겹친다.
   실제 공백은 non-mcp 타입이고 마켓플레이스 단일 파일 500개 상한이 병목. skillsmp 가 SKILL.md 를 REST 로 열어 델타가 크다.
-- **`verify --fix`** — gap 을 스튜디오 저작 루프로 연결. verify 판정이 안정된 뒤에.
+- ✅ **`verify --fix`** 완료(2026-09-07) — 다만 **범위를 좁혔다.** verify 의 결핍은 두 종류인데
+  고칠 수 있는 건 한 종류뿐이다:
+  - `unknown_mcp`/`unknown_skills` → **초안 생성**. 레포가 `.mcp.json` 항목·`SKILL.md` 본문을
+    이미 갖고 있으므로 발명이 아니라 **옮겨 적기**다. `harness_catalog.drafts`(순수) +
+    `harness verify --fix [--fix-out]`. 설명처럼 레포에 없는 정보는 비워 두고 사람이 채운다 —
+    지어내면 카탈로그가 오정보로 오염된다. `${VAR}` 표기도 그대로 보존(비밀을 초안에 박지 않는다).
+  - `capability_gap` → **못 고친다.** 새 컴포넌트를 발명해야 하므로 스튜디오·시딩 큐의 몫이다.
+    대신 다음 행동을 안내한다.
+  - **초안이지 등록이 아니다** — 카탈로그에 자동으로 넣지 않는다(무엇을 공유할지는 큐레이션
+    결정이고 휴리스틱 caps 는 검토가 필요하다. doctor 가 제안만 하는 것과 같은 원칙).
+  - ⚠️ 구현 중 잡은 오안내: 처음엔 미충족 능력을 전부 "새로 저작하라"고 했는데,
+    `lifecycle.guardrail` 처럼 **카탈로그엔 있고 이 하네스에만 없는** 경우가 섞여 있었다.
+    이미 있는 걸 중복 저작하게 만드는 안내라 두 상황을 분리했다(있으면 공급자 id 를 알려준다).

@@ -104,6 +104,7 @@ from .schemas import (
     HarnessSaveBody,
     LlmSettingsBody,
     MemberBody,
+    MemberRoleBody,
     RecommendRequest,
     ResolveRequest,
     RunRequest,
@@ -1100,6 +1101,44 @@ def add_team_member(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put("/teams/{tid}/members/{uid}")
+def set_team_member_role(
+    request: Request,
+    tid: str,
+    uid: str,
+    body: MemberRoleBody,
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """기존 멤버의 역할 변경 — **owner 만.** 마지막 owner 는 강등할 수 없다.
+
+    정책이 owner 전용이 된 이상 owner 집합은 팀의 통치 근거다. owner 가 0 이 되면 멤버 관리도
+    정책 변경도 아무도 못 하므로 최소 1명을 불변식으로 지킨다(400).
+    """
+    try:
+        return _accounts(request).set_member_role(tid, user["id"], uid, body.role)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/teams/{tid}/members/{uid}")
+def remove_team_member(
+    request: Request, tid: str, uid: str, user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    """멤버 제거 — owner 이거나 본인이 나가는 경우(self-leave). 마지막 owner 는 나갈 수 없다."""
+    try:
+        return _accounts(request).remove_member(tid, user["id"], uid)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ── 스코프 격리 하네스 저장소 (웹 ↔ VSCode 확장 양방향 동기화) ──

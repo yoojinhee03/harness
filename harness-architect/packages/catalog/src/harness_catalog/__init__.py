@@ -6,6 +6,7 @@ RAG 엔진 *코드* 는 백엔드에 잔류하고, 컴포넌트 *데이터* 는 
 from __future__ import annotations
 
 from .caps_zeroshot import zeroshot_classifier
+from .drafts import draft_mcp, draft_skill, drafts_from_native
 from .embeddings import Embedder, LocalEmbedder, OpenAIEmbedder, get_embedder
 from .enrichment import (
     CapabilityClassifier,
@@ -117,6 +118,9 @@ __all__ = [
     "claude_classifier",
     "component_to_yaml",
     "descriptor_from_entry",
+    "draft_mcp",
+    "draft_skill",
+    "drafts_from_native",
     "extract_capabilities_heuristic",
     "facet_for_capability",
     "federate",

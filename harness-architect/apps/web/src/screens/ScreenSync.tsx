@@ -197,14 +197,7 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
                     + 멤버 초대
                   </Button>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {t.members.map((m) => (
-                    <span key={m.id} className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-xs">
-                      <span className="text-fg/90" title={m.email}>{m.name || m.email}</span>
-                      <RoleBadge role={m.role} />
-                    </span>
-                  ))}
-                </div>
+                <MemberList team={t} meId={me.data?.id ?? ""} />
               </Card>
             ))}
           </div>
@@ -260,6 +253,87 @@ export default function ScreenSync({ onCreate, workspace }: { onCreate: () => vo
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+/**
+ * 팀 멤버 목록 + 역할 변경·제거 (Phase 12 잔여).
+ *
+ * **owner 만 남의 역할을 바꾸거나 제거할 수 있다** — editor 가 가드레일(정책)을 풀 수 있으면
+ * 가드레일이 아니기 때문이다. 서버가 403 으로 최종 판정하고, UI 는 미리 비활성화해 알려준다.
+ *
+ * **마지막 owner 는 강등·제거할 수 없다.** owner 가 0 이 되면 멤버 관리도 정책 변경도 아무도
+ * 못 하는 통치 불가 상태가 된다. 서버가 400 을 내고, 여기서도 미리 막아 이유를 보여준다.
+ */
+function MemberList({ team, meId }: { team: Team; meId: string }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const myRole = team.members.find((m) => m.id === meId)?.role;
+  const isOwner = myRole === "owner";
+  const ownerCount = team.members.filter((m) => m.role === "owner").length;
+
+  const refresh = () => qc.invalidateQueries({ queryKey: ["me"] });
+  const onErr = (e: Error) => toast(e.message || "변경에 실패했습니다", "error");
+
+  const roleM = useMutation({
+    mutationFn: (v: { uid: string; role: string }) => api.setMemberRole(team.id, v.uid, v.role),
+    onSuccess: () => {
+      refresh();
+      toast("역할을 변경했습니다", "success");
+    },
+    onError: onErr,
+  });
+  const removeM = useMutation({
+    mutationFn: (uid: string) => api.removeMember(team.id, uid),
+    onSuccess: () => {
+      refresh();
+      toast("멤버를 제거했습니다", "success");
+    },
+    onError: onErr,
+  });
+
+  return (
+    <div className="mt-2 space-y-1">
+      {team.members.map((m) => {
+        const isLastOwner = m.role === "owner" && ownerCount <= 1;
+        const canRemove = (isOwner || m.id === meId) && !isLastOwner;
+        return (
+          <div key={m.id} className="flex items-center gap-2 text-xs">
+            <span className="min-w-0 flex-1 truncate text-fg/90" title={m.email}>
+              {m.name || m.email}
+              {m.id === meId && <span className="ml-1 text-muted">(나)</span>}
+            </span>
+            {isOwner && !isLastOwner ? (
+              <select
+                value={m.role}
+                disabled={roleM.isPending}
+                onChange={(e) => roleM.mutate({ uid: m.id, role: e.target.value })}
+                className="rounded-md border border-line bg-surface px-1.5 py-0.5 text-xs text-fg"
+              >
+                <option value="owner">owner</option>
+                <option value="editor">editor</option>
+                <option value="viewer">viewer</option>
+              </select>
+            ) : (
+              <RoleBadge role={m.role} />
+            )}
+            {isLastOwner && (
+              <span className="text-[11px] text-muted" title="owner 가 0 이 되면 팀을 관리할 수 없습니다">
+                마지막 owner
+              </span>
+            )}
+            <button
+              className="rounded px-1.5 text-muted enabled:hover:text-err disabled:opacity-30"
+              disabled={!canRemove || removeM.isPending}
+              title={isLastOwner ? "마지막 owner 는 제거할 수 없습니다" : m.id === meId ? "팀에서 나가기" : "제거"}
+              onClick={() => removeM.mutate(m.id)}
+            >
+              ✕
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

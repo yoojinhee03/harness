@@ -205,6 +205,14 @@ class AccountStore:
         return {"id": row["id"], "name": row["name"], "owner_id": row["owner_id"], "members": members}
 
     def add_member(self, tid: str, actor_id: str, email_or_id: str, role: str = "editor") -> dict[str, Any]:
+        """팀에 멤버를 초대한다. 초대는 owner/editor, **역할 부여·변경은 owner 만.**
+
+        ⚠️ 예전엔 이 메서드가 기존 멤버를 만나면 무조건 역할을 UPDATE 했다. actor 조건이
+        owner/editor 였으므로 **editor 가 자기 이메일로 role=owner 를 보내 스스로 승격**할 수
+        있었다(그러면 owner 전용인 팀 정책까지 바꿀 수 있다 — 거버넌스 우회). 두 곳을 막는다:
+          · 기존 멤버의 역할 변경은 권한 조작이므로 owner 만.
+          · owner 역할 부여도 owner 만(editor 가 owner 를 만들 수 없다).
+        """
         role = role if role in ("owner", "editor", "viewer") else "editor"
         with self.engine.begin() as conn:
             if conn.execute(select(teams.c.id).where(teams.c.id == tid)).first() is None:
@@ -216,6 +224,9 @@ class AccountStore:
             ).first()
             if actor is None or actor[0] not in ("owner", "editor"):
                 raise PermissionError("초대 권한이 없습니다(owner/editor 만)")
+            actor_is_owner = actor[0] == "owner"
+            if role == "owner" and not actor_is_owner:
+                raise PermissionError("owner 역할은 owner 만 부여할 수 있습니다")
             new_uid = self._resolve_uid(conn, email_or_id)
             if new_uid is None:
                 raise ValueError(f"사용자를 찾을 수 없음: {email_or_id}")
@@ -225,6 +236,8 @@ class AccountStore:
                 )
             ).first()
             if already:
+                if not actor_is_owner:
+                    raise PermissionError("이미 멤버인 사용자의 역할 변경은 owner 만 가능합니다")
                 conn.execute(
                     update(team_members)
                     .where(and_(team_members.c.team_id == tid, team_members.c.user_id == new_uid))
@@ -232,6 +245,82 @@ class AccountStore:
                 )
             else:
                 conn.execute(insert(team_members).values(team_id=tid, user_id=new_uid, role=role))
+        team = self.get_team(tid)
+        assert team is not None
+        return team
+
+    def _owner_count(self, conn: Any, tid: str) -> int:
+        return len(
+            conn.execute(
+                select(team_members.c.user_id).where(
+                    and_(team_members.c.team_id == tid, team_members.c.role == "owner")
+                )
+            ).all()
+        )
+
+    def set_member_role(self, tid: str, actor_id: str, target_id: str, role: str) -> dict[str, Any]:
+        """기존 멤버의 역할 변경 — **owner 만.**
+
+        **마지막 owner 는 강등할 수 없다.** owner 가 0 이 되면 멤버 관리도 정책 변경도 아무도
+        못 하는 통치 불가 상태가 된다(정책이 owner 전용이라 특히 치명적이다).
+        """
+        if role not in ("owner", "editor", "viewer"):
+            raise ValueError(f"알 수 없는 역할: {role}")
+        with self.engine.begin() as conn:
+            actor = conn.execute(
+                select(team_members.c.role).where(
+                    and_(team_members.c.team_id == tid, team_members.c.user_id == actor_id)
+                )
+            ).first()
+            if actor is None or actor[0] != "owner":
+                raise PermissionError("역할 변경은 owner 만 가능합니다")
+            target = conn.execute(
+                select(team_members.c.role).where(
+                    and_(team_members.c.team_id == tid, team_members.c.user_id == target_id)
+                )
+            ).first()
+            if target is None:
+                raise KeyError(f"팀 멤버가 아닙니다: {target_id}")
+            if target[0] == "owner" and role != "owner" and self._owner_count(conn, tid) <= 1:
+                raise ValueError("마지막 owner 는 강등할 수 없습니다(팀에 owner 가 최소 1명 필요)")
+            conn.execute(
+                update(team_members)
+                .where(and_(team_members.c.team_id == tid, team_members.c.user_id == target_id))
+                .values(role=role)
+            )
+        team = self.get_team(tid)
+        assert team is not None
+        return team
+
+    def remove_member(self, tid: str, actor_id: str, target_id: str) -> dict[str, Any]:
+        """멤버 제거 — owner 이거나, 본인이 나가는 경우(self-leave)만.
+
+        마지막 owner 는 나갈 수도 없다 — 남은 멤버가 통치 불가 상태가 되기 때문이다.
+        """
+        with self.engine.begin() as conn:
+            actor = conn.execute(
+                select(team_members.c.role).where(
+                    and_(team_members.c.team_id == tid, team_members.c.user_id == actor_id)
+                )
+            ).first()
+            if actor is None:
+                raise PermissionError("팀 멤버가 아닙니다")
+            if actor[0] != "owner" and actor_id != target_id:
+                raise PermissionError("다른 멤버 제거는 owner 만 가능합니다")
+            target = conn.execute(
+                select(team_members.c.role).where(
+                    and_(team_members.c.team_id == tid, team_members.c.user_id == target_id)
+                )
+            ).first()
+            if target is None:
+                raise KeyError(f"팀 멤버가 아닙니다: {target_id}")
+            if target[0] == "owner" and self._owner_count(conn, tid) <= 1:
+                raise ValueError("마지막 owner 는 제거할 수 없습니다(팀에 owner 가 최소 1명 필요)")
+            conn.execute(
+                team_members.delete().where(
+                    and_(team_members.c.team_id == tid, team_members.c.user_id == target_id)
+                )
+            )
         team = self.get_team(tid)
         assert team is not None
         return team
