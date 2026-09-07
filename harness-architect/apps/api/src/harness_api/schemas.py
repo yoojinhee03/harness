@@ -12,6 +12,7 @@ from harness_resolver import (
     Policy,
     PromptSpec,
 )
+from harness_runtime import EvalCase
 from pydantic import BaseModel, Field
 
 
@@ -209,6 +210,17 @@ class RunRequest(ResolveRequest):
     """
 
     message: str = Field(min_length=1)
+
+
+class EvalBody(ResolveRequest):
+    """POST /eval — 하네스를 eval 케이스로 실행·채점(harness eval 의 API 판).
+
+    `scenario`(시드 시나리오 이름) 또는 `cases`(인라인) 중 하나. 둘 다 없으면 422 로 거부한다 —
+    빈 케이스로 "통과"를 돌려주면 검증했다는 착각을 만든다.
+    """
+
+    scenario: str | None = None
+    cases: list[EvalCase] = Field(default_factory=list)
 
 
 class VerifyBody(BaseModel):

@@ -216,6 +216,36 @@ export interface DoctorReport {
   notes: string[];
 }
 
+/** POST /eval — 프롬프트 eval 결과(Phase 11). 키 없으면 dry_run 이라 채점이 스킵된다. */
+export interface EvalCheck {
+  kind: string;
+  target: string;
+  passed: boolean;
+}
+
+export interface EvalCaseResult {
+  name: string;
+  scored: boolean;
+  passed: boolean;
+  score: number;
+  checks: EvalCheck[];
+  dry_run: boolean;
+  note: string;
+}
+
+export interface EvalReport {
+  cases: EvalCaseResult[];
+  scored_count: number;
+  /** null = 채점된 케이스 없음(키 없이 dry_run). "0점"과 구분해야 한다. */
+  mean_score: number | null;
+}
+
+export interface EvalResponse {
+  ok: boolean;
+  diagnostics: { items: Diagnostic[] } | null;
+  report: EvalReport | null;
+}
+
 export interface HarnessSummary {
   id: string;
   scope: string; // "personal:<uid>" | "team:<tid>"
@@ -558,6 +588,17 @@ export const api = {
   // 저장된 하네스(에이전트) 검증·내보내기 — 하네스 상세(구 생성 위저드 C·D 대체).
   validateHarness: (id: string, scope = "personal") =>
     post<ResolveResult>(`/harnesses/${encodeURIComponent(id)}/validate?scope=${encodeURIComponent(scope)}`, undefined),
+  // ── 경험적 검증 (프롬프트 eval) ──
+  evalScenarios: () => fetch(`${BASE}/eval/scenarios`).then((r) => r.json() as Promise<string[]>),
+  evalHarness: (harness: HarnessInput, scenario: string) =>
+    post<EvalResponse>("/eval", { ...harness, scenario }),
+  /** 저장된 하네스를 시드 시나리오로 채점. 키 없으면 dry_run(mean_score=null). */
+  evalSavedHarness: (id: string, scope: string, scenario: string) =>
+    post<EvalResponse>(
+      `/harnesses/${encodeURIComponent(id)}/eval?scope=${encodeURIComponent(scope)}&scenario=${encodeURIComponent(scenario)}`,
+      undefined,
+    ),
+
   // ── 레시피(시작점) ──
   recipes: () => fetch(`${BASE}/recipes`).then((r) => r.json() as Promise<RecipeMeta[]>),
   recipe: (name: string) =>

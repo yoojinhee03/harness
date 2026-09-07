@@ -47,7 +47,7 @@
 | 8 | 정책 as code (조직 가드레일) | [08-policy-as-code.md](./08-policy-as-code.md) | P1 (상업 차별화) | resolver(완료) — 독립 | ✅ 완료 |
 | 9 | 피드백 루프 활성화 & 카탈로그 생애주기 | [09-feedback-and-catalog-lifecycle.md](./09-feedback-and-catalog-lifecycle.md) | P2 | 05 (실사용 신호) | ✅ 완료 |
 | 10 | 프롬프트 관리 (합성·변수·버전·린트) | [10-prompt-management.md](./10-prompt-management.md) | **P0 (05·06 토대)** | IR/resolver/cost(완료) — 05·06 강화 | ✅ 완료 (코어) |
-| 11 | 경험적 검증 (프롬프트 eval → 품질 측정) | [11-empirical-validation.md](./11-empirical-validation.md) | P1 (신뢰도) | 10(완료) · 09 와 연동 | 🟡 CLI 완료 (`POST /eval`·화면 노출 미착수) |
+| 11 | 경험적 검증 (프롬프트 eval → 품질 측정) | [11-empirical-validation.md](./11-empirical-validation.md) | P1 (신뢰도) | 10(완료) · 09 와 연동 | ✅ 완료 |
 | 12 | 프로덕션 하드닝 (MVP→실서비스: 보안·데이터·스케일·배포) | [12-production-hardening.md](./12-production-hardening.md) | **P0 (실서비스 잠금)** | 멀티테넌시(완료) 위 | 📋 계획 (12a~12d) |
 
 > **참고** — 12 는 기능이 아니라 **횡단 하드닝 트랙**이다. 웹↔확장 동기화 + 멀티테넌시(Bearer 인증·
@@ -77,7 +77,7 @@
 > 경고는 리졸버 진단을 그대로 나르고 재계산하지 않는다. `07` 은 adopt 가 CLI·`POST /adopt`·
 > 웹 온보딩("기존 설정 가져오기")까지 관통.
 >
-> **다음 후보**: `11` 잔여(`POST /eval` + 화면 노출) · `08` 정책의 웹 UI(현재 CLI·API 만) ·
+> **다음 후보**: `08` 정책의 웹 UI(현재 CLI·API 만) · 팀 역할 변경 UI(Phase 12 잔여) ·
 > 피드백 신호 기반 랭킹 품질 측정(골든셋과 별도 트랙). 백로그 #2(공출현 → 랭킹)는 eval 게이트가
 > 풀렸고 데이터 축적만 대기 중이다
 > (`ranking-golden.yaml` 기준선 5/7 → 7/7 이 성공 기준).

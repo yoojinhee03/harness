@@ -306,6 +306,69 @@ def test_unknown_recipe_404(client):
     assert client.get("/recipes/nope").status_code == 404
 
 
+# ── 경험적 검증 (Phase 11) ──
+
+EVAL_HARNESS = {
+    "metadata": {"id": "eval-bot"},
+    "components": [{"ref": "github-mcp@1.4.0"}, {"ref": "pr-review-skill@2.1.0"}],
+}
+
+
+def test_eval_scenarios_lists_seed_sets(client):
+    """시드 3 시나리오 — 레시피와 짝을 맞춘다. 랭킹 골든셋은 형식이 달라 빠져야 한다."""
+    names = set(client.get("/eval/scenarios").json())
+    assert {"pr-review", "issue-triage", "doc-draft"} <= names
+    assert "ranking-golden" not in names
+
+
+def test_eval_by_scenario_name(client):
+    """키 없는 환경 → dry_run 이라 채점은 스킵되지만 케이스는 실려야 한다(경로 관통 확인)."""
+    body = client.post("/eval", json={**EVAL_HARNESS, "scenario": "pr-review"}).json()
+    assert body["ok"] is True
+    report = body["report"]
+    assert len(report["cases"]) == 3
+    assert report["mean_score"] is None  # 키 없음 → 채점 스킵
+    assert all(c["dry_run"] for c in report["cases"])
+
+
+def test_eval_with_inline_cases(client):
+    body = client.post(
+        "/eval",
+        json={**EVAL_HARNESS, "cases": [{"name": "x", "input": "리뷰해줘", "expect": {"contains": ["리뷰"]}}]},
+    ).json()
+    assert body["ok"] is True and len(body["report"]["cases"]) == 1
+
+
+def test_eval_rejects_empty_cases(client):
+    """빈 케이스로 '통과'를 돌려주면 검증했다는 착각을 만든다 → 422."""
+    assert client.post("/eval", json=EVAL_HARNESS).status_code == 422
+
+
+def test_eval_unknown_scenario_404(client):
+    assert client.post("/eval", json={**EVAL_HARNESS, "scenario": "nope"}).status_code == 404
+
+
+def test_eval_reports_resolve_failure(client):
+    """resolve 가 깨지면 채점을 시도하지 않고 진단을 낸다."""
+    body = client.post(
+        "/eval", json={"metadata": {"id": "x"}, "components": [{"ref": "nope@1.0.0"}], "scenario": "pr-review"}
+    ).json()
+    assert body["ok"] is False and body["report"] is None and body["diagnostics"]
+
+
+def test_eval_enforces_policy(client):
+    """정책이 실려 오면 eval 도 막는다 — 같은 본문을 쓰는 경로는 전부 정책을 지켜야 한다."""
+    body = client.post(
+        "/eval",
+        json={
+            **EVAL_HARNESS,
+            "scenario": "pr-review",
+            "policy": {"require": {"capabilities": ["lifecycle.guardrail"]}},
+        },
+    ).json()
+    assert body["ok"] is False
+
+
 # ── 드리프트 진단 (Phase 9-2) ──
 
 
