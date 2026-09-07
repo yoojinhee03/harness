@@ -15,6 +15,15 @@ from .enrichment import (
     get_classifier,
     make_classifier,
 )
+from .feedback import (
+    MIN_OBSERVATIONS,
+    FeedbackEvent,
+    FeedbackRecord,
+    UsageSignal,
+    apply_signals,
+    usage_signal,
+    usage_signals,
+)
 from .harvest import ServerDescriptor, component_to_yaml, harvest, harvest_component, uncovered
 from .loader import build_registry, load_components, resolve_catalog_dir
 from .rank_eval import (
@@ -69,6 +78,10 @@ __all__ = [
     "CapabilityClassifier",
     "CapabilityEnricher",
     "CapabilityGap",
+    "FeedbackEvent",
+    "FeedbackRecord",
+    "MIN_OBSERVATIONS",
+    "UsageSignal",
     "CaseResult",
     "ChainEnricher",
     "ClaudeReasoner",
@@ -93,6 +106,7 @@ __all__ = [
     "Settings",
     "VectorStore",
     "OpenAIEmbedder",
+    "apply_signals",
     "build_eval_recommender",
     "build_live_sources",
     "build_registry",
@@ -110,6 +124,8 @@ __all__ = [
     "harvest",
     "harvest_component",
     "load_cases",
+    "usage_signal",
+    "usage_signals",
     "load_components",
     "load_settings",
     "make_classifier",

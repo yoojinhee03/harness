@@ -23,6 +23,7 @@ from harness_resolver import Component, Registry
 from pydantic import BaseModel
 
 from .embeddings import Embedder, cosine, get_embedder
+from .feedback import UsageSignal
 from .ranking import RankedComponent, rank
 from .reasoning import Reasoner, get_reasoner
 from .store import VectorStore, VectorStoreLike, content_hash
@@ -121,6 +122,9 @@ class Recommender:
         self.registry = registry
         self.embedder = embedder or get_embedder()
         self.reasoner = reasoner or get_reasoner()
+        # 실사용 피드백 신호(Phase 9). 호출부(API)가 최신값으로 갈아끼운다 — 재색인 없이 랭킹만 바뀐다
+        # (Component 를 안 건드리므로 임베딩 content_hash 가 그대로다). 비면 피드백 이전과 동일 동작.
+        self.usage_signals: dict[str, UsageSignal] = {}
         # store: 인메모리(기본) 또는 pgvector(영속). 둘 다 ensure/search 계약을 만족한다.
         self.store: VectorStoreLike = store if store is not None else VectorStore()
         self._by_id: dict[str, Component] = {}
@@ -164,7 +168,12 @@ class Recommender:
         hits = self.store.search(qvec, top_k=len(self._by_id) or 1)
         candidates = [(self._by_id[cid], score) for cid, score in hits if cid in self._by_id]
 
-        ranked = rank(candidates, requirements, cap_weight=self._cap_weight(requirements))
+        ranked = rank(
+            candidates,
+            requirements,
+            cap_weight=self._cap_weight(requirements),
+            usage=self.usage_signals,
+        )
         # 그라운딩: 무관한 잡음 카드를 걷어낸다(요구 능력 매칭 또는 임베딩 floor 이상만 남김).
         relevant = [r for r in ranked if self._is_relevant(r)]
         top = self._catalog_verified(relevant)[:top_k]
@@ -202,7 +211,12 @@ class Recommender:
         qvec = self.embedder.embed([query])[0]
         vecs = self.embedder.embed([c.embedding_document() for c in components])
         candidates = [(c, cosine(qvec, v)) for c, v in zip(components, vecs, strict=True)]
-        ranked = rank(candidates, requirements, cap_weight=self._cap_weight(requirements))
+        ranked = rank(
+            candidates,
+            requirements,
+            cap_weight=self._cap_weight(requirements),
+            usage=self.usage_signals,
+        )
         relevant = [r for r in ranked if self._is_relevant(r)]
         return [self._to_recommendation(r) for r in relevant[:top_k]]
 

@@ -30,11 +30,15 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from harness_catalog import (
     VOCAB_VERSION,
     FederatedRegistry,
+    FeedbackEvent,
     LiveRecommender,
     Recommender,
     build_registry,
     load_settings,
     resolve_catalog_dir,
+)
+from harness_catalog import (
+    usage_signals as compute_usage_signals,
 )
 from harness_resolver import Component, InMemoryRegistry, ResolveResult, resolve
 from harness_runtime import (
@@ -60,6 +64,7 @@ from .catalog_store import CatalogStore, DbCatalogSource, sync_catalog
 from .component_store import ComponentStore, UserComponentSource, component_event_stream
 from .conversation_store import ConversationStore, conversation_event_stream
 from .cooccurrence import CooccurrenceStore
+from .feedback import FeedbackStore, feedback_enabled
 from .gap_demand import GapDemand
 from .harness_build import parse_harness_yaml, to_harness_yaml
 from .llm_client import DEFAULT_MODEL
@@ -273,7 +278,36 @@ def _registry(request: Request) -> InMemoryRegistry:
 
 def _recommender(request: Request) -> Recommender:
     # LiveRecommender.get() — 라이브 내용이 바뀌었으면 재인덱싱(동기 엔드포인트는 스레드풀 실행이라 안전).
-    return cast(LiveRecommender, request.app.state.recommender).get()
+    rec = cast(LiveRecommender, request.app.state.recommender).get()
+    _refresh_usage_signals(request, rec)
+    return rec
+
+
+# 피드백 신호 갱신 주기(초). 매 추천마다 DB 를 읽지 않으려는 캐시일 뿐 — 신호는 천천히 변한다.
+_USAGE_TTL_SEC = 60.0
+
+
+def _refresh_usage_signals(request: Request, rec: Any) -> None:
+    """실사용 신호를 추천기에 갈아끼운다(TTL 캐시). 옵트인 꺼짐이면 아무것도 하지 않는다.
+
+    재색인이 아니라 랭킹 입력만 바꾸는 것이라 임베딩 캐시에 영향이 없다(Component 를 안 건드림).
+    실패는 비차단 — 신호를 못 읽었다고 추천이 죽으면 안 된다.
+    """
+    if not feedback_enabled():
+        return
+    state = request.app.state
+    now = time.monotonic()
+    if now - getattr(state, "usage_signals_at", 0.0) < _USAGE_TTL_SEC:
+        rec.usage_signals = getattr(state, "usage_signals", {})
+        return
+    try:
+        signals = compute_usage_signals(FeedbackStore(state.engine).records())
+    except Exception as exc:  # noqa: BLE001 — 비차단
+        log.warning("피드백 신호 갱신 실패(무시): %s", exc)
+        return
+    state.usage_signals = signals
+    state.usage_signals_at = now
+    rec.usage_signals = signals
 
 
 def _curated_ids(request: Request) -> set[str]:
@@ -666,6 +700,29 @@ def preview_endpoint(
     )
 
 
+@app.post("/feedback")
+@limiter.limit("60/minute")
+def feedback_endpoint(request: Request, body: FeedbackEvent) -> dict[str, Any]:
+    """실사용 keep/drop 관측 기록 (Phase 9). **옵트인 꺼짐이 기본**(HARNESS_FEEDBACK=on).
+
+    `dropped`(후보였으나 안 쓴 것)가 핵심이다 — 이게 없으면 retention 이 늘 1.0 이라 변별력이 없다.
+    집계·중립 판정은 `harness_catalog.feedback`(순수)이 하고 여기선 세기만 한다.
+    """
+    if not feedback_enabled():
+        return {"ok": True, "recorded": 0, "enabled": False}
+    selected, dropped = body.normalized()
+    n = FeedbackStore(request.app.state.engine).record(selected, dropped)
+    return {"ok": True, "recorded": n, "enabled": True}
+
+
+@app.get("/feedback/top")
+def feedback_top(request: Request, n: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+    """관측 상위 컴포넌트 — 신호가 실제로 쌓이는지 보는 운영 창구."""
+    if not feedback_enabled():
+        return {"enabled": False, "items": []}
+    return {"enabled": True, "items": FeedbackStore(request.app.state.engine).top(n)}
+
+
 @app.get("/eject/targets")
 def eject_targets() -> list[str]:
     """지원하는 eject 타깃 목록(프론트 타깃 셀렉터용)."""
@@ -685,6 +742,12 @@ def eject_endpoint(
     result = resolve(body.to_config(), _scoped_registry(request, user), body.policy)
     if not result.ok or result.resolved is None:
         return {"ok": False, "target": target, "diagnostics": result.diagnostics.model_dump(), "files": None}
+    # eject 는 "실제로 런타임에 가져간다" 는 가장 강한 확정 신호다 — 선택분을 기록(옵트인·비차단).
+    # drop 신호는 여기서 알 수 없다(후보 집합을 모름) → 클라이언트가 POST /feedback 으로 보낸다.
+    if feedback_enabled():
+        FeedbackStore(request.app.state.engine).record(
+            [rc.id for rc in result.resolved.components], []
+        )
     return {"ok": True, "target": target, "files": emit(result.resolved, target)}
 
 
