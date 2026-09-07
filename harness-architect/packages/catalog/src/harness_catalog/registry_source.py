@@ -40,6 +40,8 @@ log = logging.getLogger("harness_catalog.registry_source")
 Fetcher = Callable[[str], dict[str, Any]]
 
 DEFAULT_REGISTRY_URL = "https://registry.modelcontextprotocol.io"
+# SkillsMP — Agent Skill(SKILL.md) 메타 REST. `q` 필수·익명 50 req/day 라 열거가 아니라 질의형이다.
+DEFAULT_SKILLSMP_URL = "https://skillsmp.com/api/v1"
 DEFAULT_MARKETPLACE_URL = (
     "https://raw.githubusercontent.com/anthropics/claude-plugins-official/main"
     "/.claude-plugin/marketplace.json"
@@ -67,6 +69,34 @@ def urllib_fetcher(timeout: float = 10.0) -> Fetcher:
             payload = json.loads(resp.read().decode("utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("레지스트리 응답이 JSON 오브젝트가 아님")
+        return payload
+
+    return _fetch
+
+
+def bearer_fetcher(token: str, timeout: float = 10.0) -> Fetcher:
+    """Bearer 토큰을 붙이는 fetcher.
+
+    `Fetcher` 계약이 `(url) -> dict` 라 헤더를 인자로 받을 자리가 없다. 계약을 바꾸면 모든 소스와
+    테스트 fake 가 영향을 받으므로, **토큰을 클로저에 담은 fetcher 를 만들어 주입**한다.
+    (SkillsMP 인증 쿼터: 익명 50 req/day → 500 req/day.)
+    """
+
+    def _fetch(url: str) -> dict[str, Any]:
+        if not url.startswith("https://"):
+            raise ValueError(f"https 아닌 URL 거부: {url}")
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "harness-architect/0.1",
+                "Authorization": f"Bearer {token}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — https 강제 위에서 검증
+            payload = json.loads(resp.read().decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("응답이 JSON 오브젝트가 아님")
         return payload
 
     return _fetch
@@ -411,6 +441,135 @@ class MarketplaceSource(_TTLSource):
         return components
 
 
+class SkillsMpSource(_TTLSource):
+    """SkillsMP 라이브 소스 — Agent Skill(SKILL.md) 메타데이터. non-mcp 타입 보완.
+
+    **왜 필요한가**: MCP 레지스트리는 전부 mcp 타입이고, 플러그인 마켓플레이스는 단일 파일
+    500개 상한이 병목이다. 실제 공백은 skill 타입인데 SkillsMP 가 그걸 REST 로 연다.
+
+    ⚠️ **백로그의 전제를 실측으로 정정했다.** "skillsmp 가 SKILL.md 를 REST 로 열어"는 부분적으로
+    틀렸다 — API 는 **메타데이터만** 준다(`id·name·author·description·githubUrl·stars·updatedAt`).
+    **본문(SKILL.md)은 응답에 없다.** 그래서 여기서 만든 컴포넌트는 `body` 가 비어 있고,
+    그대로 eject 하면 **껍데기 SKILL.md**(frontmatter+제목만)가 나간다. 조용히 새지 않도록
+    이미터가 이 상태를 이식 손실로 선언한다(`skill.body`) → `verify --target` 이 표면화한다.
+    본문이 필요하면 `source`(githubUrl)에서 가져와 채워야 한다.
+
+    ⚠️ **열거가 불가능하다.** `q` 가 필수라 "전체 목록" 엔드포인트가 없고, 익명 쿼터가
+    **50 req/day · 10 req/min**(인증 500/day)이다. 그래서 우리 **통제어휘를 질의어로 쓴다** —
+    카탈로그가 이해하는 능력 이름으로 검색하니 결과가 어휘에 정렬되고, 질의 수가 어휘 크기로
+    유계라 쿼터를 예측할 수 있다. `max_queries` 로 상한을 둔다(기본은 익명 쿼터 안).
+    """
+
+    _label = "SkillsMP"
+    origin = "skillsmp"  # DB 적재 시 origin 태그
+
+    def __init__(
+        self,
+        base_url: str = DEFAULT_SKILLSMP_URL,
+        fetcher: Fetcher | None = None,
+        ttl_seconds: float = 900.0,  # 쿼터가 빡빡해 다른 소스(300)보다 길게
+        queries: list[str] | None = None,
+        page_limit: int = 50,  # API 상한
+        max_queries: int = 8,  # 익명 쿼터(50/day) 안에서 하루 여러 번 돌 수 있게 보수적으로
+        api_key: str | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        enricher: CapabilityEnricher | None = None,
+    ) -> None:
+        # 키가 있고 fetcher 를 명시 주입하지 않았으면 인증 fetcher 를 쓴다 — 안 그러면 api_key 가
+        # 받아만 두고 전송되지 않는 죽은 설정이 된다(값을 넣어도 쿼터가 안 늘어난다).
+        if fetcher is None and api_key:
+            fetcher = bearer_fetcher(api_key)
+        super().__init__(fetcher, ttl_seconds, clock, enricher)
+        self._base = base_url.rstrip("/")
+        self._queries = queries if queries is not None else default_skill_queries()
+        self._page_limit = max(1, min(page_limit, 50))
+        self._max_queries = max(1, max_queries)
+        self._authenticated = bool(api_key)
+
+    def _fetch_all(self) -> list[Component]:
+        components: list[Component] = []
+        seen: set[str] = set()
+        for query in self._queries[: self._max_queries]:
+            url = (
+                f"{self._base}/skills/search?q={urllib.parse.quote(query)}"
+                f"&limit={self._page_limit}&sortBy=stars"
+            )
+            try:
+                data = self._fetch(url)
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+                # 한 질의 실패가 전체 harvest 를 죽이면 안 된다(쿼터 초과·일시 장애).
+                log.warning("SkillsMP 질의 실패(계속): q=%s %s", query, exc)
+                continue
+            for raw in _skillsmp_entries(data):
+                comp = skill_to_component(raw)
+                if comp is None or comp.id in seen:
+                    continue
+                seen.add(comp.id)
+                components.append(comp)
+        log.info("SkillsMP: %d개 컴포넌트(질의 %d개)", len(components), min(len(self._queries), self._max_queries))
+        return components
+
+
+def _skillsmp_entries(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """`{success, data: {skills: [...]}, meta}` → 스킬 목록. 모양이 다르면 빈 목록(크래시 금지)."""
+    payload = data.get("data")
+    if not isinstance(payload, dict):
+        return []
+    skills = payload.get("skills")
+    if not isinstance(skills, list):
+        return []
+    return [s for s in skills if isinstance(s, dict)]
+
+
+def default_skill_queries() -> list[str]:
+    """통제어휘에서 뽑은 질의어 — 카탈로그가 이해하는 능력 이름으로 검색한다.
+
+    `domain.capability` 의 capability 조각을 쓴다(`review.code` → "code review"). 어휘 순서를
+    고정해 **질의 집합이 결정적**이다(같은 어휘 버전이면 같은 harvest → 재현 가능).
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for cap in CAPABILITY_VOCAB:
+        _, _, tail = cap.partition(".")
+        term = tail.replace("-", " ").strip()
+        if term and term not in seen:
+            seen.add(term)
+            out.append(term)
+    return out
+
+
+def skill_to_component(raw: dict[str, Any]) -> Component | None:
+    """SkillsMP 스킬 메타 → skill 컴포넌트. 본문은 없다(위 클래스 도크스트링 참고).
+
+    id 는 `skillsmp/<author>/<name>` 로 네임스페이스한다 — 로컬 큐레이션·다른 소스와 충돌하지
+    않게(FederatedRegistry 는 로컬 우선이지만 소스 간 충돌도 피해야 한다).
+    """
+    name = str(raw.get("name") or "").strip()
+    if not name:
+        return None
+    author = str(raw.get("author") or "unknown").strip() or "unknown"
+    description = str(raw.get("description") or "").strip()
+    caps = extract_capabilities_heuristic(f"{name} {description}")
+    # ⚠️ `stars` 를 usage_count 에 넣지 않는다. usage_count 는 **우리 사용자가 실제로 채택한 횟수**
+    #    (Phase 9 피드백 신호)이고 랭킹의 _W_USAGE 를 먹인다. GitHub 별 수(수십만)를 넣으면 랭킹을
+    #    지배하고, usage_count==0 에 걸린 _W_EXPLORE(신규 탐색 부스트)도 죽는다. 외부 인기도와
+    #    실측 채택률은 다른 축이라 섞으면 피드백 루프가 오염된다.
+    #    별 수는 페치 순서(`sortBy=stars`)로만 쓴다 — 상위 인기 스킬이 먼저 담긴다.
+    return Component(
+        id=f"skillsmp/{author}/{name}",
+        type="skill",
+        name=name,
+        version="0.1.0",  # API 가 버전을 주지 않는다 — 지어내지 않고 초기값
+        status="beta",  # 미검증 외부 수확분 — stable 로 올리는 건 큐레이션 결정
+        summary=description[:120],
+        description=description,
+        capability_tags=caps,
+        provides=caps,
+        # 본문은 여기서 못 가져온다 — 필요하면 이 URL 에서 채운다(이미터가 손실로 선언).
+        source=str(raw.get("githubUrl") or raw.get("skillUrl") or "") or None,
+    )
+
+
 class FederatedRegistry:
     """로컬(손큐레이션) + 라이브 소스들을 합쳐 `Registry` 프로토콜로 노출. id 충돌 시 로컬 우선.
 
@@ -470,9 +629,10 @@ def build_live_sources(
     *,
     enricher: CapabilityEnricher | None = None,
 ) -> list[LiveSource]:
-    """설정에 따라 라이브 소스 리스트를 만든다(공식 MCP 레지스트리 · 플러그인 마켓플레이스).
+    """설정에 따라 라이브 소스 리스트를 만든다(MCP 레지스트리 · 플러그인 마켓플레이스 · SkillsMP).
 
-    둘 다 독립 옵트인(`HARNESS_LIVE_REGISTRY`·`HARNESS_MARKETPLACE`). 모두 off면 빈 리스트.
+    셋 다 독립 옵트인(`HARNESS_LIVE_REGISTRY`·`HARNESS_MARKETPLACE`·`HARNESS_SKILLSMP`).
+    모두 off면 빈 리스트.
     enricher 를 주면 그걸 쓰고(앱 등록 키 주입 경로), 없으면 env 설정에서 만든다(무키면 무보강).
     """
     cfg = settings or load_settings()
@@ -496,6 +656,17 @@ def build_live_sources(
                 url=cfg.marketplace_url or DEFAULT_MARKETPLACE_URL,
                 fetcher=fetcher,
                 ttl_seconds=cfg.registry_ttl,
+                enricher=enricher,
+            )
+        )
+    if cfg.use_skillsmp:
+        # TTL 은 다른 소스보다 길게 잡는다 — 쿼터가 빡빡해서(익명 50 req/day) 자주 돌면 소진된다.
+        sources.append(
+            SkillsMpSource(
+                fetcher=fetcher,
+                ttl_seconds=max(cfg.registry_ttl, 900.0),
+                max_queries=cfg.skillsmp_max_queries,
+                api_key=cfg.skillsmp_key,
                 enricher=enricher,
             )
         )

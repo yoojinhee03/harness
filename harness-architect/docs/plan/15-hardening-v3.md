@@ -517,8 +517,24 @@ TTL 라이브 소스가 직접 federate되어 generation을 흔들고 재색인�
     이 한계는 `test_known_blind_spots_are_still_blind` 로 고정해뒀다(깨지면 카탈로그가 그 축을 가르기
     시작했다는 뜻 — 좋은 소식이니 한계 서술과 하한선을 갱신하라).
 - **다인 승인 워크플로** — sandbox 게이트는 완료. 다인 승인은 durable 승인 테이블(alembic)+엔드포인트 필요(중간 규모).
-- **skillsmp 소스 추가** — 주석의 Smithery/Glama/mcp.so는 전부 MCP라 공식 레지스트리와 겹친다.
-  실제 공백은 non-mcp 타입이고 마켓플레이스 단일 파일 500개 상한이 병목. skillsmp 가 SKILL.md 를 REST 로 열어 델타가 크다.
+- ✅ **skillsmp 소스 추가** 완료(2026-09-07) — `SkillsMpSource`(origin=`skillsmp`, 기본 off).
+  **다만 이 항목의 전제 두 개가 실측과 달랐다:**
+  - ❌ "skillsmp 가 SKILL.md 를 REST 로 열어" → **메타데이터만** 준다. 실제 응답 필드는
+    `id·name·author·description·contentLanguage·githubUrl·skillUrl·stars·updatedAt` 이고
+    **본문이 없다.** 그래서 수확된 skill 은 `body` 가 비고, 그대로 eject 하면 frontmatter+제목만
+    있는 **껍데기 SKILL.md** 가 나간다(파일이 생겨 성공처럼 보인다).
+    → `ClaudeCodeEmitter` 가 `skill.body`(approximate) 이식 손실로 선언하게 해서 `verify --target`
+      이 표면화하도록 했다. 본문은 `source`(githubUrl)에서 채워야 한다.
+  - ❌ "열거해서 델타가 크다" → **열거 엔드포인트가 없다.** `q` 가 필수고 익명 쿼터가
+    **50 req/day · 10 req/min**(인증 500/day)이다.
+    → **통제어휘를 질의어로 쓴다**(`review.code` → "code review"). 결과가 어휘에 정렬되고 질의
+      집합이 결정적이며(같은 어휘 버전 → 같은 harvest) `max_queries` 로 쿼터가 예측 가능해진다.
+  - `stars` 를 `usage_count` 에 넣지 않았다 — 그건 Phase 9 실측 채택 신호이고 랭킹의 `_W_USAGE`
+    를 먹인다. 별 수(수십만)를 넣으면 랭킹을 지배하고 `usage_count==0` 에 걸린 `_W_EXPLORE` 도
+    죽는다. 외부 인기도와 실측 채택률은 다른 축이다(테스트로 고정).
+  - `status=beta` — 미검증 외부 수확분을 stable 로 올리는 건 큐레이션 결정이다.
+  - API 키는 `Fetcher` 계약이 `(url) -> dict` 라 헤더 자리가 없어 **인증 fetcher 로 교체**해
+    실제 전송된다(받아만 두면 죽은 설정이 된다 — #38 에서 고친 문제의 재발 방지).
 - ✅ **`verify --fix`** 완료(2026-09-07) — 다만 **범위를 좁혔다.** verify 의 결핍은 두 종류인데
   고칠 수 있는 건 한 종류뿐이다:
   - `unknown_mcp`/`unknown_skills` → **초안 생성**. 레포가 `.mcp.json` 항목·`SKILL.md` 본문을

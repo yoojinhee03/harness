@@ -15,6 +15,9 @@
   HARNESS_REGISTRY_ENRICH_MAX = caps 빈 컴포넌트 LLM 보강 상한(기본 150, 0=끔; ANTHROPIC_API_KEY 있을 때만)
   HARNESS_MARKETPLACE     = off | on   (on 이면 Claude Code 플러그인 마켓플레이스를 non-mcp 타입 소스로 물림)
   HARNESS_MARKETPLACE_URL = 마켓플레이스 marketplace.json URL(기본: anthropics/claude-plugins-official)
+  HARNESS_SKILLSMP       = off | on   (on 이면 SkillsMP 를 skill 타입 소스로 물림)
+  HARNESS_SKILLSMP_KEY   = SkillsMP API 키(선택 — 익명 50 req/day → 인증 500 req/day)
+  HARNESS_SKILLSMP_MAX_QUERIES = 통제어휘 질의 수 상한(기본 8 — 익명 쿼터 안)
 """
 
 from __future__ import annotations
@@ -46,6 +49,11 @@ class Settings:
     registry_enrich_max: int = 150  # caps 빈 컴포넌트 LLM 보강 상한(0=끔, 키 있을 때만 동작)
     marketplace_mode: str = "off"  # off | on
     marketplace_url: str = ""  # 빈 값이면 소스 기본(anthropics/claude-plugins-official)
+    # SkillsMP(skill 타입 보완) — 기본 off. `q` 필수·익명 50 req/day 라 열거가 아니라 질의형이고,
+    # 질의 수를 어휘 크기가 아니라 이 상한으로 묶어 쿼터를 예측 가능하게 만든다.
+    skillsmp_mode: str = "off"  # off | on
+    skillsmp_key: str | None = None
+    skillsmp_max_queries: int = 8
     catalog_sync_interval: int = 3600  # harvest→DB 주기(초, 기본 1h). 증분이 싸서 자주 돌려 신선도↑
     catalog_full_interval: int = 86400  # 전체 대조(full reconcile) 주기(초, 기본 24h). 드리프트 정리
     # 제로샷 caps 태깅(TASK 3) — 기본 off. 켜려면 **semantic 임베더(OpenAI 키)** 필요(LocalEmbedder 는
@@ -64,6 +72,10 @@ class Settings:
     @property
     def use_marketplace(self) -> bool:
         return self.marketplace_mode == "on"
+
+    @property
+    def use_skillsmp(self) -> bool:
+        return self.skillsmp_mode == "on"
 
     @property
     def use_caps_zeroshot(self) -> bool:
@@ -100,6 +112,9 @@ def load_settings() -> Settings:
         registry_enrich_max=int(os.environ.get("HARNESS_REGISTRY_ENRICH_MAX", "150")),
         marketplace_mode=os.environ.get("HARNESS_MARKETPLACE", "off"),
         marketplace_url=os.environ.get("HARNESS_MARKETPLACE_URL", ""),
+        skillsmp_mode=os.environ.get("HARNESS_SKILLSMP", "off"),
+        skillsmp_key=os.environ.get("HARNESS_SKILLSMP_KEY") or None,
+        skillsmp_max_queries=int(os.environ.get("HARNESS_SKILLSMP_MAX_QUERIES", "8")),
         catalog_sync_interval=int(os.environ.get("HARNESS_CATALOG_SYNC_INTERVAL", "3600")),
         catalog_full_interval=int(os.environ.get("HARNESS_CATALOG_FULL_INTERVAL", "86400")),
         caps_zeroshot_mode=os.environ.get("HARNESS_CAPS_ZEROSHOT", "off"),
