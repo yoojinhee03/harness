@@ -30,10 +30,40 @@
 
 ## 완료 기준
 
-- [ ] 피드백 이벤트 기록(옵트인) + `retention_score`/`usage_count` 갱신 순수 함수 + 랭킹 반영 테스트.
-- [ ] `harness doctor`(드리프트/deprecated diff) + `POST /doctor` + 테스트.
-- [ ] 레시피 3종(프론트 시작점 + CLI `--recipe`).
-- [ ] **옵트인 꺼짐이 기본** — 신호 없이도 로컬 폴백·기존 랭킹 완전 불변(회귀 테스트).
+- [x] 피드백 이벤트 기록(옵트인) + 갱신 순수 함수 + 랭킹 반영 테스트 — `harness_catalog/feedback.py`(순수),
+      `harness_api/feedback.py`(스토어), `component_feedback` 테이블(alembic a7b8c9d0e1f2),
+      `POST /feedback`·`GET /feedback/top`, eject 시 selected 자동 기록.
+- [x] `harness doctor`(드리프트/deprecated diff, `--fix`) + `POST /doctor` +
+      `POST /harnesses/{id}/doctor` + 테스트 16건.
+- [x] 레시피 3종(`harness-catalog/recipes/`) + 프론트 "레시피로 시작" + CLI `harness init --recipe`.
+- [x] **옵트인 꺼짐이 기본** — `HARNESS_FEEDBACK` 미설정 시 아무것도 기록하지 않고 랭킹도 불변
+      (테스트로 고정). pytest 427 통과.
+
+## 구현 노트 (2026-09-07)
+
+- **보수적으로 센다.** 관측 `MIN_OBSERVATIONS`(5) 미만은 usage·retention 둘 다 중립(0) — 신호가
+  붙기 전과 점수가 정확히 같다. 소량 데이터가 랭킹을 우연으로 흔들면 안 된다.
+- **Component 를 안 건드리고 `rank(usage=...)` 로 덮는다.** Component 를 복사·변형하면 임베딩
+  `content_hash` 계산 경로를 건드려 전량 재임베딩 위험이 생긴다. 덕분에 신호 갱신이 재색인을
+  유발하지 않는다(TTL 60초 캐시로 주입).
+- **retention 은 노출이 아니라 채택률이다**(분모 = selected+dropped). 그래서 `dropped` 수집이
+  핵심이다 — 없으면 늘 1.0 이라 변별력이 0 이다. eject 는 selected 만 알 수 있으므로 drop 은
+  클라이언트가 `POST /feedback` 으로 보낸다.
+- **eject 를 자동 기록 지점으로 골랐다.** "실제로 런타임에 가져간다"가 가장 강한 확정 신호이고
+  노이즈가 적다(매 편집 저장을 세면 부풀고, `/generate` 는 검증 클릭마다 돈다).
+- **doctor 는 고치지 않고 제안만 한다.** `--fix` 도 같은 id 의 상위 버전 교체만 적용한다 —
+  deprecated 를 타 컴포넌트로 바꾸는 건 능력이 겹쳐도 config 계약이 달라 조용히 깨진다.
+  업그레이드 권고로는 CI 를 깨지 않는다(blocking = missing·deprecated 뿐).
+- **`unpinned` 를 드리프트로 센다.** 버전을 안 박으면 카탈로그가 움직일 때마다 조용히 다른 걸
+  쓴다 — 그 자체가 드리프트다. 레시피는 전부 핀을 박아 준다(테스트로 고정).
+- **깨진 레시피는 없는 것보다 나쁘다.** 처음 쓰는 사람이 맨 먼저 만나는 게 레시피라, 3종 전부
+  시드 카탈로그에서 resolve·gap 0 임을 테스트로 고정했다.
+
+### 남은 것
+
+- 랭킹 골든셋은 여전히 *선언값* 만 쓴다(`rank(usage=...)` 미주입) — 실사용 신호가 기준선을
+  흔들면 회귀 판정이 재현 불가가 되기 때문이다. 신호 기반 품질 측정은 별도 트랙이 필요하다.
+- 백로그 #2(공출현 → 랭킹)의 데이터 게이트는 이제 adopt·verify·eject 세 경로가 채운다.
 
 ## 의존성
 

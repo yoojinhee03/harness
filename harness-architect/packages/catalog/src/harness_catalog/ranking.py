@@ -10,18 +10,21 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 
 from harness_resolver import Component
 from pydantic import BaseModel
+
+from .feedback import UsageSignal
 
 # 가중치 — 요구 능력 매칭이 지배적, 비용은 감점, 피드백 신호는 소폭.
 _W_EMBED = 1.0
 _W_CAPABILITY = 2.5
 _W_TOKENS = 0.15  # per 1k 컨텍스트 토큰 감점
 _W_TOOLS = 0.02  # per 도구 감점
-# ⚠️ usage_count·retention_score 는 피드백 루프(docs/plan/09)가 채우기 전까지 시드에서 전부 0 이라
-#    아래 두 항은 현재 점수에 사실상 0 을 더한다(inert). 피드백 루프가 활성화되면 그때 신호가 산다.
-#    지금은 랭킹을 실질적으로 embed(_W_EMBED)+capability(_W_CAPABILITY)-cost 가 지배한다.
+# usage_count·retention_score 는 피드백 루프(docs/plan/09)가 채운다. 카탈로그 선언값은 시드에서 전부
+# 0 이라 두 항이 inert 였는데, 이제 `rank(usage=...)` 로 실측 신호를 덮어쓸 수 있다(Phase 9).
+# 신호가 없으면 예전 그대로 — embed(_W_EMBED)+capability(_W_CAPABILITY)-cost 가 지배한다.
 _W_USAGE = 0.10
 _W_RETENTION = 0.30
 _W_EXPLORE = 0.05  # 신규·저사용 탐색 부스트 (리치-겟-리처 완화)
@@ -40,12 +43,18 @@ def rank(
     requirements: list[str],
     *,
     cap_weight: dict[str, float] | None = None,
+    usage: Mapping[str, UsageSignal] | None = None,
 ) -> list[RankedComponent]:
     """(컴포넌트, 임베딩점수) 후보를 랭킹한다. 내림차순 정렬 결과.
 
     cap_weight: 능력별 신뢰 가중치(0~1). 카탈로그 전역에 과다 부여된 능력(수확 휴리스틱 오탐이 몰리는
     태그)을 IDF 식으로 낮춰, 잡음 태그 매칭이 순위를 지배하지 못하게 한다. None 이면 전부 1.0(무가중,
     큐레이션 시드는 능력별 df=1 이라 어차피 1.0 → 동작 불변).
+
+    usage: 실사용 피드백 신호(Phase 9). 컴포넌트가 선언한 usage_count·retention_score 를 **실측으로
+    덮어쓴다**. 컴포넌트를 복사·변형하지 않고 여기서만 덮는 이유는, Component 를 바꾸면 임베딩
+    content_hash 계산 경로를 건드리게 되고 캐시 무효화 위험이 생기기 때문이다. 신호가 없거나
+    confident=False 면 선언값을 그대로 쓴다 → 피드백 이전과 점수가 완전히 같다.
     """
     req = set(requirements)
     ranked: list[RankedComponent] = []
@@ -55,14 +64,19 @@ def rank(
         matched = sorted((set(component.capability_tags) | set(component.provides)) & req)
         cost = component.cost
 
+        # 실측 신호가 있으면 그걸, 없으면 카탈로그 선언값을 쓴다.
+        sig = usage.get(component.id) if usage else None
+        used = sig.usage_count if sig and sig.confident else component.usage_count
+        retention = sig.retention_score if sig and sig.confident else component.retention_score
+
         boost = sum(cap_weight.get(c, 1.0) if cap_weight else 1.0 for c in matched)
         score = _W_EMBED * embed_score
         score += _W_CAPABILITY * boost
         score -= _W_TOKENS * (cost.context_tokens / 1000.0)
         score -= _W_TOOLS * cost.added_tools
-        score += _W_USAGE * math.log1p(component.usage_count)
-        score += _W_RETENTION * component.retention_score
-        if component.usage_count == 0:
+        score += _W_USAGE * math.log1p(used)
+        score += _W_RETENTION * retention
+        if used == 0:
             score += _W_EXPLORE
 
         ranked.append(

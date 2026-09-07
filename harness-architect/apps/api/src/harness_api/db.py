@@ -232,6 +232,20 @@ component_cooccurrence = Table(
 )
 
 
+# 컴포넌트 피드백(durable) — 실사용 keep/drop 관측(Phase 9). ranking 의 usage_count·retention_score
+# 를 채우는 파이프의 저장소다(그 전엔 시드에서 전부 0 이라 두 가중이 죽어 있었다).
+# grain = 컴포넌트 단일 행. 집계·중립 판정은 harness_catalog.feedback(순수)이 하고 여기선 세기만 한다.
+component_feedback = Table(
+    "component_feedback",
+    metadata,
+    Column("component_id", String(256), primary_key=True),
+    Column("selected_count", Integer, nullable=False, default=0),  # 최종 구성에 포함됨
+    Column("dropped_count", Integer, nullable=False, default=0),  # 후보였으나 빠짐
+    Column("first_seen_at", String(40), nullable=False),
+    Column("last_seen_at", String(40), nullable=False),
+)
+
+
 def resolve_database_url(store_dir: Path) -> str:
     """`DATABASE_URL`(프로덕션 Postgres) 또는 기본 SQLite(store 폴더 밑)."""
     env = os.environ.get("DATABASE_URL")

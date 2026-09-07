@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .adopt import AdoptResult, adopt, adopt_dir, read_native_tree
 from .builder import BuiltRequest, build_request
+from .doctor import ComponentDiagnosis, DoctorReport, apply_suggestions, doctor
 from .emit import (
     ClaudeCodeEmitter,
     CursorEmitter,
@@ -45,6 +46,8 @@ __all__ = [
     "AdoptResult",
     "AnthropicRunner",
     "DEFAULT_SEVERITY",
+    "ComponentDiagnosis",
+    "DoctorReport",
     "PreviewReport",
     "VerifyReport",
     "BuiltRequest",
@@ -81,6 +84,8 @@ __all__ = [
     "read_native_tree",
     "run_ablation",
     "run_eval",
+    "apply_suggestions",
+    "doctor",
     "preview",
     "verify",
     "violations",

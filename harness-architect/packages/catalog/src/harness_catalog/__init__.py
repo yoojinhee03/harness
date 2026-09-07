@@ -15,6 +15,15 @@ from .enrichment import (
     get_classifier,
     make_classifier,
 )
+from .feedback import (
+    MIN_OBSERVATIONS,
+    FeedbackEvent,
+    FeedbackRecord,
+    UsageSignal,
+    apply_signals,
+    usage_signal,
+    usage_signals,
+)
 from .harvest import ServerDescriptor, component_to_yaml, harvest, harvest_component, uncovered
 from .loader import build_registry, load_components, resolve_catalog_dir
 from .rank_eval import (
@@ -28,6 +37,7 @@ from .rank_eval import (
 )
 from .ranking import RankedComponent, rank
 from .reasoning import ClaudeReasoner, NullReasoner, Reasoner, get_reasoner, make_reasoner
+from .recipes import Recipe, RecipeMeta, load_recipe, load_recipes, resolve_recipes_dir
 from .recommender import (
     CapabilityGap,
     LiveRecommender,
@@ -69,6 +79,10 @@ __all__ = [
     "CapabilityClassifier",
     "CapabilityEnricher",
     "CapabilityGap",
+    "FeedbackEvent",
+    "FeedbackRecord",
+    "MIN_OBSERVATIONS",
+    "UsageSignal",
     "CaseResult",
     "ChainEnricher",
     "ClaudeReasoner",
@@ -83,6 +97,8 @@ __all__ = [
     "LocalEmbedder",
     "MCPRegistrySource",
     "NullReasoner",
+    "Recipe",
+    "RecipeMeta",
     "RankedComponent",
     "RankingCase",
     "Reasoner",
@@ -93,6 +109,7 @@ __all__ = [
     "Settings",
     "VectorStore",
     "OpenAIEmbedder",
+    "apply_signals",
     "build_eval_recommender",
     "build_live_sources",
     "build_registry",
@@ -110,6 +127,11 @@ __all__ = [
     "harvest",
     "harvest_component",
     "load_cases",
+    "load_recipe",
+    "load_recipes",
+    "resolve_recipes_dir",
+    "usage_signal",
+    "usage_signals",
     "load_components",
     "load_settings",
     "make_classifier",

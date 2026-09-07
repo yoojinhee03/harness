@@ -280,6 +280,113 @@ def test_verify_endpoint_required_missing_violation(client):
     assert body["ok"] is False and "required_missing" in body["violations"]
 
 
+# ── 레시피 (Phase 9-3) ──
+
+
+def test_recipes_list(client):
+    names = {r["name"] for r in client.get("/recipes").json()}
+    assert {"pr-review", "issue-triage", "doc-draft"} <= names
+
+
+def test_recipe_detail_is_immediately_usable(client):
+    """레시피 yaml 이 그대로 resolve 를 통과해야 한다 — 안 그러면 시작점이 아니다."""
+    d = client.get("/recipes/pr-review").json()
+    assert d["meta"]["title"] == "PR 리뷰 봇"
+    assert "github-mcp" in d["yaml"]
+    assert client.post("/resolve", json=d["config"]).json()["ok"] is True
+
+
+def test_every_recipe_resolves_over_api(client):
+    for meta in client.get("/recipes").json():
+        d = client.get(f"/recipes/{meta['name']}").json()
+        assert client.post("/resolve", json=d["config"]).json()["ok"] is True, meta["name"]
+
+
+def test_unknown_recipe_404(client):
+    assert client.get("/recipes/nope").status_code == 404
+
+
+# ── 드리프트 진단 (Phase 9-2) ──
+
+
+def test_doctor_flags_missing_pin_and_unpinned(client):
+    """저장된 구성이 카탈로그에 뒤처졌는지 — 사라진 핀과 미고정을 잡는다."""
+    body = {
+        "metadata": {"id": "drift-bot"},
+        "components": [{"ref": "github-mcp@0.9.0"}, {"ref": "slack-mcp"}, {"ref": "notion-mcp@1.0.0"}],
+    }
+    r = client.post("/doctor", json=body)
+    assert r.status_code == 200
+    found = {f["component_id"]: f for f in r.json()["findings"]}
+    assert found["github-mcp"]["issue"] == "missing"
+    assert found["github-mcp"]["suggested_ref"] == "github-mcp@1.4.0"
+    assert found["slack-mcp"]["issue"] == "unpinned"
+    assert found["notion-mcp"]["issue"] == "ok"
+
+
+def test_doctor_clean_harness(client):
+    body = {"metadata": {"id": "ok-bot"}, "components": [{"ref": "github-mcp@1.4.0"}]}
+    assert client.post("/doctor", json=body).json()["findings"][0]["issue"] == "ok"
+
+
+def test_doctor_only_suggests_never_mutates(client):
+    """진단은 제안만 낸다 — 저장된 하네스를 도구가 말없이 고치면 안 된다."""
+    body = {"metadata": {"id": "drift-bot"}, "components": [{"ref": "github-mcp@0.9.0"}]}
+    first = client.post("/doctor", json=body).json()
+    second = client.post("/doctor", json=body).json()
+    assert first == second  # 호출이 상태를 바꾸지 않는다
+
+
+# ── 피드백 루프 (Phase 9) ──
+
+
+def test_feedback_disabled_by_default(client):
+    """옵트인 꺼짐이 기본 — 켜지 않으면 아무것도 기록하지 않는다."""
+    r = client.post("/feedback", json={"selected": ["github-mcp"], "dropped": ["slack-mcp"]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is False and body["recorded"] == 0
+    assert client.get("/feedback/top").json()["enabled"] is False
+
+
+def test_feedback_records_when_enabled(client, monkeypatch):
+    monkeypatch.setenv("HARNESS_FEEDBACK", "on")
+    r = client.post(
+        "/feedback", json={"selected": ["github-mcp", "pr-review-skill"], "dropped": ["slack-mcp"]}
+    )
+    assert r.json() == {"ok": True, "recorded": 3, "enabled": True}
+    top = {i["component_id"]: i for i in client.get("/feedback/top").json()["items"]}
+    assert top["github-mcp"]["selected"] >= 1
+    assert top["slack-mcp"]["dropped"] >= 1
+
+
+def test_eject_records_selected_when_enabled(client, monkeypatch):
+    """eject 는 '실제로 런타임에 가져간다' 는 가장 강한 확정 신호다."""
+    monkeypatch.setenv("HARNESS_FEEDBACK", "on")
+    body = {"metadata": {"id": "fb-bot"}, "components": [{"ref": "coding-convention-ctx@1.0.0"}]}
+    assert client.post("/eject", json=body, params={"target": "claude-code"}).json()["ok"] is True
+    top = {i["component_id"]: i for i in client.get("/feedback/top").json()["items"]}
+    assert top["coding-convention-ctx"]["selected"] >= 1
+
+
+def test_eject_records_nothing_when_disabled(client):
+    """옵트인 꺼짐이면 eject 도 아무것도 남기지 않는다."""
+    body = {"metadata": {"id": "fb-off"}, "components": [{"ref": "notion-mcp@1.0.0"}]}
+    r = client.post("/eject", json=body, params={"target": "claude-code"})
+    # eject 가 실제로 성공해야 이 테스트가 의미를 갖는다 — 실패한 eject 는 원래 아무것도 안 남긴다.
+    assert r.json()["ok"] is True
+    assert client.get("/feedback/top").json() == {"enabled": False, "items": []}
+
+
+def test_recommendation_unchanged_without_feedback(client):
+    """신호가 없으면 추천 점수가 피드백 도입 이전과 같아야 한다(조용한 품질 변화 금지)."""
+    a = client.post("/recommend", json={"description": PR_BOT, "top_k": 4}).json()
+    b = client.post("/recommend", json={"description": PR_BOT, "top_k": 4}).json()
+    assert [(r["id"], r["score"]) for r in a["recommendations"]] == [
+        (r["id"], r["score"]) for r in b["recommendations"]
+    ]
+
+
 # ── 정책 as code (Phase 8) ──
 
 POLICY_HARNESS = {

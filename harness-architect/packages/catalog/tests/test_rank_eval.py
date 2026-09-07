@@ -196,8 +196,12 @@ def test_known_blind_spots_are_still_blind(monkeypatch, attr):
     """시드 카탈로그가 못 덮는 축을 명시적으로 고정한다(모듈 docstring 의 실측 근거).
 
     `_W_EXPLORE` 는 usage_count 가 전부 0 이라, `_W_CAPABILITY` 는 매칭 개수가 같아 상수항이다.
-    **이 테스트가 깨지면 좋은 소식이다** — 카탈로그가 그 축을 가르기 시작했다는 뜻이므로,
-    docstring 의 한계 서술과 하한선을 갱신하고 이 테스트를 지워라.
+    **이 테스트가 깨지면 좋은 소식이다** — 그 축이 관측 가능해졌다는 뜻이므로, docstring 의 한계
+    서술과 하한선을 갱신하고 이 테스트를 지워라. 깨지는 경로는 둘이다: 카탈로그가 커져 매칭 개수가
+    갈리거나, 피드백 루프(Phase 9)가 usage 신호를 채우거나.
+
+    ※ 이 eval 은 시드 카탈로그의 *선언값* 만 쓴다(`rank(usage=...)` 미주입) — 실사용 신호가
+      골든셋 기준선을 흔들면 회귀 판정이 재현 불가가 되기 때문이다.
     """
     from harness_catalog import ranking
 
