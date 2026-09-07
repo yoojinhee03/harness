@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, subscribeHarnessEvents, type Team } from "../api/client";
+import { api, subscribeHarnessEvents, type EvalResponse, type Team } from "../api/client";
 import { AdoptImport } from "../components/AdoptImport";
 import { HarnessPreview } from "../components/HarnessPreview";
 import { RecipePicker } from "../components/RecipePicker";
@@ -318,6 +318,9 @@ function HarnessActions({ id, scope }: { id: string; scope: string }) {
   const [target, setTarget] = useState("claude-code");
   const ejM = useMutation({ mutationFn: () => api.ejectHarness(id, qs, target) });
   const [showPreview, setShowPreview] = useState(false);
+  const scenariosQ = useQuery({ queryKey: ["eval-scenarios"], queryFn: api.evalScenarios });
+  const [scenario, setScenario] = useState("");
+  const evalM = useMutation({ mutationFn: () => api.evalSavedHarness(id, qs, scenario) });
 
   const diag = valM.data?.diagnostics.items ?? [];
   const errors = diag.filter((d) => d.severity === "error");
@@ -334,6 +337,30 @@ function HarnessActions({ id, scope }: { id: string; scope: string }) {
         <Button size="sm" variant="subtle" onClick={() => setShowPreview((v) => !v)}>
           {showPreview ? "프리뷰 닫기" : "프리뷰"}
         </Button>
+        {(scenariosQ.data ?? []).length > 0 && (
+          <>
+            <select
+              value={scenario}
+              onChange={(e) => setScenario(e.target.value)}
+              className="rounded-lg border border-line bg-surface px-2 py-1 text-xs text-fg"
+            >
+              <option value="">eval 시나리오…</option>
+              {(scenariosQ.data ?? []).map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              variant="subtle"
+              disabled={!scenario || evalM.isPending}
+              onClick={() => evalM.mutate()}
+            >
+              {evalM.isPending ? "채점 중…" : "eval"}
+            </Button>
+          </>
+        )}
         {valM.data &&
           (errors.length ? (
             <Badge className="bg-err/15 text-err">오류 {errors.length}</Badge>
@@ -364,6 +391,8 @@ function HarnessActions({ id, scope }: { id: string; scope: string }) {
 
       {showPreview && <HarnessPreview id={id} scope={qs} />}
 
+      {evalM.data && <EvalResultView data={evalM.data} />}
+
       {valM.data && diag.length > 0 && (
         <ul className="mt-2 space-y-1">
           {diag.slice(0, 8).map((d, i) => (
@@ -387,6 +416,55 @@ function HarnessActions({ id, scope }: { id: string; scope: string }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * eval 결과 — 프롬프트 출력이 기대를 만족하는가(Phase 11).
+ *
+ * `mean_score: null` 은 **0점이 아니라 "잴 수 없었다"** 다(키 없이 dry_run). 이걸 0 으로 그리면
+ * "품질이 나쁘다"로 읽혀 정반대 결론을 낳으므로 구분해서 표시한다.
+ */
+function EvalResultView({ data }: { data: EvalResponse }) {
+  if (!data.ok || !data.report) {
+    return <p className="mt-2 text-xs text-warn">resolve 실패 — 먼저 검증에서 해소하세요.</p>;
+  }
+  const r = data.report;
+  const unscored = r.scored_count === 0;
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-2 text-xs">
+        {unscored ? (
+          <Badge className="bg-surface-2 text-muted">미채점 — 키 없이 dry_run</Badge>
+        ) : (
+          <Badge className="bg-ok/15 text-ok">
+            mean {r.mean_score} · 채점 {r.scored_count}/{r.cases.length}
+          </Badge>
+        )}
+      </div>
+      {unscored && (
+        <p className="mt-1 text-[11px] text-muted">
+          결정적 체크는 출력이 있어야 성립합니다. 설정에서 LLM 키를 등록하면 live 채점됩니다.
+        </p>
+      )}
+      <ul className="mt-1.5 space-y-1">
+        {r.cases.map((c) => (
+          <li key={c.name} className="text-xs">
+            <span className={c.scored ? (c.passed ? "text-ok" : "text-err") : "text-muted"}>
+              {c.scored ? (c.passed ? "✓" : "✗") : "•"}
+            </span>{" "}
+            <span className="font-mono text-fg">{c.name}</span>{" "}
+            {c.scored ? (
+              <span className="text-muted">
+                score={c.score} ({c.checks.filter((k) => k.passed).length}/{c.checks.length})
+              </span>
+            ) : (
+              <span className="text-muted">스킵</span>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -46,12 +46,28 @@
 
 ## 완료 기준
 
-- [ ] `evals:` 스키마 + 로더 + 검증(결정적 체크 파서 포함).
-- [ ] `harness eval` CLI + `POST /eval` — dry/live, 채점기(결정적 + 옵션 judge), 주입 가능 클라이언트 + fake 테스트.
-- [ ] Ablation 실행: with/without 컴포넌트 델타 표(점수·토큰·지연).
-- [ ] Phase 9 로 `quality` 신호 emit + 화면 E/F 노출(최근 점수).
-- [ ] 3 시나리오 시드 eval 셋(결정적 체크 우선) + 통과.
-- [ ] **키 없을 때 결정적 체크만으로 완주** · eval 미지정 시 기존 동작 완전 불변(회귀 테스트) · 로컬 폴백 불변.
+- [x] `evals:` 스키마 + 로더 + 검증 — `harness_runtime.eval` 의 `load_eval_file`·`load_eval_scenario`·
+      `list_eval_scenarios`(CLI·API 공용). 같은 폴더의 `ranking-golden.yaml` 은 형식이 달라 거부한다.
+- [x] `harness eval` CLI(+ `--scenario`) + `POST /eval` + `POST /harnesses/{id}/eval` +
+      `GET /eval/scenarios`. 주입 가능 클라이언트 + fake 테스트는 기존대로.
+- [x] Ablation — `harness ablate` (`--scenario` 도 지원).
+- [x] 화면 노출 — 하네스 상세에 시나리오 셀렉터 + eval 버튼 + 결과 뷰.
+- [x] 3 시나리오 시드 eval 셋 — `pr-review`·`issue-triage`·`doc-draft` 각 3케이스. 레시피 3종과 짝.
+- [x] **키 없을 때 완주** — dry_run 이면 채점을 스킵하고 `mean_score: null` 을 돌린다(테스트로 고정).
+
+## 구현 노트 (2026-09-07)
+
+- **`mean_score: null` 은 0점이 아니다.** 키 없이 dry_run 이면 "잴 수 없었다"이고, 이걸 0 으로
+  그리면 "품질이 나쁘다"로 읽혀 정반대 결론을 낳는다. UI 에서 `미채점 — 키 없이 dry_run` 으로
+  구분해 표시하고 다음 행동(키 등록)을 알려준다.
+- **빈 케이스는 422 로 거부한다.** `scenario`·`cases` 둘 다 없을 때 빈 리포트로 "통과"를 돌려주면
+  검증했다는 착각을 만든다. CLI 도 같은 이유로 둘 중 하나를 요구한다.
+- **로더를 코어로 올려 CLI 중복을 제거했다.** CLI 에 있던 `_load_cases` 가 API 에서 필요해졌고,
+  두 곳에 같은 파싱을 두면 형식이 갈라진다(verify·preview·doctor 와 같은 결).
+- **eval 셋은 "좋은 출력"이 아니라 재현 가능한 최소 계약을 고정한다.** 품질 판정은 사람·judge 의
+  영역이고, 여기서 잡는 건 라벨을 말하는가·모르면 모른다고 하는가·비밀이 새지 않는가다.
+  `doc-draft` 는 특히 **없는 사실을 지어내지 않는지**를 본다(초안이 오정보가 되는 걸 막는다).
+- `/eval` 도 정책을 강제한다 — 같은 본문(`ResolveRequest`)을 쓰는 경로는 전부 지켜야 한다.
 
 ## 의존성
 

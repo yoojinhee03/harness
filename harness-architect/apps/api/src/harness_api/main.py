@@ -51,6 +51,9 @@ from harness_runtime import (
     available_targets,
     build_request,
     emit,
+    list_eval_scenarios,
+    load_eval_scenario,
+    run_eval,
 )
 from harness_runtime import adopt as run_adopt
 from harness_runtime import doctor as run_doctor
@@ -95,6 +98,7 @@ from .schemas import (
     ComponentAuthorBody,
     ComponentSaveBody,
     DevLoginBody,
+    EvalBody,
     GenerateResponse,
     HarnessSaveBody,
     LlmSettingsBody,
@@ -740,6 +744,41 @@ def get_recipe(name: str) -> dict[str, Any]:
     }
 
 
+@app.get("/eval/scenarios")
+def eval_scenarios() -> list[str]:
+    """사용 가능한 시드 eval 시나리오 이름(프론트 셀렉터용)."""
+    try:
+        return list_eval_scenarios()
+    except FileNotFoundError:
+        return []
+
+
+@app.post("/eval")
+@limiter.limit(RATE_LIMIT_HEAVY)
+def eval_endpoint(
+    request: Request, body: EvalBody, user: dict[str, Any] | None = Depends(optional_user)
+) -> dict[str, Any]:
+    """하네스를 eval 케이스로 실행·채점 (Phase 11, `harness eval` 의 API 판).
+
+    키가 없으면 러너가 dry_run 이라 채점을 스킵한다(`mean_score: null`) — 결정적 체크는 출력이
+    있어야 성립하기 때문이다. 코어(`harness_runtime.run_eval`)를 CLI 와 공유한다.
+    """
+    try:
+        cases = load_eval_scenario(body.scenario) if body.scenario else list(body.cases)
+    except (KeyError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not cases:
+        raise HTTPException(
+            status_code=422, detail="scenario 또는 cases 중 하나가 필요합니다(빈 케이스는 검증이 아닙니다)."
+        )
+
+    result = resolve(body.to_config(), _scoped_registry(request, user), body.policy)
+    if not result.ok or result.resolved is None:
+        return {"ok": False, "diagnostics": result.diagnostics.model_dump(), "report": None}
+    report = run_eval(result.resolved, cases)
+    return {"ok": True, "diagnostics": None, "report": report.model_dump()}
+
+
 @app.post("/doctor", response_model=DoctorReport)
 def doctor_endpoint(
     request: Request, body: ResolveRequest, user: dict[str, Any] | None = Depends(optional_user)
@@ -1163,6 +1202,35 @@ def doctor_harness(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
     return run_doctor(config, _scoped_registry(request, user))
+
+
+@app.post("/harnesses/{hid}/eval")
+@limiter.limit(RATE_LIMIT_HEAVY)
+def eval_harness(
+    request: Request,
+    hid: str,
+    scope: str = Query("personal"),
+    scenario: str = Query(..., description="시드 eval 시나리오 이름"),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """저장된 하네스를 시드 시나리오로 채점 (Phase 11). 키 없으면 dry_run 이라 채점은 스킵된다."""
+    sk = _resolve_scope(request, user, scope)
+    doc = _store(request).get(sk, hid)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"하네스 '{hid}' 없음(scope={scope})")
+    try:
+        config = parse_harness_yaml(doc["yaml"])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"harness.yaml 파싱 실패: {exc}") from exc
+    try:
+        cases = load_eval_scenario(scenario)
+    except (KeyError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    result = resolve(config, _scoped_registry(request, user))
+    if not result.ok or result.resolved is None:
+        return {"ok": False, "diagnostics": result.diagnostics.model_dump(), "report": None}
+    return {"ok": True, "diagnostics": None, "report": run_eval(result.resolved, cases).model_dump()}
 
 
 @app.post("/harnesses/{hid}/eject")

@@ -70,7 +70,7 @@ docker compose up -d db
 > 네이티브 개발 중 DB 만 컨테이너로 쓰는 헬퍼다. 자세히는 루트 [README](../README.md#실행-docker--한-번에).
 
 키 없이도 RAG 추천이 로컬 임베딩 폴백으로 돈다(기본). 품질 모드는 `.env` 에
-`VOYAGE_API_KEY`(임베딩)·`ANTHROPIC_API_KEY`(추출·랭킹)를 넣으면 자동 활성 — `.env.example` 참고.
+`OPENAI_API_KEY`(임베딩)·`ANTHROPIC_API_KEY`(추출·랭킹)를 넣으면 자동 활성 — `.env.example` 참고.
 
 ## MCP 서버 (에디터에서 사용)
 
@@ -119,7 +119,7 @@ claude mcp add harness -- uv run --project /ABS/harness/harness-architect harnes
 | `packages/resolver` (8단계) | 리졸버 검증 로직 §2·§3 |
 | `packages/resolver/merge.py` | 리졸버 §4 + 훅 실행 모델 §6 |
 | `packages/catalog/recommender.py` | 기획 §3.1 RAG 추천 엔진 |
-| `packages/catalog/embeddings.py` | 개발: 기술 스택 (Voyage/스왑) |
+| `packages/catalog/embeddings.py` | 개발: 기술 스택 (OpenAI/로컬 스왑) |
 | `packages/runtime/builder.py` | 기획 §3.2 런타임 빌더 + 훅 실행 모델 |
 | `../harness-catalog/components/*.yaml` | 카탈로그 스키마 + 시드 셋 |
 | `apps/api` 엔드포인트 | 화면 기획 A·B·C·E |
@@ -128,19 +128,21 @@ claude mcp add harness -- uv run --project /ABS/harness/harness-architect harnes
 
 - ✅ 리졸버: 성공/gap/충돌/미지 케이스 테스트 통과
 - ✅ RAG 추천: 로컬 폴백으로 관통 (추출→검색→랭킹)
-- ✅ RAG 실연동: Voyage 임베더 · Claude Reasoner 를 **주입 가능**하게(키 있으면 자동 활성,
-  없으면 로컬 폴백). 진행 상세는 [docs/plan](./docs/plan/README.md).
+- ✅ RAG 실연동: OpenAI 임베더 · Claude Reasoner 를 **주입 가능**하게(키 있으면 자동 활성,
+  없으면 로컬 해싱 폴백). 진행 상세는 [docs/plan](./docs/plan/README.md).
 - ✅ 런타임: 요청 빌더 + 훅 엔진(sandbox 실행기·timeout·권한 강제) + Anthropic 러너
   (키 없으면 dry_run). `POST /run` 으로 관통.
 - ✅ 프론트엔드 화면 A~F (생성 스파인 A~D + 카탈로그 E + 대시보드 F).
 - ✅ 카탈로그 확장: 13 컴포넌트(4타입: skill 3·mcp 4·context 4·hook 2, 프롬프트 조각 3 포함) · 3 시나리오(PR 리뷰·이슈 분류·문서 초안).
 - ✅ 다중 런타임 컴파일(`eject`): `ResolvedHarness` → Claude Code Emitter · `POST /eject` + `harness eject/resolve` CLI (플래그십 1차 관통).
 - ✅ 프롬프트 관리: 리졸버 prompt 합성 단계 + 카탈로그 프롬프트 조각(1급 아티팩트).
-- 🚧 남은 하드닝: Voyage/Claude/Anthropic **실 네트워크 호출**(키 필요) · 훅 진짜 프로세스/
-  WASM 격리 · pgvector 백엔드 전환.
-- 📋 **v2 남은 로드맵** — 이젝트 타깃 확장(Cursor·Cline·Raw API)·실행 전 프리뷰·역방향
-  `adopt`·정책 as code·경험적 검증(프롬프트 eval)·피드백 루프 활성화. `ResolvedHarness` IR 을
-  소스 오브 트루스로 두고 아무 런타임으로나 내보낸다. 우선순위·의존성·완료 기준은 [docs/plan/](./docs/plan/README.md) 의 "v2" 섹션.
+- 🚧 남은 하드닝: OpenAI/Claude/Anthropic **실 네트워크 호출**(키 필요) · 훅 진짜 프로세스/
+  WASM 격리. (pgvector 전환은 완료 — 재시작 간 임베딩 영속.)
+- ✅ **v2 대부분 완료** — 이젝트 3타깃(Claude Code·Cursor·Harness Protocol v1)·실행 전 프리뷰·
+  역방향 `adopt`·정책 as code·피드백 루프·레시피. `ResolvedHarness` IR 을 소스 오브 트루스로 두고
+  아무 런타임으로나 내보낸다.
+- 📋 **남은 것** — 경험적 검증의 API·화면 노출(`POST /eval`), 이젝트 타깃 확장(Cline·Raw API).
+  우선순위·의존성·완료 기준은 [docs/plan/](./docs/plan/README.md) 의 "v2" 섹션.
 
-> 검증: 백엔드 pytest **98 통과** · ruff·mypy(전체 소스) 클린 · 프론트 `pnpm build` 통과. 진행 플랜과
+> 검증: 백엔드 pytest **433 통과** · ruff·mypy(전체 소스) 클린 · 프론트 빌드 통과. 진행 플랜과
 > 단계별 완료 기준은 [docs/plan/](./docs/plan/README.md).

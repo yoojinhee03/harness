@@ -10,9 +10,12 @@
 
 from __future__ import annotations
 
+import os
 import re
+from pathlib import Path
 from typing import Any
 
+import yaml
 from harness_resolver import HarnessConfig, ResolvedHarness
 from pydantic import BaseModel, Field
 
@@ -54,6 +57,63 @@ class EvalReport(BaseModel):
     cases: list[EvalCaseResult]
     scored_count: int
     mean_score: float | None  # 채점된 케이스 평균(없으면 None — 키 없음)
+
+
+# ─────────────────────────── 케이스 로딩 (CLI·API 공용) ───────────────────────────
+
+
+def resolve_evals_dir(explicit: str | None = None) -> Path:
+    """eval 시나리오 디렉터리(`harness-catalog/evals/`). 탐색 규칙은 카탈로그·레시피와 같은 결."""
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    env = os.environ.get("EVALS_DIR")
+    if env:
+        return Path(env).expanduser().resolve()
+    for start in (Path.cwd(), Path(__file__).resolve()):
+        for ancestor in [start, *start.parents]:
+            for candidate in (
+                ancestor / "harness-catalog" / "evals",
+                ancestor.parent / "harness-catalog" / "evals",
+            ):
+                if candidate.is_dir():
+                    return candidate.resolve()
+    raise FileNotFoundError(
+        "eval 디렉터리를 찾을 수 없습니다 — EVALS_DIR 를 설정하거나 harness-catalog/evals 를 두세요."
+    )
+
+
+def load_eval_file(path: str | Path) -> list[EvalCase]:
+    """`{scenario, cases}` YAML → 케이스 목록.
+
+    ⚠️ 같은 폴더의 `ranking-golden.yaml` 은 **추천** 랭킹 eval 이라 형식이 다르다 — `cases` 키를
+    공유하지만 항목 모양이 달라 여기로 들어오면 검증에서 걸린다. 오투입을 조용히 삼키지 않는다.
+    """
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    if raw.get("kind") == "ranking-golden":
+        raise ValueError(f"{path}: 랭킹 골든셋입니다(프롬프트 eval 이 아님). rank_eval 을 쓰세요.")
+    return [EvalCase.model_validate(c) for c in (raw.get("cases") or [])]
+
+
+def list_eval_scenarios(directory: str | Path | None = None) -> list[str]:
+    """사용 가능한 시나리오 이름(파일명 stem). 랭킹 골든셋은 제외한다."""
+    d = directory if isinstance(directory, Path) else resolve_evals_dir(directory)
+    names: list[str] = []
+    for f in sorted(Path(d).glob("*.yaml")):
+        doc = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+        if isinstance(doc, dict) and doc.get("kind") == "ranking-golden":
+            continue
+        names.append(f.stem)
+    return names
+
+
+def load_eval_scenario(name: str, directory: str | Path | None = None) -> list[EvalCase]:
+    """이름으로 시나리오 로드. 없으면 가능한 이름을 알려주며 실패한다."""
+    d = directory if isinstance(directory, Path) else resolve_evals_dir(directory)
+    path = Path(d) / f"{name}.yaml"
+    if not path.is_file():
+        available = ", ".join(list_eval_scenarios(d)) or "(없음)"
+        raise KeyError(f"eval 시나리오 '{name}' 을 찾을 수 없습니다. 가능: {available}")
+    return load_eval_file(path)
 
 
 def check_expectations(output: str, expect: EvalExpect) -> list[CheckResult]:

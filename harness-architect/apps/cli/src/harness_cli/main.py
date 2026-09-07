@@ -42,6 +42,8 @@ from harness_runtime import (
     doctor,
     drop_component,
     emit,
+    load_eval_file,
+    load_eval_scenario,
     preview,
     read_native_tree,
     run_ablation,
@@ -56,9 +58,13 @@ def _load_config(path: str) -> HarnessConfig:
     return HarnessConfig.model_validate(data)
 
 
-def _load_cases(path: str) -> list[EvalCase]:
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    return [EvalCase.model_validate(c) for c in (raw.get("cases") or [])]
+def _cases_from_args(args: argparse.Namespace) -> list[EvalCase]:
+    """`--cases <파일>` 또는 `--scenario <이름>`. 로딩은 코어(harness_runtime)가 한다(CLI/API 공용)."""
+    if getattr(args, "scenario", None):
+        return load_eval_scenario(args.scenario)
+    if not getattr(args, "cases", None):
+        raise SystemExit("--cases <파일> 또는 --scenario <이름> 중 하나가 필요합니다.")
+    return load_eval_file(args.cases)
 
 
 def _registry(catalog: str | None) -> Registry:
@@ -177,7 +183,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
         _print_diagnostics(result)
         print("✗ resolve 실패 — eval 중단", file=sys.stderr)
         return 1
-    cases = _load_cases(args.cases)
+    cases = _cases_from_args(args)
     if not cases:
         print(f"경고: {args.cases} 에 케이스가 없음", file=sys.stderr)
         return 1
@@ -204,7 +210,7 @@ def cmd_ablate(args: argparse.Namespace) -> int:
     if full.resolved is None or ablated.resolved is None:
         print("✗ resolve 실패 — ablation 중단", file=sys.stderr)
         return 1
-    result = run_ablation(full.resolved, ablated.resolved, _load_cases(args.cases), args.drop)
+    result = run_ablation(full.resolved, ablated.resolved, _cases_from_args(args), args.drop)
     print(f"full mean={result.full.mean_score} · ablated(-{args.drop}) mean={result.ablated.mean_score}")
     d = result.delta_mean
     if d is None:
@@ -464,7 +470,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_eval = sub.add_parser("eval", help="하네스를 eval 케이스로 실행·채점한다(경험적 검증).")
     p_eval.add_argument("config", help="harness.yaml 경로")
-    p_eval.add_argument("--cases", required=True, help="eval 케이스 YAML 경로(cases: [...])")
+    p_eval.add_argument("--cases", default=None, help="eval 케이스 YAML 경로(cases: [...])")
+    p_eval.add_argument(
+        "--scenario", default=None, help="시드 시나리오 이름(pr-review|issue-triage|doc-draft)"
+    )
     p_eval.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
     p_eval.set_defaults(func=cmd_eval)
 
@@ -481,7 +490,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_ablate = sub.add_parser("ablate", help="컴포넌트 하나를 빼고 eval 델타를 재 기여도를 측정한다.")
     p_ablate.add_argument("config", help="harness.yaml 경로")
-    p_ablate.add_argument("--cases", required=True, help="eval 케이스 YAML")
+    p_ablate.add_argument("--cases", default=None, help="eval 케이스 YAML 경로")
+    p_ablate.add_argument("--scenario", default=None, help="시드 시나리오 이름")
     p_ablate.add_argument("--drop", required=True, help="빼서 기여도를 잴 컴포넌트 id")
     p_ablate.add_argument("--catalog", default=None, help="카탈로그 components 디렉터리(기본: 자동 탐색)")
     p_ablate.set_defaults(func=cmd_ablate)

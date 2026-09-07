@@ -3,7 +3,7 @@
 # 브라우저는 웹 오리진 한 곳(:5173)만 보면 된다.
 
 # ── 1) 빌드 스테이지 ──
-FROM node:20-slim AS build
+FROM node:22-slim AS build
 WORKDIR /app
 RUN corepack enable
 
