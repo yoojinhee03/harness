@@ -501,7 +501,12 @@ TTL 라이브 소스가 직접 federate되어 generation을 흔들고 재색인�
     `harness-catalog/evals/ranking-golden.yaml`(8케이스) · `harness_catalog/rank_eval.py` ·
     `scripts/eval_ranking.py` · `tests/test_rank_eval.py`. 기준선: 통과율 100% · recall@k 1.0 ·
     mean_rr 0.6629 · 선호순서 5/7. **판정을 하드/소프트로 분리**해 개선은 통과시키고 퇴행만 잡는다.
-  - 🚫 **데이터 미충족** — 공출현 테이블이 `verify --record`/`POST /verify` 실사용으로 쌓여야 신호가 된다.
+  - 🚫 **데이터 미충족(2026-09-07 재확인)** — 공출현 테이블이 실사용으로 쌓여야 신호가 된다.
+    수집 경로는 이제 셋이다(`POST /verify`·`POST /adopt`·`/eject`) + 피드백(`HARNESS_FEEDBACK=on`).
+    ⚠️ **확인 중 함정을 하나 만났다**: 로컬 DB 에 공출현 128쌍·피드백 20관측이 있어 게이트가
+    충족된 것처럼 보였는데, 전부 **테스트 오염**이었다(`test_api.py` 의 module-scope 픽스처가
+    `HARNESS_STORE_DIR` 을 안 걸어 `~/.harness` 실 DB 에 썼다). conftest 에서 전역 격리로 막았다.
+    실사용 데이터는 **여전히 0** 이다 — 착수 판단 시 반드시 origin 을 확인할 것.
   - **착수 시 목표** — 골든셋에 *지금 위반 중인* 선호쌍 2개가 #2 가 고쳐야 할 지점으로 적혀 있다:
     `[pr-review-skill, slack-mcp]`(1차 의도인 리뷰 스킬이 알림 MCP 아래) ·
     `[doc-draft-skill, notion-mcp]`(requires 소비자가 공급자 아래). 5/7 → 7/7 이 성공 기준이다.
